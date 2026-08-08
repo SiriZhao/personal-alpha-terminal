@@ -197,6 +197,16 @@ class StooqProvider:
             try:
                 with urlopen(endpoint, timeout=self.timeout_seconds) as response:  # noqa: S310
                     raw = response.read()
+                prefix = raw.lstrip()[:256].lower()
+                content_type = getattr(response, "headers", {}).get("Content-Type", "")
+                if (
+                    b"<html" in prefix
+                    or b"<!doctype html" in prefix
+                    or "text/html" in str(content_type).lower()
+                ):
+                    raise ProviderError(
+                        "Stooq returned an HTML/challenge page instead of CSV"
+                    )
                 frame = pd.read_csv(io.BytesIO(raw))
                 frame = normalize_ohlcv(frame, symbol)
                 frame = frame.loc[(frame["date"].dt.date >= start) & (frame["date"].dt.date <= end)]

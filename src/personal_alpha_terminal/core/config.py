@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     )
 
     app_env: Literal["development", "test", "production"] = "development"
+    runtime_profile: Literal["PRODUCTION_DESKTOP", "DEVELOPMENT", "TEST"] = "DEVELOPMENT"
     database_url: str = "sqlite:///./var/personal_alpha.db"
     sql_echo: bool = False
     database_pool_size: int = Field(default=5, ge=1, le=50)

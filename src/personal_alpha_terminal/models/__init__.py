@@ -93,6 +93,16 @@ from personal_alpha_terminal.models.portfolio_risk import (
     PortfolioRiskRun,
     PortfolioStressResult,
 )
+from personal_alpha_terminal.models.quant_core_closure import (
+    DelistingHistory,
+    ListingHistory,
+    ModelApprovalRecord,
+    PITTotalReturnPointRecord,
+    SymbolAlias,
+    TradingStatus,
+    UniverseDefinition,
+    UniverseMembership,
+)
 from personal_alpha_terminal.models.relationship import (
     RelationshipAnalysisRun,
     RelationshipAnomaly,
@@ -132,6 +142,7 @@ __all__ = [
     "ConditionalProbabilityResult",
     "ConditionalProbabilityRun",
     "DecisionHistory",
+    "DelistingHistory",
     "CorporateAction",
     "DailyPipelineRun",
     "DailyTaskRun",
@@ -165,6 +176,7 @@ __all__ = [
     "LeadLagAnalysisRun",
     "LeadLagMetric",
     "LeadLagPairResult",
+    "ListingHistory",
     "MarketGraphEdge",
     "MarketGraphNode",
     "MarketGraphPath",
@@ -178,7 +190,9 @@ __all__ = [
     "ManualRebalanceFillRecord",
     "ManualRebalanceTicketRecord",
     "ModelRegistryRecord",
+    "ModelApprovalRecord",
     "PITTotalReturnVersion",
+    "PITTotalReturnPointRecord",
     "DataSnapshotManifest",
     "Portfolio",
     "PortfolioAllocationTarget",
@@ -204,4 +218,8 @@ __all__ = [
     "SecurityMaster",
     "SecurityIdentifierHistory",
     "Stock",
+    "SymbolAlias",
+    "TradingStatus",
+    "UniverseDefinition",
+    "UniverseMembership",
 ]

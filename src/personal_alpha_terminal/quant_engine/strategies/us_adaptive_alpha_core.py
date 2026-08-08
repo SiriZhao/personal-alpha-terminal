@@ -1,0 +1,185 @@
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass
+from datetime import datetime, timedelta
+
+import pandas as pd
+
+from personal_alpha_terminal.models import ModelApprovalRecord
+from personal_alpha_terminal.quant_engine.alpha import (
+    AlphaDataQuality,
+    AlphaSignal,
+    AlphaValidationStatus,
+)
+from personal_alpha_terminal.quant_engine.factors.cross_sectional import (
+    FactorSpec,
+    process_cross_section,
+)
+from personal_alpha_terminal.quant_engine.factors.features import compute_price_features
+from personal_alpha_terminal.quant_engine.model_registry import fingerprint_parameters
+
+
+@dataclass(frozen=True, slots=True)
+class USAdaptiveAlphaCoreV1Config:
+    momentum_lookback: int = 252
+    momentum_skip: int = 21
+    trend_window: int = 126
+    volatility_window: int = 63
+    horizon_sessions: int = 21
+    minimum_cross_section: int = 5
+    momentum_coefficient: float = 0.006
+    trend_coefficient: float = 0.003
+    low_volatility_coefficient: float = 0.002
+    quality_coefficient: float = 0.0
+
+    @property
+    def parameter_fingerprint(self) -> str:
+        return fingerprint_parameters(asdict(self))
+
+
+@dataclass(frozen=True, slots=True)
+class StrategyAlphaResult:
+    signals: tuple[AlphaSignal, ...]
+    disabled_components: tuple[str, ...]
+    parameter_fingerprint: str
+
+
+class USAdaptiveAlphaCoreV1:
+    """Deterministic medium-term US alpha model with explicit validation state.
+
+    Engineering-default coefficients are research-only. They cannot enter production
+    unless an approval record matches the exact parameter and data fingerprints.
+    """
+
+    model_id = "USAdaptiveAlphaCoreV1"
+    version = "1.0.0"
+
+    def __init__(self, config: USAdaptiveAlphaCoreV1Config | None = None) -> None:
+        self.config = config or USAdaptiveAlphaCoreV1Config()
+
+    def generate(
+        self,
+        *,
+        prices: pd.DataFrame,
+        metadata: pd.DataFrame,
+        decision_time: datetime,
+        data_version: str,
+        approval: ModelApprovalRecord | None,
+        fundamentals: pd.DataFrame | None = None,
+    ) -> StrategyAlphaResult:
+        if decision_time.tzinfo is None:
+            raise ValueError("decision_time must be timezone-aware")
+        features = compute_price_features(
+            prices,
+            information_cutoff=decision_time,
+            momentum_lookback=self.config.momentum_lookback,
+            momentum_skip=self.config.momentum_skip,
+            trend_window=self.config.trend_window,
+            volatility_window=self.config.volatility_window,
+        )
+        if len(features) < self.config.minimum_cross_section:
+            return StrategyAlphaResult(
+                (), ("price_cross_section",), self.config.parameter_fingerprint
+            )
+        observations = features.merge(metadata, on="permanent_security_id", how="left")
+        specs = [
+            FactorSpec(
+                "momentum_12_1",
+                "high",
+                minimum_observations=self.config.minimum_cross_section,
+            ),
+            FactorSpec(
+                "trend_slope",
+                "high",
+                minimum_observations=self.config.minimum_cross_section,
+            ),
+            FactorSpec("volatility", "low", minimum_observations=self.config.minimum_cross_section),
+        ]
+        disabled: list[str] = []
+        if fundamentals is not None and self.config.quality_coefficient != 0:
+            observations = observations.merge(
+                fundamentals, on="permanent_security_id", how="left", suffixes=("", "_fund")
+            )
+            if "quality" in observations:
+                specs.append(
+                    FactorSpec(
+                        "quality", "high", minimum_observations=self.config.minimum_cross_section
+                    )
+                )
+            else:
+                disabled.append("quality")
+        else:
+            disabled.append("quality")
+        processed = process_cross_section(
+            observations,
+            tuple(specs),
+            as_of=decision_time,
+            minimum_required_factors=3,
+        )
+        parameter_fingerprint = self.config.parameter_fingerprint
+        production = bool(
+            approval is not None
+            and approval.parameter_fingerprint == parameter_fingerprint
+            and approval.data_version == data_version
+        )
+        if production and any(status.value != "VALID" for status in processed.statuses.values()):
+            return StrategyAlphaResult(
+                (),
+                tuple(
+                    sorted(
+                        set(disabled)
+                        | {
+                            f"{name}:{status.value}"
+                            for name, status in processed.statuses.items()
+                            if status.value != "VALID"
+                        }
+                    )
+                ),
+                parameter_fingerprint,
+            )
+        signals: list[AlphaSignal] = []
+        for _, row in processed.frame.iterrows():
+            if not bool(row["eligible"]):
+                continue
+            components = {
+                "momentum": float(row["momentum_12_1__normalized"]),
+                "trend": float(row["trend_slope__normalized"]),
+                "low_volatility": float(row["volatility__normalized"]),
+            }
+            expected = (
+                components["momentum"] * self.config.momentum_coefficient
+                + components["trend"] * self.config.trend_coefficient
+                + components["low_volatility"] * self.config.low_volatility_coefficient
+            )
+            if "quality__normalized" in row and pd.notna(row["quality__normalized"]):
+                components["quality"] = float(row["quality__normalized"])
+                expected += components["quality"] * self.config.quality_coefficient
+            coverage = float(row["factor_coverage"])
+            signals.append(
+                AlphaSignal(
+                    symbol=str(row["ticker"]),
+                    as_of=decision_time,
+                    signal_type="quality_constrained_medium_term_momentum",
+                    expected_excess_return=expected,
+                    horizon=self.config.horizon_sessions,
+                    raw_signal=float(row["momentum_12_1__raw"]),
+                    normalized_signal=sum(components.values()) / len(components),
+                    confidence=min(1.0, coverage),
+                    confidence_calibrated=production,
+                    sample_size=len(processed.frame),
+                    statistical_strength=min(1.0, len(processed.frame) / 100),
+                    economic_strength=min(1.0, abs(expected) / 0.05),
+                    decay_half_life=float(self.config.horizon_sessions),
+                    valid_until=decision_time + timedelta(days=35),
+                    data_quality=AlphaDataQuality.VALID,
+                    pit_valid=True,
+                    validation_status=(
+                        AlphaValidationStatus.PRODUCTION_APPROVED
+                        if production
+                        else AlphaValidationStatus.RESEARCH
+                    ),
+                    model_version=f"{self.model_id}:{self.version}:{parameter_fingerprint[:12]}",
+                    data_version=data_version,
+                )
+            )
+        return StrategyAlphaResult(tuple(signals), tuple(disabled), parameter_fingerprint)

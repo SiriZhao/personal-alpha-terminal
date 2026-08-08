@@ -16,6 +16,7 @@ from personal_alpha_terminal.core.config import Settings, get_settings
 from personal_alpha_terminal.core.credentials import load_credentials_into_environment
 from personal_alpha_terminal.core.local_backup import apply_pending_restore, ensure_daily_backup
 from personal_alpha_terminal.core.product import PRODUCT_DISPLAY_NAME
+from personal_alpha_terminal.core.runtime_context import production_desktop_database_url
 from personal_alpha_terminal.data.database import build_engine
 from personal_alpha_terminal.data.migrations import upgrade_database
 
@@ -76,10 +77,8 @@ def bootstrap_user_environment() -> Settings:
         directory.mkdir(parents=True, exist_ok=True)
     _trace(root, "bootstrap:directories-ready")
 
-    os.environ.setdefault(
-        "PAT_DATABASE_URL",
-        f"sqlite:///{(data_dir / 'personal_alpha.db').as_posix()}",
-    )
+    os.environ["PAT_RUNTIME_PROFILE"] = "PRODUCTION_DESKTOP"
+    os.environ["PAT_DATABASE_URL"] = production_desktop_database_url(Path(root).parent)
     os.environ.setdefault("PAT_LOG_DIR", str(log_dir))
     os.environ.setdefault(
         "PAT_MARKET_DATA_PROVIDER_CACHE_DIR",

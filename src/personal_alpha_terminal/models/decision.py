@@ -51,7 +51,7 @@ class QuantDecisionRun(TimestampMixin, Base):
     gate_status: Mapped[str] = mapped_column(String(16), nullable=False)
     authorization_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     data_version: Mapped[str] = mapped_column(String(64), nullable=False)
-    model_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    model_version: Mapped[str] = mapped_column(String(128), nullable=False)
     input_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
     source_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     blockers: Mapped[list[str]] = mapped_column(JSON, nullable=False)

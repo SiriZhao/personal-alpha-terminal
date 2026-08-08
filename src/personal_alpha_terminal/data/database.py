@@ -8,12 +8,14 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from personal_alpha_terminal.core.config import Settings, get_settings
+from personal_alpha_terminal.core.runtime_context import RuntimeContext
 from personal_alpha_terminal.models import Base
 
 SessionFactory = sessionmaker[Session]
 
 _engine: Engine | None = None
 _session_factory: SessionFactory | None = None
+_runtime_context: RuntimeContext | None = None
 
 
 def _prepare_sqlite_directory(database_url: str) -> None:
@@ -89,12 +91,20 @@ def build_session_factory(engine: Engine) -> SessionFactory:
     return sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
 
-def configure_database(settings: Settings | None = None) -> tuple[Engine, SessionFactory]:
-    global _engine, _session_factory
+def configure_database(
+    settings: Settings | None = None,
+    *,
+    runtime_context: RuntimeContext | None = None,
+) -> tuple[Engine, SessionFactory]:
+    global _engine, _session_factory, _runtime_context
 
     resolved = settings or get_settings()
+    context = runtime_context or RuntimeContext.from_settings(resolved)
+    if _runtime_context is not None:
+        _runtime_context.assert_same_database(context.database_url)
+    context.assert_same_database(context.database_url)
     _engine = build_engine(
-        resolved.database_url,
+        context.database_url,
         echo=resolved.sql_echo,
         pool_size=resolved.database_pool_size,
         max_overflow=resolved.database_max_overflow,
@@ -106,7 +116,26 @@ def configure_database(settings: Settings | None = None) -> tuple[Engine, Sessio
         application_name=resolved.database_application_name,
     )
     _session_factory = build_session_factory(_engine)
+    _runtime_context = context
     return _engine, _session_factory
+
+
+def get_runtime_context() -> RuntimeContext:
+    if _runtime_context is None:
+        configure_database()
+    assert _runtime_context is not None
+    return _runtime_context
+
+
+def reset_database_configuration() -> None:
+    """Dispose global state for an explicit process/test profile change."""
+
+    global _engine, _session_factory, _runtime_context
+    if _engine is not None:
+        _engine.dispose()
+    _engine = None
+    _session_factory = None
+    _runtime_context = None
 
 
 def get_engine() -> Engine:

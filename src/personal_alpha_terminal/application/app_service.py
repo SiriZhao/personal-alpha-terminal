@@ -21,6 +21,10 @@ from personal_alpha_terminal.application.intelligence_service import (
     IntelligenceApplicationService,
 )
 from personal_alpha_terminal.application.pipeline_service import PipelineService
+from personal_alpha_terminal.application.quant_daily_service import (
+    ProductionDailyWorkflow,
+    TodayResult,
+)
 from personal_alpha_terminal.application.status import (
     ModelStatus,
     ProgramStatus,
@@ -147,6 +151,20 @@ class ApplicationService:
     def run_daily_pipeline(self, as_of_date: date | None = None) -> PipelineExecution:
         return PipelineService(self._settings).run_daily_pipeline(as_of_date)
 
+    def run_quant_daily(
+        self,
+        *,
+        portfolio_id: int,
+        decision_time: datetime | None = None,
+    ) -> TodayResult:
+        """Run the gated DB -> alpha -> portfolio -> action production chain."""
+
+        with self._factory.begin() as session:
+            return ProductionDailyWorkflow(session).run(
+                portfolio_id=portfolio_id,
+                decision_time=decision_time or datetime.now(UTC),
+            )
+
     def get_daily_dashboard(self) -> DashboardView:
         readiness = self.get_system_health()
         with self._factory() as session:
@@ -271,13 +289,9 @@ class ApplicationService:
                 notes=notes,
             )
 
-    def run_backtest(self, **parameters: object) -> None:
-        gate_approved = self.get_model_readiness().allow_candidates
-        service = BacktestService()
-        availability = service.availability(gate_approved=gate_approved)
-        if not availability.available:
-            raise RuntimeError(availability.reason)
-        service.run_backtest(**parameters)
+    def run_backtest(self, **parameters: object) -> object:
+        with self._factory.begin() as session:
+            return BacktestService(session).run_backtest(**parameters)  # type: ignore[arg-type]
 
     def get_pipeline_runs(self, limit: int = 20) -> tuple[dict[str, object], ...]:
         with self._factory() as session:

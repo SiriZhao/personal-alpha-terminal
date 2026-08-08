@@ -7,7 +7,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from personal_alpha_terminal.core.market_time import normalize_utc
-from personal_alpha_terminal.models import MarketDataQualityRun, MarketUniverseSnapshot
+from personal_alpha_terminal.models import (
+    MarketDataQualityRun,
+    MarketUniverseSnapshot,
+    ResearchDataCertification,
+)
 from personal_alpha_terminal.research.data_gate import (
     GateDecision,
     ResearchDataAuthorization,
@@ -31,8 +35,30 @@ class ResearchDataGateService:
         return self._gate.authorize(request, self.evidence(request))
 
     def evidence(self, request: ResearchDataRequest) -> ResearchDataEvidence:
+        certification = self._session.scalar(
+            select(ResearchDataCertification)
+            .where(
+                ResearchDataCertification.market == request.market,
+                ResearchDataCertification.asset_type == request.asset_type,
+                ResearchDataCertification.valid_from <= request.decision_time,
+                (
+                    ResearchDataCertification.valid_until.is_(None)
+                    | (ResearchDataCertification.valid_until >= request.decision_time)
+                ),
+            )
+            .order_by(
+                ResearchDataCertification.created_at.desc(),
+                ResearchDataCertification.id.desc(),
+            )
+            .limit(1)
+        )
         quality = self._session.scalar(
             select(MarketDataQualityRun)
+            .where(
+                MarketDataQualityRun.id == certification.quality_run_id
+                if certification is not None
+                else True
+            )
             .order_by(MarketDataQualityRun.created_at.desc(), MarketDataQualityRun.id.desc())
             .limit(1)
         )
@@ -41,7 +67,7 @@ class ResearchDataGateService:
             select(MarketUniverseSnapshot)
             .where(
                 MarketUniverseSnapshot.market == request.market,
-                MarketUniverseSnapshot.as_of_date <= request.start_date,
+                MarketUniverseSnapshot.as_of_date <= request.end_date,
                 MarketUniverseSnapshot.available_time <= request.decision_time,
             )
             .order_by(
@@ -67,6 +93,8 @@ class ResearchDataGateService:
         if available is None and quality is not None:
             available = normalize_utc(quality.updated_at)
         expected_snapshot = str(snapshot.id) if snapshot is not None else None
+        if certification is not None and certification.universe_snapshot_id is not None:
+            expected_snapshot = str(certification.universe_snapshot_id)
         return ResearchDataEvidence(
             market=request.market,
             asset_type=request.asset_type,
@@ -89,10 +117,27 @@ class ResearchDataGateService:
             anomaly_rate=anomaly_rate,
             maximum_missing_rate=self._rate(metrics.get("maximum_missing_rate")) or 0.01,
             maximum_anomaly_rate=self._rate(metrics.get("maximum_anomaly_rate")) or 0.005,
-            data_version=str(metrics.get("data_version", "")),
-            allow_backtest=metrics.get("allow_backtest") is True,
-            allow_display=metrics.get("allow_display") is True,
-            allow_portfolio_decision=metrics.get("allow_portfolio_decision") is True,
+            data_version=(
+                certification.data_version
+                if certification is not None
+                else str(metrics.get("data_version", ""))
+            ),
+            allow_backtest=(
+                certification.status == "APPROVED" and certification.allow_backtest
+                if certification is not None
+                else metrics.get("allow_backtest") is True
+            ),
+            allow_display=(
+                certification.allow_display
+                if certification is not None
+                else metrics.get("allow_display") is True
+            ),
+            allow_portfolio_decision=(
+                certification.status == "APPROVED"
+                and certification.allow_portfolio_decision
+                if certification is not None
+                else metrics.get("allow_portfolio_decision") is True
+            ),
             dual_source_verified=metrics.get("us_dual_source_verified") is True,
             source_conflict=bool(metrics.get("source_conflict", False)),
             fundamentals_vintage_complete=(metrics.get("us_pit_fundamentals_certified") is True),

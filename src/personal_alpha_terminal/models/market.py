@@ -3,6 +3,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
+    JSON,
     BigInteger,
     Boolean,
     CheckConstraint,
@@ -50,7 +51,7 @@ class Stock(TimestampMixin, Base):
             "'money_fund', 'gold')",
             name="valid_asset_type",
         ),
-        UniqueConstraint("exchange", "symbol", name="uq_stocks_exchange_symbol"),
+        Index("ix_security_master_exchange_symbol", "exchange", "symbol"),
         Index("ix_stocks_market_status", "market", "is_active"),
         CheckConstraint(
             "length(currency) = 3 AND currency = upper(currency)",
@@ -177,6 +178,16 @@ class ProviderCapabilityRecord(TimestampMixin, Base):
     supported: Mapped[bool] = mapped_column(Boolean, nullable=False)
     volume_multiplier: Mapped[Decimal] = mapped_column(Numeric(20, 8), nullable=False)
     raw_share_unit: Mapped[Decimal] = mapped_column(Numeric(20, 8), nullable=False)
+    fields: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    earliest_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    latest_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    adjustment_semantics: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="unadjusted_raw"
+    )
+    availability_status: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="UNKNOWN"
+    )
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class Price(Base):

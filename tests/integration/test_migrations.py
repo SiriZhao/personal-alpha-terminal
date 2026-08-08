@@ -137,6 +137,14 @@ def test_initial_migration_builds_versioned_schema() -> None:
         "intelligence_narratives",
         "intelligence_narrative_exposures",
         "intelligence_decision_lineage",
+        "security_symbol_aliases",
+        "security_listing_history",
+        "security_delisting_history",
+        "universe_definitions",
+        "universe_memberships",
+        "security_trading_status",
+        "pit_total_return_points",
+        "model_approval_records",
     } <= tables
     assert {
         "meets_minimum",
@@ -160,11 +168,11 @@ def test_initial_migration_builds_versioned_schema() -> None:
     assert "ix_portfolio_positions_stock_id" in portfolio_position_indexes
     assert "ix_market_graph_edges_source_stock_id" in graph_edge_indexes
     assert "ix_market_graph_edges_target_stock_id" in graph_edge_indexes
-    assert revision == "b8a2d6f4c901"
+    assert revision == "f9c0a1b2d3e4"
     assert not any(table.startswith("paper_") for table in tables)
     assert not health.ready
     assert health.dialect == "sqlite"
-    assert health.current_revision == "b8a2d6f4c901"
+    assert health.current_revision == "f9c0a1b2d3e4"
 
 
 def test_production_index_migration_round_trip() -> None:
@@ -201,5 +209,5 @@ def test_production_index_migration_round_trip() -> None:
 
     assert downgraded_revision == "e19f7b3c4a62"
     assert "ix_market_graph_edges_source_stock_id" not in downgraded_indexes
-    assert upgraded_revision == "b8a2d6f4c901"
+    assert upgraded_revision == "f9c0a1b2d3e4"
     assert "ix_market_graph_edges_source_stock_id" in upgraded_indexes

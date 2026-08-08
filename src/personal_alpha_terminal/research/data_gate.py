@@ -128,6 +128,7 @@ class ResearchDataAuthorization:
     request: ResearchDataRequest
     issued_at: datetime
     authorization_id: str
+    evidence: ResearchDataEvidence
 
     def permits(self, purpose: ResearchPurpose) -> bool:
         if self.request.purpose is not purpose or self.decision.status is GateStatus.BLOCKED:
@@ -267,7 +268,13 @@ class ResearchDataGate:
         authorization_id = sha256(
             f"{decision.evidence_fingerprint}|{request.purpose}|{issued_at.isoformat()}".encode()
         ).hexdigest()
-        return ResearchDataAuthorization(decision, request, issued_at, authorization_id)
+        return ResearchDataAuthorization(
+            decision,
+            request,
+            issued_at,
+            authorization_id,
+            evidence,
+        )
 
     @staticmethod
     def require(

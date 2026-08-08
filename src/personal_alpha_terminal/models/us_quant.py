@@ -117,6 +117,14 @@ class PITTotalReturnVersion(TimestampMixin, Base):
     source_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     point_count: Mapped[int] = mapped_column(Integer, nullable=False)
     result_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    data_cutoff: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    adjustment_policy: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="point_in_time_total_return_v1"
+    )
+    corporate_action_ledger_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    certification_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="NOT_VALIDATED"
+    )
 
 
 class ResearchDataCertification(TimestampMixin, Base):

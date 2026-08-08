@@ -44,6 +44,15 @@ class MarketUniverseSnapshot(TimestampMixin, Base):
     provider: Mapped[str] = mapped_column(String(128), nullable=False)
     available_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     ingested_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    definition_id: Mapped[int | None] = mapped_column(
+        ForeignKey("universe_definitions.id", ondelete="RESTRICT"), nullable=True
+    )
+    version_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    data_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    certification_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="NOT_VALIDATED"
+    )
 
     members: Mapped[list["MarketUniverseMember"]] = relationship(
         back_populates="snapshot",
@@ -122,8 +131,9 @@ class CorporateAction(Base):
     __tablename__ = "corporate_actions"
     __table_args__ = (
         CheckConstraint(
-            "action_type IN ('cash_dividend', 'split', 'reverse_split', 'rights', "
-            "'delisting', 'symbol_change')",
+            "action_type IN ('cash_dividend', 'stock_dividend', 'split', "
+            "'reverse_split', 'merger_cash', 'merger_stock', 'spin_off', 'rights', "
+            "'delisting', 'symbol_change', 'adr_ratio_change')",
             name="valid_corporate_action_type",
         ),
         CheckConstraint(
@@ -138,6 +148,12 @@ class CorporateAction(Base):
             "provider",
             name="uq_corporate_action_lineage",
         ),
+        UniqueConstraint(
+            "action_id",
+            "revision_id",
+            "provider",
+            name="uq_corporate_action_revision",
+        ),
         Index("ix_corporate_actions_stock_date", "stock_id", "effective_date"),
         Index("ix_corporate_actions_available", "stock_id", "available_time"),
     )
@@ -150,6 +166,8 @@ class CorporateAction(Base):
         ForeignKey("security_master.id", ondelete="CASCADE"),
         nullable=False,
     )
+    action_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    revision_id: Mapped[str] = mapped_column(String(128), nullable=False)
     action_type: Mapped[str] = mapped_column(String(32), nullable=False)
     effective_date: Mapped[date] = mapped_column(Date, nullable=False)
     announcement_date: Mapped[date] = mapped_column(Date, nullable=False)
@@ -162,6 +180,7 @@ class CorporateAction(Base):
     currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
     source: Mapped[str] = mapped_column(String(64), nullable=False)
     provider: Mapped[str] = mapped_column(String(128), nullable=False)
+    details: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False, default=dict)
 
 
 class MarketDataQualityRun(TimestampMixin, Base):

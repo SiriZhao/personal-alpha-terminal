@@ -18,6 +18,7 @@ INCLUDED_ROOT_FILES = {
     "pyproject.toml",
     "README.md",
     "run_terminal.bat",
+    "sitecustomize.py",
 }
 INCLUDED_DIRECTORIES = ("src", "migrations", "scripts", "tests")
 IGNORED_PARTS = {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"}

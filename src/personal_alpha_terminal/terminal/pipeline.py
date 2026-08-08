@@ -203,29 +203,9 @@ class DailyResearchPipeline:
                 public_message = "行情不可用；技术详情已写入 data.log。"
             warnings.append(f"{symbol}: {public_message}")
 
-        # Price-only indicators are not a production Alpha path. Production
-        # actions must come from the validated Quant/Portfolio/Risk chain.
-        actions = (
-            DailyAction(
-                symbol="--",
-                action="NO ACTION",
-                confidence=None,
-                current_allocation=None,
-                target_allocation=None,
-                suggested_change=None,
-                signal_summary="没有通过生产批准与数据安全门禁的量化候选",
-                probability=None,
-                risk="BLOCKED" if quality.status == "BLOCKED" else "RESEARCH_ONLY",
-                data_quality=quality.minimum_quality_score,
-                execution_feasibility="BLOCKED",
-                recommended_session="REGULAR",
-                estimated_cost_rate=None,
-                reason_codes=(
-                    "NO_PRODUCTION_APPROVED_ALPHA",
-                    f"DATA_{quality.safety_status.value}",
-                ),
-            ),
-        )
+        # This research-only report never manufactures an action. The only
+        # production action path is ProductionDailyWorkflow.
+        actions: tuple[DailyAction, ...] = ()
         warnings.append(
             "未发现 PRODUCTION_APPROVED Alpha；技术指标或 AI 解释不会直接生成仓位、BUY 或 SELL。"
         )
