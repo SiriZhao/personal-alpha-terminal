@@ -15,6 +15,7 @@ from personal_alpha_terminal.quant_engine.production_pipeline import DailyQuantI
 from personal_alpha_terminal.quant_engine.risk.budget import PortfolioRiskState
 from personal_alpha_terminal.quant_engine.risk.model import AssetRiskMetadata
 from personal_alpha_terminal.quant_engine.strategies.us_adaptive_alpha_core import (
+    StrategyFactorSnapshot,
     USAdaptiveAlphaCoreV1,
 )
 from personal_alpha_terminal.research.data_gate import ResearchDataRequest, ResearchPurpose
@@ -22,10 +23,28 @@ from personal_alpha_terminal.research.service import ResearchDataGateService
 
 
 @dataclass(frozen=True, slots=True)
+class PortfolioInputPosition:
+    symbol: str
+    quantity: float
+    reference_price: float
+    current_weight: float
+
+
+@dataclass(frozen=True, slots=True)
 class AssembledDailyInput:
     inputs: DailyQuantInput
     disabled_components: tuple[str, ...]
     parameter_fingerprint: str
+    factors: tuple[StrategyFactorSnapshot, ...]
+    universe_count: int
+    data_cutoff: datetime
+    source_ids: tuple[str, ...]
+    benchmark_symbol: str
+    benchmark_observations: int
+    benchmark_period_return: float | None
+    benchmark_annualized_volatility: float | None
+    portfolio_positions: tuple[PortfolioInputPosition, ...]
+    cash_balance: float
 
 
 class ProductionDailyQuantInputAssembler:
@@ -133,9 +152,13 @@ class ProductionDailyQuantInputAssembler:
             )
             for row in metadata.itertuples(index=False)
         )
-        current_weights, portfolio_value = self._portfolio_state(
-            portfolio_id=portfolio_id,
-            decision_time=decision_time,
+        (
+            current_weights,
+            portfolio_value,
+            portfolio_positions,
+            cash_balance,
+        ) = self._portfolio_state(
+            portfolio_id=portfolio_id, decision_time=decision_time
         )
         risk_state = self._risk_state(returns, benchmark_returns, current_weights)
         return AssembledDailyInput(
@@ -156,11 +179,34 @@ class ProductionDailyQuantInputAssembler:
             ),
             strategy_result.disabled_components,
             strategy_result.parameter_fingerprint,
+            strategy_result.factors,
+            len(universe.securities),
+            returns.index.max().to_pydatetime(),
+            tuple(authorization.evidence.source_ids) if authorization.evidence else (),
+            benchmark_symbol,
+            len(benchmark_returns),
+            (
+                float((1.0 + benchmark_returns).prod() - 1.0)
+                if len(benchmark_returns)
+                else None
+            ),
+            (
+                float(benchmark_returns.std(ddof=1) * np.sqrt(252))
+                if len(benchmark_returns) > 1
+                else None
+            ),
+            portfolio_positions,
+            cash_balance,
         )
 
     def _portfolio_state(
         self, *, portfolio_id: int, decision_time: datetime
-    ) -> tuple[dict[str, float], float]:
+    ) -> tuple[
+        dict[str, float],
+        float,
+        tuple[PortfolioInputPosition, ...],
+        float,
+    ]:
         portfolio = self.session.get(Portfolio, portfolio_id)
         if portfolio is None:
             raise ValueError("portfolio does not exist")
@@ -188,6 +234,8 @@ class ProductionDailyQuantInputAssembler:
             )
         )
         values: dict[str, float] = {}
+        quantities: dict[str, float] = {}
+        prices: dict[str, float] = {}
         for position in positions:
             security = self.session.get(SecurityMaster, position.stock_id)
             price = self.session.scalar(
@@ -205,10 +253,22 @@ class ProductionDailyQuantInputAssembler:
             if security is None or price is None:
                 raise ValueError("current portfolio contains an unpriceable security")
             values[security.symbol] = float(position.quantity) * float(price.close)
+            quantities[security.symbol] = float(position.quantity)
+            prices[security.symbol] = float(price.close)
         total = float(portfolio.cash_balance) + sum(values.values())
         if total <= 0:
             raise ValueError("portfolio value must be positive")
-        return {symbol: value / total for symbol, value in values.items()}, total
+        weights = {symbol: value / total for symbol, value in values.items()}
+        snapshots = tuple(
+            PortfolioInputPosition(
+                symbol,
+                quantities[symbol],
+                prices[symbol],
+                weights[symbol],
+            )
+            for symbol in sorted(values)
+        )
+        return weights, total, snapshots, float(portfolio.cash_balance)
 
     @staticmethod
     def _risk_state(

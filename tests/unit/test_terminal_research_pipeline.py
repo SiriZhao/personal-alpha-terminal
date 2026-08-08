@@ -144,52 +144,45 @@ def test_today_attaches_only_persisted_decision_and_keeps_manual_execution_wait(
     assert result.actions[0].estimated_cost_rate is None
 
 
-def test_report_write_failure_does_not_hide_completed_daily_analysis(
+def test_daily_cli_consumes_only_application_daily_result(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    analysis = DailyResearchPipeline(
-        _config(tmp_path), primary=_Provider(), fallback=_Provider()
-    ).run(as_of=date(2024, 12, 31))
+    result = SimpleNamespace(actionable=True)
+    service = SimpleNamespace(
+        run_daily_quant_report=lambda **_kwargs: result,
+    )
     monkeypatch.setattr(terminal_cli, "load_config", lambda _path: _config(tmp_path))
     monkeypatch.setattr(
         terminal_cli,
-        "DailyResearchPipeline",
-        lambda _config: SimpleNamespace(run=lambda **_kwargs: analysis),
-    )
-    monkeypatch.setattr(
-        terminal_cli, "_attach_authorized_candidates", lambda result: result
-    )
-    monkeypatch.setattr(
-        terminal_cli,
-        "write_daily_report",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(PermissionError("read-only")),
+        "_application_service",
+        lambda **_kwargs: service,
     )
     rendered: list[object] = []
-    monkeypatch.setattr(terminal_cli, "_render", rendered.append)
+    monkeypatch.setattr(
+        terminal_cli,
+        "render_daily_quant_result",
+        lambda value, _console: rendered.append(value),
+    )
 
     exit_code = terminal_cli.run_daily(tmp_path / "config.yaml", wait=False)
 
     assert exit_code == 0
-    assert rendered
-    assert any("could not be saved" in item for item in rendered[0].warnings)
+    assert rendered == [result]
 
 
 def test_daily_redirected_tty_eof_does_not_crash(tmp_path: Path, monkeypatch) -> None:
-    analysis = DailyResearchPipeline(
-        _config(tmp_path), primary=_Provider(), fallback=_Provider()
-    ).run(as_of=date(2024, 12, 31))
+    result = SimpleNamespace(actionable=True)
+    service = SimpleNamespace(run_daily_quant_report=lambda **_kwargs: result)
     monkeypatch.setattr(terminal_cli, "load_config", lambda _path: _config(tmp_path))
     monkeypatch.setattr(
         terminal_cli,
-        "DailyResearchPipeline",
-        lambda _config: SimpleNamespace(run=lambda **_kwargs: analysis),
+        "_application_service",
+        lambda **_kwargs: service,
     )
     monkeypatch.setattr(
-        terminal_cli, "_attach_authorized_candidates", lambda result: result
+        terminal_cli, "render_daily_quant_result", lambda _result, _console: None
     )
-    monkeypatch.setattr(terminal_cli, "write_daily_report", lambda *_args: None)
-    monkeypatch.setattr(terminal_cli, "_render", lambda _analysis: None)
     monkeypatch.setattr(terminal_cli.sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(
         terminal_cli.console,

@@ -8,6 +8,8 @@ from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from personal_alpha_terminal.application.backtest_service import BacktestService
+from personal_alpha_terminal.application.daily_orchestrator import DailyQuantOrchestrator
+from personal_alpha_terminal.application.daily_result import DailyQuantResult
 from personal_alpha_terminal.application.dashboard_service import DashboardView
 from personal_alpha_terminal.application.data_service import (
     DataService,
@@ -164,6 +166,30 @@ class ApplicationService:
                 portfolio_id=portfolio_id,
                 decision_time=decision_time or datetime.now(UTC),
             )
+
+    def run_daily_quant_report(
+        self,
+        *,
+        portfolio_id: int | None = None,
+        decision_time: datetime | None = None,
+        refresh: bool = True,
+    ) -> DailyQuantResult:
+        """Run the only production daily orchestrator consumed by terminals."""
+
+        return DailyQuantOrchestrator(
+            self._factory,
+            self._settings,
+            snapshot_root=(
+                self._snapshot_root / "daily-runs"
+                if self._snapshot_root is not None
+                else None
+            ),
+            sync_runner=self._sync_runner,
+        ).run(
+            portfolio_id=portfolio_id,
+            decision_time=decision_time,
+            refresh=refresh,
+        )
 
     def get_daily_dashboard(self) -> DashboardView:
         readiness = self.get_system_health()

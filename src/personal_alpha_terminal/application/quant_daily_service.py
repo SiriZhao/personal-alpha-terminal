@@ -18,17 +18,27 @@ from personal_alpha_terminal.models import (
     SecurityMaster,
 )
 from personal_alpha_terminal.quant_engine.input_assembler import (
+    AssembledDailyInput,
+    PortfolioInputPosition,
     ProductionDailyQuantInputAssembler,
 )
-from personal_alpha_terminal.quant_engine.portfolio.trades import TradeAction
+from personal_alpha_terminal.quant_engine.portfolio.construction import PortfolioTarget
+from personal_alpha_terminal.quant_engine.portfolio.trades import TradeAction, TradeProposal
 from personal_alpha_terminal.quant_engine.production_pipeline import (
+    DailyQuantOutput,
     DailyQuantPipeline,
+    PipelineStage,
     ProductionPipelineStatus,
+)
+from personal_alpha_terminal.quant_engine.risk.model import RiskModelEstimate
+from personal_alpha_terminal.quant_engine.strategies.us_adaptive_alpha_core import (
+    StrategyFactorSnapshot,
 )
 
 
 @dataclass(frozen=True, slots=True)
 class TodayRecommendation:
+    recommendation_id: str
     symbol: str
     action: str
     current_weight: float
@@ -43,6 +53,10 @@ class TodayRecommendation:
     data_version: str
     earliest_execution_time: datetime
     expiry: datetime
+    estimated_value: float = 0.0
+    risk_contribution: float = 0.0
+    reason: str = ""
+    data_quality: str = "UNAVAILABLE"
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,6 +79,24 @@ class TodayResult:
     data_hash: str
     model_hash: str
     config_hash: str
+    pipeline_stages: tuple[PipelineStage, ...] = ()
+    factors: tuple[StrategyFactorSnapshot, ...] = ()
+    risk: RiskModelEstimate | None = None
+    target: PortfolioTarget | None = None
+    trades: tuple[TradeProposal, ...] = ()
+    portfolio_value: float | None = None
+    current_weights: dict[str, float] | None = None
+    data_cutoff: datetime | None = None
+    universe_count: int = 0
+    source_ids: tuple[str, ...] = ()
+    disabled_components: tuple[str, ...] = ()
+    benchmark_symbol: str = "SPY"
+    benchmark_observations: int = 0
+    benchmark_period_return: float | None = None
+    benchmark_annualized_volatility: float | None = None
+    portfolio_positions: tuple[PortfolioInputPosition, ...] = ()
+    cash_balance: float | None = None
+    configured_target_volatility: float | None = None
 
 
 class ProductionDailyWorkflow:
@@ -111,6 +143,7 @@ class ProductionDailyWorkflow:
                 data_hash="UNAVAILABLE",
                 model_hash="UNAVAILABLE",
                 config_hash="UNAVAILABLE",
+                pipeline_stages=(),
             )
 
         inputs = assembled.inputs
@@ -140,7 +173,12 @@ class ProductionDailyWorkflow:
             )
         )
         if existing is not None:
-            return self._result_from_record(existing, assembled.parameter_fingerprint)
+            return self._result_from_record(
+                existing,
+                assembled.parameter_fingerprint,
+                assembled=assembled,
+                output=output,
+            )
 
         if output.status is ProductionPipelineStatus.BLOCKED or output.decision is None:
             run = QuantDecisionRun(
@@ -157,7 +195,12 @@ class ProductionDailyWorkflow:
             )
             self.session.add(run)
             self.session.flush()
-            return self._result_from_record(run, assembled.parameter_fingerprint)
+            return self._result_from_record(
+                run,
+                assembled.parameter_fingerprint,
+                assembled=assembled,
+                output=output,
+            )
 
         execution = self.sessions.next_tradable_open(decision_time=decision_time)
         target = output.target
@@ -225,7 +268,12 @@ class ProductionDailyWorkflow:
                 )
             )
         self.session.flush()
-        return self._result_from_record(run, assembled.parameter_fingerprint)
+        return self._result_from_record(
+            run,
+            assembled.parameter_fingerprint,
+            assembled=assembled,
+            output=output,
+        )
 
     def _persist_blocked(
         self,
@@ -270,9 +318,13 @@ class ProductionDailyWorkflow:
         self,
         run: QuantDecisionRun,
         config_hash: str,
+        *,
+        assembled: AssembledDailyInput | None = None,
+        output: DailyQuantOutput | None = None,
     ) -> TodayResult:
         recommendations = tuple(
             TodayRecommendation(
+                recommendation_id=item.recommendation_id,
                 symbol=item.stock.symbol,
                 action=item.action,
                 current_weight=float(item.current_weight),
@@ -287,6 +339,28 @@ class ProductionDailyWorkflow:
                 data_version=run.data_version,
                 earliest_execution_time=item.earliest_execution_time,
                 expiry=item.expires_at,
+                estimated_value=abs(
+                    float(item.target_weight - item.current_weight)
+                    * float(assembled.inputs.portfolio_value)
+                )
+                if assembled is not None
+                else 0.0,
+                risk_contribution=float(
+                    item.component_scores.get("risk_contribution", 0.0)
+                ),
+                reason="; ".join(item.rationale),
+                data_quality=(
+                    next(
+                        (
+                            proposal.data_quality
+                            for proposal in output.trades
+                            if proposal.ticker == item.stock.symbol
+                        ),
+                        "UNAVAILABLE",
+                    )
+                    if output is not None
+                    else "UNAVAILABLE"
+                ),
             )
             for item in run.recommendations
         )
@@ -317,6 +391,46 @@ class ProductionDailyWorkflow:
             data_hash=run.data_version,
             model_hash=run.model_version,
             config_hash=config_hash,
+            pipeline_stages=output.stages if output is not None else (),
+            factors=getattr(assembled, "factors", ()),
+            risk=output.risk if output is not None else None,
+            target=output.target if output is not None else None,
+            trades=output.trades if output is not None else (),
+            portfolio_value=(
+                float(assembled.inputs.portfolio_value)
+                if assembled is not None
+                else None
+            ),
+            current_weights=(
+                dict(assembled.inputs.current_weights)
+                if assembled is not None
+                else None
+            ),
+            data_cutoff=getattr(assembled, "data_cutoff", None),
+            universe_count=int(getattr(assembled, "universe_count", 0)),
+            source_ids=tuple(getattr(assembled, "source_ids", ())),
+            disabled_components=tuple(
+                getattr(assembled, "disabled_components", ())
+            ),
+            benchmark_symbol=str(getattr(assembled, "benchmark_symbol", "SPY")),
+            benchmark_observations=int(
+                getattr(assembled, "benchmark_observations", 0)
+            ),
+            benchmark_period_return=getattr(
+                assembled, "benchmark_period_return", None
+            ),
+            benchmark_annualized_volatility=getattr(
+                assembled, "benchmark_annualized_volatility", None
+            ),
+            portfolio_positions=tuple(
+                getattr(assembled, "portfolio_positions", ())
+            ),
+            cash_balance=getattr(assembled, "cash_balance", None),
+            configured_target_volatility=(
+                self.pipeline.construction.constraints.target_annualized_volatility
+                if output is not None
+                else None
+            ),
         )
 
 

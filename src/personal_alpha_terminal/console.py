@@ -67,16 +67,15 @@ def main(argv: list[str] | None = None) -> int:
             logger.exception("Generated-artifact retention failed")
         if arguments:
             return _dispatch_command(arguments, config_path)
-        service = ApplicationService(get_session_factory(), settings)
         smoke_test = os.environ.get("PAT_TUI_SMOKE_TEST") == "1"
-        app = PersonalAlphaTerminalApp(service, auto_initialize=not smoke_test)
         if smoke_test:
+            service = ApplicationService(get_session_factory(), settings)
+            app = PersonalAlphaTerminalApp(service, auto_initialize=False)
             asyncio.run(_run_tui_smoke(app))
             console.print("TUI_SMOKE_OK")
             return 0
         with ConsoleInstanceLock():
-            app.run()
-        return 0
+            return _dispatch_command(["daily"], config_path)
     except Exception as error:
         logger.exception("Terminal startup failed")
         console.print(

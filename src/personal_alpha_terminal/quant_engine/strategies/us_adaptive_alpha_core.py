@@ -38,10 +38,22 @@ class USAdaptiveAlphaCoreV1Config:
 
 
 @dataclass(frozen=True, slots=True)
+class StrategyFactorSnapshot:
+    symbol: str
+    components: dict[str, float]
+    composite: float
+    rank: int
+    expected_alpha: float
+    confidence: float
+    status: str
+
+
+@dataclass(frozen=True, slots=True)
 class StrategyAlphaResult:
     signals: tuple[AlphaSignal, ...]
     disabled_components: tuple[str, ...]
     parameter_fingerprint: str
+    factors: tuple[StrategyFactorSnapshot, ...] = ()
 
 
 class USAdaptiveAlphaCoreV1:
@@ -79,7 +91,7 @@ class USAdaptiveAlphaCoreV1:
         )
         if len(features) < self.config.minimum_cross_section:
             return StrategyAlphaResult(
-                (), ("price_cross_section",), self.config.parameter_fingerprint
+                (), ("price_cross_section",), self.config.parameter_fingerprint, ()
             )
         observations = features.merge(metadata, on="permanent_security_id", how="left")
         specs = [
@@ -136,8 +148,10 @@ class USAdaptiveAlphaCoreV1:
                     )
                 ),
                 parameter_fingerprint,
+                (),
             )
         signals: list[AlphaSignal] = []
+        factor_rows: list[StrategyFactorSnapshot] = []
         for _, row in processed.frame.iterrows():
             if not bool(row["eligible"]):
                 continue
@@ -155,6 +169,21 @@ class USAdaptiveAlphaCoreV1:
                 components["quality"] = float(row["quality__normalized"])
                 expected += components["quality"] * self.config.quality_coefficient
             coverage = float(row["factor_coverage"])
+            factor_rows.append(
+                StrategyFactorSnapshot(
+                    symbol=str(row["ticker"]),
+                    components=components,
+                    composite=sum(components.values()) / len(components),
+                    rank=0,
+                    expected_alpha=expected,
+                    confidence=min(1.0, coverage),
+                    status=(
+                        "PRODUCTION_APPROVED"
+                        if production
+                        else "DIAGNOSTIC_ONLY"
+                    ),
+                )
+            )
             signals.append(
                 AlphaSignal(
                     symbol=str(row["ticker"]),
@@ -182,4 +211,19 @@ class USAdaptiveAlphaCoreV1:
                     data_version=data_version,
                 )
             )
-        return StrategyAlphaResult(tuple(signals), tuple(disabled), parameter_fingerprint)
+        ranked = sorted(factor_rows, key=lambda item: (-item.expected_alpha, item.symbol))
+        factor_rows = [
+            StrategyFactorSnapshot(
+                symbol=item.symbol,
+                components=item.components,
+                composite=item.composite,
+                rank=index,
+                expected_alpha=item.expected_alpha,
+                confidence=item.confidence,
+                status=item.status,
+            )
+            for index, item in enumerate(ranked, start=1)
+        ]
+        return StrategyAlphaResult(
+            tuple(signals), tuple(disabled), parameter_fingerprint, tuple(factor_rows)
+        )

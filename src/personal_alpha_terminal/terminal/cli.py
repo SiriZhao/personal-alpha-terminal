@@ -14,13 +14,13 @@ from rich.panel import Panel
 from rich.table import Table
 
 from personal_alpha_terminal.terminal.config import default_config_text, load_config
+from personal_alpha_terminal.terminal.daily_renderer import render_daily_quant_result
 from personal_alpha_terminal.terminal.pipeline import (
     DailyAction,
     DailyAnalysis,
     DailyResearchPipeline,
 )
 from personal_alpha_terminal.terminal.quality import DataSafetyStatus
-from personal_alpha_terminal.terminal.report import write_daily_report
 
 if TYPE_CHECKING:
     from personal_alpha_terminal.application import ApplicationService
@@ -191,29 +191,23 @@ def _public_provider_error(error: str | None) -> str:
 def run_daily(config_path: Path, *, refresh: bool = True, wait: bool = True) -> int:
     try:
         config = load_config(config_path)
-        analysis = DailyResearchPipeline(config).run(refresh=refresh)
-        analysis = _attach_authorized_candidates(analysis)
-    except (FileNotFoundError, OSError, RuntimeError, ValueError) as error:
-        console.print(Panel(str(error), title="Daily workflow failed closed", border_style="red"))
-        return 2
-    report: Path | None = None
-    try:
-        report = write_daily_report(analysis, config.report_dir)
-    except OSError as error:
-        analysis = replace(
-            analysis,
-            warnings=(
-                *analysis.warnings,
-                "Daily analysis completed, but the report could not be saved: "
-                f"{type(error).__name__}: {error}",
-            ),
+        service = _application_service(snapshot_root=config.report_dir)
+        result = service.run_daily_quant_report(
+            portfolio_id=config.portfolio_id,
+            refresh=refresh,
         )
-    _render(analysis)
-    if report is not None:
-        console.print(f"\nDaily report: {report.resolve()}")
-    else:
-        console.print("\nDaily report: NOT SAVED (see warning above)")
-    console.print("Broker execution: manual Charles Schwab entry only; no broker API is present.")
+    except (FileNotFoundError, OSError, RuntimeError, ValueError) as error:
+        logger.exception("Daily quant orchestration failed")
+        console.print(
+            Panel(
+                f"{type(error).__name__}: {error}\n完整异常已写入日志。",
+                title="DAILY QUANT WORKFLOW · FAIL CLOSED",
+                border_style="red",
+            )
+        )
+        return 2
+    render_daily_quant_result(result, console)
+    console.print(f"\nRun snapshot directory: {(config.report_dir / 'daily-runs').resolve()}")
     if wait and sys.stdin.isatty() and os.environ.get("PAT_NONINTERACTIVE") != "1":
         try:
             console.input("\nPress Enter to exit")
@@ -222,7 +216,7 @@ def run_daily(config_path: Path, *, refresh: bool = True, wait: bool = True) -> 
             # while providing no readable stdin. The completed analysis must
             # still return its safety-gate exit code without a traceback.
             logger.info("Skipping exit prompt because stdin reached EOF")
-    return 0 if analysis.data_quality.status != "BLOCKED" else 3
+    return 0 if result.actionable else 3
 
 
 def _attach_authorized_candidates(analysis: DailyAnalysis) -> DailyAnalysis:
@@ -282,14 +276,16 @@ def _attach_authorized_candidates(analysis: DailyAnalysis) -> DailyAnalysis:
     )
 
 
-def _application_service() -> ApplicationService:
+def _application_service(*, snapshot_root: Path | None = None) -> ApplicationService:
     from personal_alpha_terminal.application import ApplicationService
     from personal_alpha_terminal.core.config import get_settings
     from personal_alpha_terminal.data.database import get_session_factory
     from personal_alpha_terminal.data.migrations import upgrade_database
 
     upgrade_database()
-    return ApplicationService(get_session_factory(), get_settings())
+    return ApplicationService(
+        get_session_factory(), get_settings(), snapshot_root=snapshot_root
+    )
 
 
 def _review(recommendation_id: str, decision: str, reason: str) -> int:
@@ -455,8 +451,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", type=Path, default=Path("config.yaml"))
     parser.add_argument("--no-refresh", action="store_true")
     subparsers = parser.add_subparsers(dest="command")
-    subparsers.add_parser("daily")
+    subparsers.add_parser("daily", help="Run and render the complete daily quant chain")
+    subparsers.add_parser("refresh", help="Refresh data, then run the daily quant chain")
+    subparsers.add_parser("data", help="Render data status through the daily snapshot")
+    subparsers.add_parser("factors", help="Render factor results from the daily snapshot")
+    subparsers.add_parser(
+        "probability", help="Render validated conditional evidence from the daily snapshot"
+    )
+    subparsers.add_parser("risk", help="Render portfolio risk from the daily snapshot")
+    subparsers.add_parser("decisions", help="Render final validated decisions")
     subparsers.add_parser("doctor")
+    subparsers.add_parser("diagnostics", help="Alias for doctor")
+    subparsers.add_parser("settings", help="Show the active terminal configuration path")
+    subparsers.add_parser("version", help="Show application version")
     subparsers.add_parser("research", help="Run the audited local research pipeline")
     subparsers.add_parser("backtest", help="Check the PIT backtest execution gate")
     subparsers.add_parser("init-config")
@@ -479,6 +486,7 @@ def build_parser() -> argparse.ArgumentParser:
     portfolio_import.add_argument("--portfolio-id", type=int, required=True)
     portfolio_import.add_argument("--as-of", required=True)
     subparsers.add_parser("portfolio-list")
+    subparsers.add_parser("portfolio", help="Alias for portfolio-list")
     return parser
 
 
@@ -492,8 +500,16 @@ def main(argv: list[str] | None = None) -> int:
         args.config.write_text(default_config_text(), encoding="utf-8")
         console.print(f"Created configuration: {args.config}")
         return 0
-    if command == "doctor":
+    if command in {"doctor", "diagnostics"}:
         return _doctor(args.config)
+    if command == "settings":
+        console.print(f"Active configuration: {args.config.resolve()}")
+        return 0
+    if command == "version":
+        from personal_alpha_terminal import __version__
+
+        console.print(f"Personal Alpha Terminal {__version__}")
+        return 0
     if command == "research":
         return _research()
     if command == "backtest":
@@ -502,6 +518,13 @@ def main(argv: list[str] | None = None) -> int:
         return _review(args.recommendation_id, command, args.reason)
     if command == "mark-executed":
         return _record_execution(args)
+    if command == "portfolio":
+        args.command = "portfolio-list"
+        return _portfolio_command(args)
     if command in {"portfolio-init", "portfolio-import", "portfolio-list"}:
         return _portfolio_command(args)
+    if command == "refresh":
+        return run_daily(args.config, refresh=True)
+    if command in {"data", "factors", "probability", "risk", "decisions"}:
+        return run_daily(args.config, refresh=False)
     return run_daily(args.config, refresh=not args.no_refresh)
