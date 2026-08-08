@@ -36,6 +36,11 @@ from personal_alpha_terminal.models.factor import (
     FactorScore,
     FinancialPerShareMetric,
 )
+from personal_alpha_terminal.models.governance import (
+    ExperimentRecord,
+    ExperimentResultRecord,
+    PortfolioReconciliationRecord,
+)
 from personal_alpha_terminal.models.intelligence import (
     IntelligenceDecisionLineage,
     IntelligenceEvent,
@@ -152,6 +157,8 @@ __all__ = [
     "EventStudyObservation",
     "EventStudyRun",
     "EventStudyStatistic",
+    "ExperimentRecord",
+    "ExperimentResultRecord",
     "ExchangeSession",
     "Financial",
     "FundamentalVintage",
@@ -200,6 +207,7 @@ __all__ = [
     "PortfolioTransaction",
     "PortfolioRiskMetric",
     "PortfolioRiskRun",
+    "PortfolioReconciliationRecord",
     "PortfolioStressResult",
     "Price",
     "ProviderCapabilityRecord",

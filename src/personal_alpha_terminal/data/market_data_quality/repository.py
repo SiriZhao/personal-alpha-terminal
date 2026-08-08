@@ -1,6 +1,7 @@
 from collections import Counter
 from datetime import UTC, date, datetime, time
 from decimal import Decimal
+from hashlib import sha256
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -183,9 +184,17 @@ class MarketDataQualityRepository:
             if key in seen:
                 raise ValueError(f"Duplicate corporate action in input: {key}")
             seen.add(key)
+            action_identity = "|".join(str(value) for value in key)
+            action_id = sha256(action_identity.encode()).hexdigest()
+            revision_payload = (
+                f"{action_identity}|{available_time.isoformat()}|{item.split_ratio}|"
+                f"{item.cash_amount}|{item.currency}"
+            )
             self._session.add(
                 CorporateAction(
                     stock_id=item.stock_id,
+                    action_id=action_id,
+                    revision_id=sha256(revision_payload.encode()).hexdigest(),
                     action_type=item.action_type.value,
                     effective_date=item.effective_date,
                     announcement_date=item.announcement_date,

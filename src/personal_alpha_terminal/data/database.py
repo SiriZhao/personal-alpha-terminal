@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from personal_alpha_terminal.core.config import Settings, get_settings
-from personal_alpha_terminal.core.runtime_context import RuntimeContext
+from personal_alpha_terminal.core.runtime_context import RuntimeContext, RuntimeProfile
 from personal_alpha_terminal.models import Base
 
 SessionFactory = sessionmaker[Session]
@@ -101,7 +101,14 @@ def configure_database(
     resolved = settings or get_settings()
     context = runtime_context or RuntimeContext.from_settings(resolved)
     if _runtime_context is not None:
-        _runtime_context.assert_same_database(context.database_url)
+        if context.profile is RuntimeProfile.TEST:
+            if _engine is not None:
+                _engine.dispose()
+            _engine = None
+            _session_factory = None
+            _runtime_context = None
+        else:
+            _runtime_context.assert_same_database(context.database_url)
     context.assert_same_database(context.database_url)
     _engine = build_engine(
         context.database_url,

@@ -31,3 +31,6 @@ __all__ = [
     "evaluate_ic_decay",
     "process_cross_section",
 ]
+from personal_alpha_terminal.quant_engine.factors.contracts import FactorObservation
+
+__all__ = ["FactorObservation"]

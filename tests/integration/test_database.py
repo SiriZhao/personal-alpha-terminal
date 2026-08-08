@@ -93,6 +93,17 @@ EXPECTED_TABLES = {
     "security_master",
     "security_identifier_history",
     "fx_rates",
+    "security_symbol_aliases",
+    "security_listing_history",
+    "security_delisting_history",
+    "universe_definitions",
+    "universe_memberships",
+    "security_trading_status",
+    "pit_total_return_points",
+    "model_approval_records",
+    "quant_experiments",
+    "quant_experiment_results",
+    "portfolio_reconciliations",
 }
 
 

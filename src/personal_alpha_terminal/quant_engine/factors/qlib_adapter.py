@@ -27,7 +27,11 @@ class QlibFactorResearchAdapter:
                 "Qlib is isolated because the supported research runtime is Python 3.8-3.12",
             )
         if importlib.util.find_spec("qlib") is None:
-            return QlibBackendStatus(False, runtime, "pyqlib is not installed in this runtime")
+            return QlibBackendStatus(
+                False,
+                runtime,
+                "pyqlib is not installed; isolated research support targets Python 3.8-3.12",
+            )
         return QlibBackendStatus(True, runtime, None)
 
     def build_feature_frame(self, observations: pd.DataFrame) -> pd.DataFrame:

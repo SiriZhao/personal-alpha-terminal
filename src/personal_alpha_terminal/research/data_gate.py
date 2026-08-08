@@ -128,7 +128,7 @@ class ResearchDataAuthorization:
     request: ResearchDataRequest
     issued_at: datetime
     authorization_id: str
-    evidence: ResearchDataEvidence
+    evidence: ResearchDataEvidence | None = None
 
     def permits(self, purpose: ResearchPurpose) -> bool:
         if self.request.purpose is not purpose or self.decision.status is GateStatus.BLOCKED:

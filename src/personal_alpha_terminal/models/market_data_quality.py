@@ -45,7 +45,9 @@ class MarketUniverseSnapshot(TimestampMixin, Base):
     available_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     ingested_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     definition_id: Mapped[int | None] = mapped_column(
-        ForeignKey("universe_definitions.id", ondelete="RESTRICT"), nullable=True
+        ForeignKey("universe_definitions.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
     )
     version_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     data_version: Mapped[str | None] = mapped_column(String(64), nullable=True)

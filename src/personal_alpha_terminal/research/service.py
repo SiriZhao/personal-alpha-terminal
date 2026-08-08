@@ -52,15 +52,15 @@ class ResearchDataGateService:
             )
             .limit(1)
         )
-        quality = self._session.scalar(
-            select(MarketDataQualityRun)
-            .where(
+        quality_statement = select(MarketDataQualityRun)
+        if certification is not None:
+            quality_statement = quality_statement.where(
                 MarketDataQualityRun.id == certification.quality_run_id
-                if certification is not None
-                else True
             )
-            .order_by(MarketDataQualityRun.created_at.desc(), MarketDataQualityRun.id.desc())
-            .limit(1)
+        quality = self._session.scalar(
+            quality_statement.order_by(
+                MarketDataQualityRun.created_at.desc(), MarketDataQualityRun.id.desc()
+            ).limit(1)
         )
         metrics = quality.aggregate_metrics if quality is not None else {}
         snapshot = self._session.scalar(

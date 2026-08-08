@@ -10,6 +10,8 @@ class TransactionCostConfig:
     spread_bps: float = 4.0
     slippage_bps: float = 3.0
     impact_coefficient_bps: float = 10.0
+    minimum_fee: float = 0.0
+    regulatory_fee_bps: float = 0.0
     maximum_adv_participation: float = 0.02
     version: str = "us-daily-cost-v1"
 
@@ -19,6 +21,8 @@ class TransactionCostConfig:
             self.spread_bps,
             self.slippage_bps,
             self.impact_coefficient_bps,
+            self.minimum_fee,
+            self.regulatory_fee_bps,
             self.maximum_adv_participation,
         )
         if any(not isfinite(value) or value < 0 for value in numeric):
@@ -36,6 +40,7 @@ class TransactionCostEstimate:
     spread: float
     slippage: float
     market_impact: float
+    regulatory_fee: float
     total_cost: float
     participation_rate: float
     all_in_rate: float
@@ -56,6 +61,7 @@ class TransactionCostModel:
             + self.config.slippage_bps
             + self.config.impact_coefficient_bps
             * sqrt(self.config.maximum_adv_participation)
+            + self.config.regulatory_fee_bps
         )
         return base / 10_000
 
@@ -69,7 +75,10 @@ class TransactionCostModel:
         participation = trade_value / average_daily_dollar_volume
         if participation > self.config.maximum_adv_participation + 1e-12:
             raise ValueError("trade exceeds configured ADV participation limit")
-        commission = trade_value * self.config.commission_bps / 10_000
+        commission = max(
+            self.config.minimum_fee,
+            trade_value * self.config.commission_bps / 10_000,
+        ) if trade_value else 0.0
         spread = trade_value * (self.config.spread_bps / 2) / 10_000
         slippage = trade_value * self.config.slippage_bps / 10_000
         impact = (
@@ -78,13 +87,15 @@ class TransactionCostModel:
             * sqrt(max(participation, 0.0))
             / 10_000
         )
-        total = commission + spread + slippage + impact
+        regulatory_fee = trade_value * self.config.regulatory_fee_bps / 10_000
+        total = commission + spread + slippage + impact + regulatory_fee
         return TransactionCostEstimate(
             trade_value=trade_value,
             commission=commission,
             spread=spread,
             slippage=slippage,
             market_impact=impact,
+            regulatory_fee=regulatory_fee,
             total_cost=total,
             participation_rate=participation,
             all_in_rate=(total / trade_value if trade_value else 0.0),

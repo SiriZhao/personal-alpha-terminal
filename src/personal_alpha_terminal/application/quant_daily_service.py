@@ -49,10 +49,13 @@ class TodayRecommendation:
 class TodayResult:
     run_id: int
     decision_time: datetime
+    market_session: str
+    data_freshness: str
     status: str
     data_certification: str
     model_status: str
     portfolio_status: str
+    risk_regime: str
     gross_target: float | None
     cash_target: float | None
     recommendations: tuple[TodayRecommendation, ...]
@@ -92,10 +95,13 @@ class ProductionDailyWorkflow:
             return TodayResult(
                 run_id=run.id,
                 decision_time=decision_time,
+                market_session="UNKNOWN",
+                data_freshness="UNAVAILABLE",
                 status="BLOCKED",
                 data_certification="BLOCKED",
                 model_status="NOT_READY",
                 portfolio_status="UNCHANGED",
+                risk_regime="SCORE_UNAVAILABLE",
                 gross_target=None,
                 cash_target=None,
                 recommendations=(),
@@ -108,6 +114,9 @@ class ProductionDailyWorkflow:
             )
 
         inputs = assembled.inputs
+        if inputs.authorization.evidence is None:
+            raise ValueError("production authorization is missing immutable data evidence")
+        evidence = inputs.authorization.evidence
         data_version = (
             output.target.data_version if output.target is not None else "UNAVAILABLE"
         )
@@ -143,7 +152,7 @@ class ProductionDailyWorkflow:
                 data_version=data_version,
                 model_version=model_version,
                 input_fingerprint=fingerprint,
-                source_ids=list(inputs.authorization.evidence.source_ids),
+                source_ids=list(evidence.source_ids),
                 blockers=list(output.blockers),
             )
             self.session.add(run)
@@ -163,7 +172,7 @@ class ProductionDailyWorkflow:
             data_version=target.data_version,
             model_version=target.model_version,
             input_fingerprint=fingerprint,
-            source_ids=list(inputs.authorization.evidence.source_ids),
+            source_ids=list(evidence.source_ids),
             blockers=[],
         )
         self.session.add(run)
@@ -207,7 +216,7 @@ class ProductionDailyWorkflow:
                     risk_factors=list(proposal.counter_evidence),
                     evidence_grade="MODEL_APPROVED",
                     sample_size=0,
-                    source_ids=list(inputs.authorization.evidence.source_ids),
+                    source_ids=list(evidence.source_ids),
                     reference_price=price.close,
                     suggested_shares=quantity,
                     earliest_execution_time=execution.open_time,
@@ -288,10 +297,17 @@ class ProductionDailyWorkflow:
         return TodayResult(
             run_id=run.id,
             decision_time=run.as_of_time,
+            market_session="POST_CLOSE_DECISION",
+            data_freshness=(
+                "CERTIFIED_AS_OF_DECISION"
+                if run.gate_status == "APPROVED"
+                else "UNAVAILABLE"
+            ),
             status=run.status.upper(),
             data_certification=run.gate_status,
             model_status="APPROVED" if run.gate_status == "APPROVED" else "NOT_READY",
             portfolio_status="TARGET_COMPUTED" if run.gate_status == "APPROVED" else "UNCHANGED",
+            risk_regime="SCORE_UNAVAILABLE",
             gross_target=gross if run.gate_status == "APPROVED" else None,
             cash_target=1 - gross if run.gate_status == "APPROVED" else None,
             recommendations=recommendations,

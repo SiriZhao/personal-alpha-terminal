@@ -36,7 +36,16 @@ class RuntimeContext:
         local_app_data: Path | None = None,
     ) -> RuntimeContext:
         root = (project_root or Path.cwd()).resolve()
-        profile = RuntimeProfile(settings.runtime_profile)
+        configured_url = make_url(settings.database_url)
+        isolated_memory = (
+            configured_url.get_backend_name() == "sqlite"
+            and configured_url.database in {None, "", ":memory:"}
+        )
+        profile = (
+            RuntimeProfile.TEST
+            if isolated_memory
+            else RuntimeProfile(settings.runtime_profile)
+        )
         desktop_root = (
             local_app_data
             or Path(os.environ.get("LOCALAPPDATA", Path.home()))
@@ -60,7 +69,9 @@ class RuntimeContext:
                 expected_path = None
         else:
             application_root = root
-            configured = make_url(settings.database_url)
+            configured = configured_url
+            if isolated_memory:
+                return cls(profile, "sqlite://", None, application_root, ())
             if configured.get_backend_name() != "sqlite" or not configured.database:
                 raise ValueError("TEST profile requires an explicit SQLite database path")
             candidate = Path(configured.database)
@@ -79,7 +90,7 @@ class RuntimeContext:
                 (root / "var" / "personal_alpha.db").resolve(),
                 (desktop_root / "data" / "personal_alpha.db").resolve(),
             )
-            if path.exists() and path != expected_path
+            if _safe_exists(path) and path != expected_path
         )
         return cls(profile, database_url, expected_path, application_root, candidates)
 
@@ -109,3 +120,10 @@ def production_desktop_database_url(local_app_data: Path | None = None) -> str:
     base = (local_app_data or Path(os.environ.get("LOCALAPPDATA", Path.home()))).resolve()
     path = base / "PersonalAlphaTerminal" / "data" / "personal_alpha.db"
     return f"sqlite:///{path.as_posix()}"
+
+
+def _safe_exists(path: Path) -> bool:
+    try:
+        return path.exists()
+    except OSError:
+        return False

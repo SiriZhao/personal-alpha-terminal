@@ -10,6 +10,7 @@ from personal_alpha_terminal.agents.llm.schemas import (
     LLMRequest,
     ResearchReportResult,
 )
+from personal_alpha_terminal.agents.outbound_policy import redact_outbound_payload
 
 SYSTEM_PROMPT = """You are a quantitative research writing assistant.
 Use only the supplied evidence objects. Never predict prices, invent facts, or issue
@@ -40,7 +41,7 @@ class ResearchAgent:
         evidence_ids = [item.evidence_id for item in evidence]
         if len(evidence_ids) != len(set(evidence_ids)):
             raise ValueError("evidence identifiers must be unique")
-        payload = {
+        payload: dict[str, object] = {
             "report_type": report_type,
             "as_of_date": as_of_date.isoformat(),
             "evidence": [
@@ -53,6 +54,7 @@ class ResearchAgent:
                 for item in evidence
             ],
         }
+        payload = redact_outbound_payload(payload, portfolio_context_opt_in=False)
         response = self._provider.generate(
             LLMRequest(
                 system_prompt=SYSTEM_PROMPT,

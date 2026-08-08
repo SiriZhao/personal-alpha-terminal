@@ -55,6 +55,8 @@ class ProductionBacktestDatasetRepository:
         if not authorization.permits(ResearchPurpose.BACKTEST):
             raise ValueError("BacktestDataGate is not approved")
         evidence = authorization.evidence
+        if evidence is None:
+            raise ValueError("official backtest authorization lacks immutable data evidence")
         if evidence.market != "US" or evidence.adjustment_mode != "point_in_time_total_return":
             raise ValueError("official backtest requires US point-in-time total-return evidence")
         cutoff = datetime.combine(end_date, time.max, tzinfo=UTC)

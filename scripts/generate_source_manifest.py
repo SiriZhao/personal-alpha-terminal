@@ -6,7 +6,6 @@ import argparse
 import hashlib
 from pathlib import Path
 
-
 INCLUDED_ROOT_FILES = {
     ".env.example",
     ".env.production.example",
