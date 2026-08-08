@@ -258,3 +258,42 @@ class ManualRebalanceFillRecord(Base):
     fees: Mapped[float] = mapped_column(Numeric(20, 6), nullable=False)
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+
+class ManualExecutionRecord(TimestampMixin, Base):
+    """Immutable audit record for a broker execution reported by the user.
+
+    This table does not update holdings.  A separately validated portfolio
+    transaction is required before a Schwab/manual execution changes the real
+    portfolio ledger.
+    """
+
+    __tablename__ = "manual_execution_records"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('PENDING', 'PARTIAL', 'FILLED', 'CANCELLED', 'MODIFIED')",
+            name="valid_manual_execution_status",
+        ),
+        UniqueConstraint("execution_id", name="uq_manual_execution_id"),
+        Index("ix_manual_execution_ticket_time", "ticket_id", "reported_at"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True)
+    execution_id: Mapped[str] = mapped_column(String(96), nullable=False)
+    ticket_id: Mapped[int] = mapped_column(
+        ForeignKey("manual_rebalance_tickets.id", ondelete="CASCADE"), nullable=False
+    )
+    stock_id: Mapped[int] = mapped_column(
+        ForeignKey("security_master.id", ondelete="RESTRICT"), index=True, nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    requested_shares: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    actual_shares: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    expected_price: Mapped[float] = mapped_column(Numeric(20, 6), nullable=False)
+    actual_price: Mapped[float | None] = mapped_column(Numeric(20, 6))
+    expected_cost: Mapped[float] = mapped_column(Numeric(20, 6), nullable=False)
+    actual_fee: Mapped[float] = mapped_column(Numeric(20, 6), nullable=False, default=0)
+    slippage: Mapped[float | None] = mapped_column(Numeric(20, 6))
+    execution_deviation: Mapped[float | None] = mapped_column(Numeric(20, 6))
+    reported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    notes: Mapped[str] = mapped_column(Text, nullable=False, default="")

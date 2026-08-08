@@ -54,11 +54,33 @@ def test_event_validation_rejects_duplicate_overlapping_event_ids() -> None:
 
 def test_relationship_needs_significance_oos_and_after_cost_value() -> None:
     valid = validate_relationship_for_alpha(
-        RelationshipEvidence(0.01, 0.012, 0.002, 4, 0.75, 80)
+        RelationshipEvidence(0.01, 0.012, 0.002, 4, 0.75, 80, True, True, True, True, 0.01, 0.75)
     )
     false_edge = validate_relationship_for_alpha(
-        RelationshipEvidence(0.01, 0.001, 0.002, 4, 0.75, 80)
+        RelationshipEvidence(0.01, 0.001, 0.002, 4, 0.75, 80, True, True, True, True, 0.01, 0.75)
     )
     assert valid.use is RelationshipUse.ALPHA_CANDIDATE
     assert false_edge.use is RelationshipUse.RESEARCH_INSIGHT
     assert "after cost" in false_edge.blockers[-1]
+
+
+def test_relationship_remains_research_when_clock_or_factor_controls_fail() -> None:
+    result = validate_relationship_for_alpha(
+        RelationshipEvidence(
+            0.01,
+            0.012,
+            0.002,
+            4,
+            0.75,
+            80,
+            False,
+            True,
+            True,
+            False,
+            0.01,
+            0.75,
+        )
+    )
+    assert result.use is RelationshipUse.RESEARCH_INSIGHT
+    assert "market clocks are not aligned" in result.blockers
+    assert "common market factor is not controlled" in result.blockers

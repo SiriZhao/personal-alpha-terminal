@@ -18,6 +18,12 @@ class RelationshipEvidence:
     oos_periods: int
     oos_survival_ratio: float
     effective_sample_size: float
+    market_clock_aligned: bool
+    non_overlapping_timestamps: bool
+    stationarity_passed: bool
+    common_market_factor_controlled: bool
+    permutation_p_value: float
+    bootstrap_stability: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +49,8 @@ def validate_relationship_for_alpha(
         evidence.estimated_cost,
         evidence.oos_survival_ratio,
         evidence.effective_sample_size,
+        evidence.permutation_p_value,
+        evidence.bootstrap_stability,
     )
     if any(not isfinite(value) for value in values):
         raise ValueError("relationship evidence must be finite")
@@ -50,12 +58,24 @@ def validate_relationship_for_alpha(
     blockers: list[str] = []
     if evidence.adjusted_p_value > significance_level:
         blockers.append("multiple-testing-adjusted significance failed")
+    if evidence.permutation_p_value > significance_level:
+        blockers.append("permutation significance failed")
+    if not evidence.market_clock_aligned:
+        blockers.append("market clocks are not aligned")
+    if not evidence.non_overlapping_timestamps:
+        blockers.append("lead-lag timestamps overlap")
+    if not evidence.stationarity_passed:
+        blockers.append("stationarity diagnostic failed")
+    if not evidence.common_market_factor_controlled:
+        blockers.append("common market factor is not controlled")
     if evidence.effective_sample_size < minimum_effective_sample:
         blockers.append("effective sample size is insufficient")
     if evidence.oos_periods < minimum_oos_periods:
         blockers.append("too few out-of-sample periods")
     if evidence.oos_survival_ratio < minimum_oos_survival:
         blockers.append("out-of-sample edge survival is unstable")
+    if evidence.bootstrap_stability < minimum_oos_survival:
+        blockers.append("bootstrap edge stability is insufficient")
     if net <= 0:
         blockers.append("expected relationship return is not positive after cost")
     return RelationshipValidation(

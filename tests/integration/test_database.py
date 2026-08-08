@@ -65,6 +65,7 @@ EXPECTED_TABLES = {
     "market_universe_members",
     "market_universe_snapshots",
     "manual_rebalance_fills",
+    "manual_execution_records",
     "manual_rebalance_tickets",
     "model_registry",
     "pit_total_return_versions",

@@ -16,5 +16,8 @@ Streamlit, and production-readiness claims elsewhere under `docs/reports/`.
 | Action generation | BLOCKED_BY_DATA |
 | Shadow Forward with executable candidates | BLOCKED_BY_DATA |
 | Small-capital Manual Pilot | DISABLED |
+| Manual execution audit (no automatic holdings mutation) | IMPLEMENTED_FIXTURE_TESTED |
+
+Current Alembic head: `b2e3f4a5c6d7`.
 
 No current result guarantees principal preservation or future outperformance.

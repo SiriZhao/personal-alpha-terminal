@@ -125,6 +125,7 @@ from personal_alpha_terminal.models.scenario import (
 from personal_alpha_terminal.models.us_quant import (
     BacktestManifestRecord,
     FundamentalVintage,
+    ManualExecutionRecord,
     ManualRebalanceFillRecord,
     ManualRebalanceTicketRecord,
     ModelRegistryRecord,
@@ -195,6 +196,7 @@ __all__ = [
     "MarketUniverseMember",
     "MarketUniverseSnapshot",
     "ManualRebalanceFillRecord",
+    "ManualExecutionRecord",
     "ManualRebalanceTicketRecord",
     "ModelRegistryRecord",
     "ModelApprovalRecord",

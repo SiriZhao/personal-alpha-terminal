@@ -10,9 +10,11 @@
     "experiment_registry": "IMPLEMENTED_FIXTURE_TESTED",
     "risk_stress": "IMPLEMENTED_FIXTURE_TESTED",
     "manual_portfolio_reconciliation": "IMPLEMENTED_FIXTURE_TESTED",
+    "manual_execution_audit": "IMPLEMENTED_FIXTURE_TESTED",
     "pit_historical_data": "BLOCKED_BY_DATA",
     "locked_oos": "BLOCKED_BY_DATA",
     "production_action": "BLOCKED_BY_DATA",
     "small_capital_manual_pilot": "DISABLED"
-  }
+  },
+  "alembic_head": "b2e3f4a5c6d7"
 }

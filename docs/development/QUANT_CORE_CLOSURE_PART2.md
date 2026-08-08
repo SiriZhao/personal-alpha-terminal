@@ -23,7 +23,7 @@ Part 1 implementation commit: `05c3776`
 | Transaction costs | IMPLEMENTED_FIXTURE_TESTED | One `TransactionCostModel` includes configurable commission, half spread, slippage, participation impact, minimum fee, regulatory fee and ADV cap. |
 | Manual portfolio | IMPLEMENTED_FIXTURE_TESTED | Existing immutable ledger covers deposit/withdrawal/buy/sell/fee/dividend/split/FX; added idempotent broker snapshot reconciliation. ACCEPT still does not change holdings. |
 | AI boundary | IMPLEMENTED_FIXTURE_TESTED | Outbound payload is redacted by default, portfolio-sensitive fields require explicit policy change, structured numeric claims can be checked against symbol/date/unit/direction/source evidence. AI cannot affect quant decisions. |
-| Runtime/database | IMPLEMENTED_FIXTURE_TESTED | Memory DB is isolated TEST; production/development rebind remains prohibited. New migration is forward-only and single head is `a1d2e3f4b5c6`. |
+| Runtime/database | IMPLEMENTED_FIXTURE_TESTED | Memory DB is isolated TEST; production/development rebind remains prohibited. Forward-only manual execution evidence revision advances the single head to `b2e3f4a5c6d7`. |
 | PIT real historical evidence | BLOCKED_BY_DATA | No certified historical universe/delistings, corporate-action ledger, PIT total-return archive, fundamental revision archive or independent reconciliation. |
 | Locked real OOS | BLOCKED_BY_DATA | No untouched locked-OOS experiment on certified real PIT data. |
 
@@ -34,7 +34,7 @@ Part 1 implementation commit: `05c3776`
 - Ruff: PASS (whole repository).
 - mypy strict: PASS, 392 source files.
 - pip check: PASS.
-- Alembic: one head, `a1d2e3f4b5c6`; empty/legacy upgrade tests PASS.
+- Alembic: one head, `b2e3f4a5c6d7`; empty/legacy upgrade tests PASS.
 - Secret-pattern scan: no hard-coded key/bearer-token match.
 - Dependency vulnerability scan: BLOCKED_BY_ENVIRONMENT because `pip-audit` is not installed; no tool was downloaded.
 - Phase I exam: executed under source-hash lock; BLOCKED/N/A for all fixed windows because real PIT and locked OOS evidence is absent.

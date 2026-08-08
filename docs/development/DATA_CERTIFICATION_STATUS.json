@@ -20,6 +20,7 @@
     "experiment_registry": "IMPLEMENTED_FIXTURE_TESTED",
     "portfolio_stress_reporting": "IMPLEMENTED_FIXTURE_TESTED",
     "manual_portfolio_reconciliation": "IMPLEMENTED_FIXTURE_TESTED",
+    "manual_execution_audit": "IMPLEMENTED_FIXTURE_TESTED",
     "locked_oos": "BLOCKED_BY_DATA",
     "production_action": "BLOCKED_BY_DATA"
   },
