@@ -1,0 +1,13 @@
+{
+  "ending_equity": 1021871.56729361,
+  "manifest_hash": "a64a7137d829ea4ff0462dde676298942cb6465d377cbd530a0cbb7ed04b6797",
+  "net_return": 0.021871567294,
+  "result_hash": "f4902a7e7728e3036ea0eb669f5a8e477affc880e94071cfc12d345fe8ecaf6c",
+  "target_weights": {
+    "BBB": 0.069113181356,
+    "CCC": 0.163125,
+    "DDD": 0.050069793414,
+    "EEE": 0.163125
+  },
+  "trade_count": 4
+}

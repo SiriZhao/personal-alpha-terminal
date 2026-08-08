@@ -1,0 +1,122 @@
+{
+  "spec_version": "historical-validation-v1",
+  "created_date": "2026-07-31",
+  "change_policy": "immutable; any change requires a new spec version and invalidates comparability",
+  "periods": [
+    {
+      "id": "gfc_2008",
+      "label": "2008 Financial Crisis",
+      "start_date": "2008-01-01",
+      "end_date": "2008-12-31",
+      "boundary_policy": "full calendar year; no outcome-based boundary tuning"
+    },
+    {
+      "id": "covid_2020",
+      "label": "2020 Pandemic",
+      "start_date": "2020-01-01",
+      "end_date": "2020-12-31",
+      "boundary_policy": "full calendar year; no outcome-based boundary tuning"
+    },
+    {
+      "id": "tightening_2022",
+      "label": "2022 Tightening Cycle",
+      "start_date": "2022-01-01",
+      "end_date": "2022-12-31",
+      "boundary_policy": "full calendar year; no outcome-based boundary tuning"
+    },
+    {
+      "id": "ai_2023_2025",
+      "label": "2023-2025 AI Market",
+      "start_date": "2023-01-01",
+      "end_date": "2025-12-31",
+      "boundary_policy": "full calendar years; no outcome-based boundary tuning"
+    }
+  ],
+  "common_data_policy": {
+    "markets": ["A", "HK", "US"],
+    "required_timestamp_order": "event_time <= available_time <= decision_time; ingested_time is lineage only",
+    "universe": "point-in-time, delisting-inclusive snapshot",
+    "prices": "point-in-time total-return series for research returns; unadjusted OHLCV retained for event rules",
+    "corporate_actions": "announcement_date, available_date and effective_date required",
+    "tradability": "exchange calendar plus suspension and executable-price evidence required",
+    "currency": "portfolio returns converted with point-in-time FX into the frozen portfolio base currency",
+    "source_gate": "production data quality certification must be passed before analysis"
+  },
+  "modules": {
+    "event_study": {
+      "horizons_trading_days": [1, 3, 5, 10, 20],
+      "cooldown_trading_sessions": 5,
+      "minimum_sample_size": 30,
+      "confidence_level": 0.95,
+      "bootstrap_resamples": 10000,
+      "probability_interval": "Wilson",
+      "mean_interval": "moving-block bootstrap percentile",
+      "right_censoring": "exclude incomplete forward horizons",
+      "event_definitions_and_targets": "must be supplied by the frozen manifest before results are inspected"
+    },
+    "conditional_probability": {
+      "horizons_trading_days": [1, 5, 20],
+      "minimum_sample_size": 30,
+      "confidence_level": 0.95,
+      "prior_alpha": 1.0,
+      "prior_beta": 1.0,
+      "dependence_policy": "effective cooldown is at least the maximum horizon",
+      "pairs_and_directions": "must be supplied by the frozen manifest before results are inspected"
+    },
+    "market_graph": {
+      "minimum_observations": 60,
+      "maximum_nodes": 30,
+      "correlation_threshold": 0.5,
+      "maximum_lag_days": 5,
+      "significance_alpha": 0.05,
+      "multiple_testing": ["FDR", "Bonferroni"],
+      "causality_policy": "correlation and lead-lag edges are statistical associations, not causal claims",
+      "node_selection": "must be supplied by the frozen manifest before results are inspected"
+    },
+    "alpha_discovery": {
+      "horizon_days": 21,
+      "rebalance_interval": 21,
+      "minimum_cross_section": 20,
+      "minimum_dates_per_split": 12,
+      "train_fraction": 0.6,
+      "validation_fraction": 0.2,
+      "test_fraction": 0.2,
+      "purge_gap_days": 21,
+      "fdr_alpha": 0.1,
+      "minimum_absolute_directional_ic": 0.02,
+      "maximum_factor_correlation": 0.85,
+      "maximum_combination_size": 3,
+      "selection_quantile": 0.2,
+      "selection_policy": "train selects, validation ranks, test remains untouched until final evaluation"
+    },
+    "portfolio_risk": {
+      "minimum_observations": 60,
+      "annualization_sessions": 252,
+      "risk_free_rate": 0.0,
+      "return_method": "daily time-weighted return with point-in-time FX",
+      "drawdown_method": "peak-to-trough on the compounded equity curve",
+      "holdings_and_cash_flows": "must be supplied by a frozen, effective-dated portfolio ledger"
+    }
+  },
+  "required_frozen_artifacts": [
+    "security_master",
+    "universe_snapshots",
+    "trading_calendars",
+    "unadjusted_ohlcv",
+    "point_in_time_total_returns",
+    "corporate_actions",
+    "fundamental_vintages",
+    "macro_vintages",
+    "fx_rates",
+    "tradability_status",
+    "portfolio_ledger",
+    "analysis_cohorts"
+  ],
+  "reporting_policy": {
+    "show_all_periods": true,
+    "show_failed_and_blocked_results": true,
+    "prohibit_success_only_selection": true,
+    "unavailable_metrics": "N/A; never zero-filled or imputed",
+    "confidence_semantics": "evidence quality, not probability of future profit"
+  }
+}

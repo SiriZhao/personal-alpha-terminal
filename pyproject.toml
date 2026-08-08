@@ -1,0 +1,99 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "personal-alpha-terminal"
+version = "1.1.0"
+description = "A modular, explainable personal quantitative investment research platform."
+readme = "README.md"
+requires-python = ">=3.12,<3.15"
+license = { text = "Proprietary" }
+authors = [{ name = "Personal Alpha Terminal Contributors" }]
+dependencies = [
+    "alembic>=1.14,<2",
+    "psycopg[binary]>=3.2,<4",
+    "pydantic-settings>=2.7,<3",
+    "SQLAlchemy>=2.0,<2.1",
+    "tzdata>=2025.2",
+]
+
+[project.optional-dependencies]
+ai = [
+    "openai>=1.68,<3",
+]
+market-data = [
+    "akshare>=1.18.40,<2",
+    "exchange-calendars>=4.13.2,<5",
+    "pandas>=2.2,<4",
+    "yfinance>=1.5.1,<2",
+]
+dashboard = [
+    "networkx>=3.4,<4",
+    "pandas>=2.2,<4",
+    "plotly>=5.24,<7",
+    "scipy>=1.15,<2",
+    "statsmodels>=0.14,<1",
+    "starlette>=0.51,<1",
+    "streamlit>=1.57,<2",
+]
+console = [
+    "rich==15.0.0",
+    "textual==8.2.8",
+    "typer==0.27.0",
+]
+research = [
+    "networkx>=3.4,<4",
+    "numpy>=2.0,<3",
+    "pandas>=2.2,<4",
+    "polars>=1.20,<2",
+    "scikit-learn>=1.6,<2",
+    "scipy>=1.15,<2",
+    "statsmodels>=0.14,<1",
+]
+quant-backends = [
+    "backtrader==1.9.78.123",
+    "vectorbt>=1.1,<2",
+]
+qlib-research = [
+    "pyqlib>=0.9.7,<1; python_version < '3.13'",
+]
+dev = [
+    "mypy>=1.14,<2",
+    "pyinstaller>=6.12,<7",
+    "pytest>=8.3,<10",
+    "pytest-cov>=6,<8",
+    "ruff>=0.9,<1",
+]
+
+[project.scripts]
+pat = "personal_alpha_terminal.cli:main"
+pat-desktop = "personal_alpha_terminal.desktop.launcher:main"
+pat-console = "personal_alpha_terminal.console:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers"
+testpaths = ["tests"]
+markers = [
+    "performance: deterministic local throughput smoke tests with conservative budgets",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy"]
+packages = ["personal_alpha_terminal"]
+
+[[tool.mypy.overrides]]
+module = ["akshare", "backtrader", "backtrader.*", "networkx", "networkx.*", "openai", "openai.*", "pandas", "pandas.*", "plotly", "plotly.*", "qlib", "qlib.*", "scipy", "scipy.*", "statsmodels", "statsmodels.*", "streamlit", "textual", "textual.*", "typer", "vectorbt", "vectorbt.*", "yfinance"]
+ignore_missing_imports = true

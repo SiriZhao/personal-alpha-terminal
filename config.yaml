@@ -1,0 +1,39 @@
+# Personal Alpha Terminal - local, terminal-first configuration
+market: US
+benchmark: SPY
+nasdaq_benchmark: QQQ
+vix_symbol: ^VIX
+history_start: 2015-01-01
+cache_dir: data/cache
+report_dir: reports
+primary_provider: yahoo
+fallback_provider: stooq
+provider_priority:
+  - yahoo
+  - stooq
+timeout_seconds: 20
+max_retries: 2
+retry_backoff_seconds: 0.5
+data_safe_threshold: 80
+data_watch_threshold: 65
+maximum_provider_difference: 0.02
+nasdaq_23h_enabled: false
+night_execution_enabled: false
+default_execution_session: REGULAR
+symbols:
+  - AAPL
+  - MSFT
+  - NVDA
+  - GOOGL
+  - AMZN
+  - VOO
+  - QQQM
+required_symbols:
+  - SPY
+  - QQQ
+  - ^VIX
+# Real-account weights for analysis only. No broker order is created.
+holdings:
+  VOO: 0.50
+  QQQM: 0.25
+  AAPL: 0.10
