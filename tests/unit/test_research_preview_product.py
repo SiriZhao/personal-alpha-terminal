@@ -1,4 +1,3 @@
-import json
 import sqlite3
 import zipfile
 from pathlib import Path
@@ -16,11 +15,6 @@ from personal_alpha_terminal.core.local_backup import (
     inspect_backup,
     sanitize_env_text,
     stage_restore,
-)
-from personal_alpha_terminal.core.product import (
-    UserPreferences,
-    load_preferences,
-    save_preferences,
 )
 
 
@@ -46,31 +40,6 @@ def _database(path: Path, value: str = "original") -> None:
 def test_version_is_stable_terminal_baseline_110() -> None:
     assert __version__ == "1.1.0"
     assert __build_version__ == "1.1.0"
-
-
-def test_legacy_onboarding_preferences_remain_readable_but_do_not_define_access(
-    tmp_path: Path,
-) -> None:
-    path = tmp_path / "user-preferences.json"
-    path.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "onboarding_completed": False,
-                "accepted_notice_version": None,
-                "selected_markets": ["US"],
-                "ai_provider": "disabled",
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    preferences = load_preferences(tmp_path)
-
-    assert not preferences.onboarding_completed
-    assert preferences.selected_markets == ("US",)
-    assert preferences.ai_provider == "disabled"
-    assert not preferences.welcome_card_dismissed
 
 
 def test_disabled_ai_does_not_silently_call_mock() -> None:
@@ -166,10 +135,3 @@ def test_diagnostic_bundle_redacts_tokens_and_excludes_database(tmp_path: Path) 
 def test_redaction_helpers_do_not_leak_secret_values() -> None:
     assert "secret" not in sanitize_env_text("TOKEN=secret\n")
     assert "abc" not in redact_text("Authorization=abc")
-
-
-def test_preferences_file_contains_no_secret_field(tmp_path: Path) -> None:
-    path = save_preferences(UserPreferences(), tmp_path)
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    assert not any("key" in key.lower() or "secret" in key.lower() for key in payload)
-    assert payload["allow_portfolio_evidence_to_ai"] is False

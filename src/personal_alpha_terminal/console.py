@@ -2,26 +2,23 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import sys
+import traceback
 from pathlib import Path
 
 from rich.console import Console
 from rich.panel import Panel
 
-from personal_alpha_terminal.application import ApplicationService
 from personal_alpha_terminal.core.logging import configure_logging, log_application_start_once
 from personal_alpha_terminal.core.retention import prune_generated_artifacts
-from personal_alpha_terminal.data.database import get_session_factory
-from personal_alpha_terminal.desktop.runtime import (
+from personal_alpha_terminal.core.runtime_bootstrap import (
     application_data_dir,
     bootstrap_user_environment,
 )
 from personal_alpha_terminal.terminal.config import user_config_text
-from personal_alpha_terminal.tui.app import PersonalAlphaTerminalApp
-from personal_alpha_terminal.tui.instance import ConsoleInstanceLock
+from personal_alpha_terminal.terminal.instance import ConsoleInstanceLock
 
 console = Console()
 logger = logging.getLogger(__name__)
@@ -38,13 +35,6 @@ def _ensure_terminal_config(root: Path) -> Path:
     return path
 
 
-async def _run_tui_smoke(app: PersonalAlphaTerminalApp) -> None:
-    async with app.run_test(size=(120, 30)) as pilot:
-        await pilot.pause()
-        if app.screen is not app.get_screen("dashboard"):
-            raise RuntimeError("Today dashboard did not become the initial TUI screen")
-
-
 def _dispatch_command(arguments: list[str], config_path: Path) -> int:
     from personal_alpha_terminal.terminal.cli import main as terminal_main
 
@@ -53,6 +43,8 @@ def _dispatch_command(arguments: list[str], config_path: Path) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments == ["version"] or any(item in {"-h", "--help"} for item in arguments):
+        return _dispatch_command(arguments, Path("config.yaml"))
     try:
         settings = bootstrap_user_environment()
         root = application_data_dir()
@@ -65,24 +57,25 @@ def main(argv: list[str] | None = None) -> int:
                 logger.info("Pruned %d expired generated artifacts", len(removed))
         except OSError:
             logger.exception("Generated-artifact retention failed")
-        if arguments:
-            return _dispatch_command(arguments, config_path)
-        smoke_test = os.environ.get("PAT_TUI_SMOKE_TEST") == "1"
-        if smoke_test:
-            service = ApplicationService(get_session_factory(), settings)
-            app = PersonalAlphaTerminalApp(service, auto_initialize=False)
-            asyncio.run(_run_tui_smoke(app))
-            console.print("TUI_SMOKE_OK")
-            return 0
         with ConsoleInstanceLock():
-            return _dispatch_command(["daily"], config_path)
+            return _dispatch_command(arguments or ["daily"], config_path)
     except Exception as error:
+        try:
+            root = application_data_dir()
+            root.mkdir(parents=True, exist_ok=True)
+            with (root / "boot.log").open("a", encoding="utf-8") as stream:
+                stream.write("bootstrap:fatal\n")
+                stream.write(traceback.format_exc())
+                stream.write("\n")
+        except OSError:
+            pass
         logger.exception("Terminal startup failed")
         console.print(
             Panel(
-                "程序无法安全启动。运行 QuantTerminal.exe doctor 并查看用户日志目录。\n"
+                "程序无法安全启动。请运行 PersonalAlphaTerminal.exe doctor，"
+                "并查看用户日志目录。\n"
                 f"诊断代码：{type(error).__name__}",
-                title="Personal Alpha Terminal · STARTUP BLOCKED",
+                title="Personal Alpha Terminal - STARTUP BLOCKED",
                 border_style="red",
             )
         )

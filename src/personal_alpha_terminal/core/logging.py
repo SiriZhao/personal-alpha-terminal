@@ -37,8 +37,7 @@ class RedactingFormatter(logging.Formatter):
 class DataLogFilter(logging.Filter):
     _PREFIXES = (
         "personal_alpha_terminal.data",
-        "personal_alpha_terminal.terminal.market_data",
-        "personal_alpha_terminal.terminal.providers",
+        "personal_alpha_terminal.data.market_data",
         "yfinance",
     )
 

@@ -1,59 +1,77 @@
 # Personal Alpha Terminal
 
-Personal Alpha Terminal 是面向个人账户的中低频美股量化研究与人工决策终端。量化代码负责数据检查、模型、组合和风险门禁；AI 仅可解释已生成结果。程序不连接 Charles Schwab 或其他券商，也不会自动下单。
+Terminal-first personal quantitative decision system for medium/low-frequency U.S. equity portfolio management.
 
-历史结果不保证未来表现，不构成投资建议。缺少可靠数据、PIT 公司行动、生产批准模型或风险结果时，系统会输出 `NO ACTION / BLOCKED`。
+The deterministic Quant Pipeline performs data checks, point-in-time validation, factor and alpha calculation, portfolio construction, risk control, and execution planning. Charles Schwab is supported only as a CSV/manual-execution workflow. There is no broker API and no automatic trading. LLM support is optional and explanation-only.
 
-## 每日使用
+## What it does
 
-1. 双击发布目录中的 `QuantTerminal.exe`，默认直接进入 Today 驾驶舱。
-2. `HEALTHY` 表示该层正常；`DEGRADED` 表示可研究但能力受限；`UNSAFE/BLOCKED` 表示不得生成可执行操作。
-3. 组合为空时，使用 `portfolio-init` 创建真实组合账本，再用 `portfolio-import` 导入通用或 Charles Schwab 持仓 CSV。
-4. `ACCEPT` 仅把候选记为 `Pending Manual Execution`；`REJECT` 和 `WATCH` 只记录人工决定。
-5. 用户在 Charles Schwab 自行成交后，使用 `mark-executed` 录入实际价格、数量和可选费用。项目没有券商 API。
-6. 出现 `DATA UNSAFE` 时先运行 `doctor`，检查 Provider、缓存新鲜度、交易日历和数据库；不要依据旧行情操作。
-7. AI API 为可选项。没有 API Key 时量化核心照常运行；密钥不得写入仓库或日志。
+- Runs one audited chain: Data → PIT → Features → Factors → Alpha → Probability → Portfolio → Risk → Decision → Execution Plan.
+- Fails closed when data, PIT evidence, a real portfolio, model approval, or risk checks are insufficient.
+- Imports a Charles Schwab holdings CSV without modifying the source file.
+- Records ACCEPT/REJECT/WATCH and user-entered fills; ACCEPT never changes holdings.
+- Keeps immutable daily run snapshots so a result can be reproduced and reviewed.
+- Provides PIT-gated historical backtests. Fixture tests never count as real-data alpha evidence.
 
-维护命令可通过发布版 EXE 运行：
+## Quick start
+
+Double-click `PersonalAlphaTerminal.exe`. With no real portfolio, the terminal reports `PORTFOLIO NOT INITIALIZED` and does not create buy orders.
 
 ```text
-QuantTerminal.exe doctor
-QuantTerminal.exe portfolio-init --name "My Portfolio" --cash 100000
-QuantTerminal.exe portfolio-import positions.csv --portfolio-id 1
-QuantTerminal.exe portfolio-list
-QuantTerminal.exe accept <recommendation_id>
-QuantTerminal.exe reject <recommendation_id>
-QuantTerminal.exe watch <recommendation_id>
-QuantTerminal.exe mark-executed <recommendation_id> --price 100 --quantity 10 --fees 0
+PersonalAlphaTerminal.exe portfolio-init --name "My Portfolio" --cash 100000
+PersonalAlphaTerminal.exe portfolio-import schwab.csv --portfolio-id 1 --as-of 2026-08-08
+PersonalAlphaTerminal.exe portfolio-import schwab.csv --portfolio-id 1 --as-of 2026-08-08 --commit
+PersonalAlphaTerminal.exe daily
 ```
 
-## 数据、日志与备份
+The first import command is preview-only. `--commit` is required to update the real ledger.
 
-用户数据与程序目录分离，默认保存在：
+## Daily workflow
+
+1. Run `daily` (the double-click default).
+2. Read DATA HEALTH and every PIPELINE gate.
+3. Treat candidates and signals as diagnostic evidence, not trades.
+4. Only `FINAL VALIDATED DECISIONS` are formal outputs.
+5. Use `accept`, `reject`, or `watch` to record your review.
+6. Place any accepted order manually at Charles Schwab.
+7. After the broker fill, use `mark-executed` to record actual price, quantity, and fees.
+
+```text
+PersonalAlphaTerminal.exe accept <recommendation_id>
+PersonalAlphaTerminal.exe mark-executed <recommendation_id> --price 100 --quantity 10 --fees 0
+```
+
+## Commands
+
+`daily`, `refresh`, `data`, `portfolio`, `portfolio-init`, `portfolio-import`, `factors`, `probability`, `risk`, `decisions`, `backtest`, `research`, `doctor`, `diagnostics`, `settings`, `version`, `help`.
+
+## Data, logs, and backup
+
+User data is stored separately from the program:
 
 ```text
 %LOCALAPPDATA%\PersonalAlphaTerminal
 ```
 
-其中 `data/` 包含数据库，`config.yaml` 与 `config.env` 包含本机配置，`cache/` 是行情缓存，`logs/` 保存轮转日志，`backups/` 保存本地备份。备份时应复制 `data/`、配置文件与 `backups/`；不要把 API Key 放入普通共享压缩包。
+Back up `data/`, `config.yaml`, `config.env`, and `backups/`. Do not share API keys. Logs are rotated (`app.log`, `data.log`, `error.log`); generated reports and diagnostics have bounded retention. Databases, portfolio records, configurations, and immutable data snapshots are never removed by retention cleanup.
 
-日志分为 `app.log`、`data.log` 和 `error.log`，每个文件限制 5 MB 并保留 3 个轮转备份。日报保留 180 天，诊断包和更新临时文件保留 30 天。市场快照、组合、数据库和配置不参与自动清理。
+## Documentation
 
-## 数据边界
+- [Terminal guide](docs/TERMINAL_GUIDE.md)
+- [Architecture](docs/ARCHITECTURE.md)
+- [LLM configuration](docs/LLM_CONFIGURATION.md)
+- [Troubleshooting](docs/TROUBLESHOOTING.md)
 
-- Yahoo Finance 是免费主行情源；Stooq 是美股股票/ETF 历史价格备用源。免费源不能替代专业 PIT 股票池、公司行动与退市数据。
-- 双源不可用、数据过期、异常、未来时间戳、Provider 冲突或公司行动未认证时，门禁会降级或阻止 Action。
-- Nasdaq 23H 采用集中 feature flag；Night 默认仅为信息层且执行关闭。历史数据不会套用未来市场结构。
-- 只有 `PRODUCTION_APPROVED` Alpha 才可进入 Daily Decision；技术指标、相关性或 AI 说明不能直接生成仓位。
+## Source verification
 
-## 源码验证
-
-源码开发要求 Python 3.12–3.14。正式用户无需安装 Python；发布版为 Windows onedir 构建。
+Python 3.12–3.14 is supported for development. End users of the Windows release do not install Python or Node.
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e ".[console,market-data,research,dev]"
-.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+.\.venv\Scripts\python.exe -m pytest
 ```
 
-架构与安全边界见 `docs/architecture/` 和 `docs/user-guide/`。最终产品化结果见 `docs/development/FINAL_PRODUCTIZATION_REPORT.md`。
+## Risk disclaimer
+
+This software is research and decision support, not investment advice. Historical results do not guarantee future performance. Free market-data sources cannot certify complete historical constituent, delisting, corporate-action, or fundamental-restatement history; the affected actions and backtests remain blocked. Prefer `NO ACTIONABLE DECISION` over an incomplete evidence chain.

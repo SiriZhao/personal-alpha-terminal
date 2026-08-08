@@ -3,7 +3,7 @@ from datetime import date
 from math import sqrt
 from statistics import fmean, stdev
 
-from personal_alpha_terminal.dashboard.schemas import (
+from personal_alpha_terminal.application.view_models import (
     Exposure,
     PortfolioOption,
     PortfolioRiskView,

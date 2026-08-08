@@ -6,8 +6,8 @@ from pathlib import Path
 import pytest
 
 from personal_alpha_terminal.core import logging as app_logging
-from personal_alpha_terminal.tui import instance as instance_module
-from personal_alpha_terminal.tui.instance import ConsoleInstanceLock
+from personal_alpha_terminal.terminal import instance as instance_module
+from personal_alpha_terminal.terminal.instance import ConsoleInstanceLock
 
 
 def test_console_instance_lock_rejects_another_live_process(

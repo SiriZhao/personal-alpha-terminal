@@ -2,7 +2,7 @@ from datetime import date
 
 import pytest
 
-from personal_alpha_terminal.dashboard.schemas import PortfolioOption
+from personal_alpha_terminal.application.view_models import PortfolioOption
 from personal_alpha_terminal.portfolio.risk import calculate_portfolio_risk
 
 

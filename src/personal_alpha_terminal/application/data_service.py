@@ -18,10 +18,10 @@ from personal_alpha_terminal.application.universe import (
     ResearchAsset,
 )
 from personal_alpha_terminal.core.config import Settings
+from personal_alpha_terminal.core.runtime_bootstrap import application_data_dir
 from personal_alpha_terminal.data.market_data.factory import build_market_data_engine
 from personal_alpha_terminal.data.market_data.schemas import DailyUpdateReport
 from personal_alpha_terminal.data.market_data_quality.schemas import MarketSegment
-from personal_alpha_terminal.desktop.runtime import application_data_dir
 from personal_alpha_terminal.models import (
     DataSnapshotManifest,
     ExchangeSession,
@@ -56,7 +56,7 @@ class SyncOutcome:
 
 
 class DataService:
-    """Research-data orchestration without UI or Streamlit dependencies."""
+    """Research-data orchestration without presentation-layer dependencies."""
 
     def __init__(
         self,

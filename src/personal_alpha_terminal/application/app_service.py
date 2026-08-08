@@ -10,7 +10,6 @@ from sqlalchemy.orm import Session, sessionmaker
 from personal_alpha_terminal.application.backtest_service import BacktestService
 from personal_alpha_terminal.application.daily_orchestrator import DailyQuantOrchestrator
 from personal_alpha_terminal.application.daily_result import DailyQuantResult
-from personal_alpha_terminal.application.dashboard_service import DashboardView
 from personal_alpha_terminal.application.data_service import (
     DataService,
     InitializationProgress,
@@ -33,6 +32,7 @@ from personal_alpha_terminal.application.status import (
     StatusDetail,
     SystemReadiness,
 )
+from personal_alpha_terminal.application.today_summary import DashboardView
 from personal_alpha_terminal.automation.runner import PipelineExecution
 from personal_alpha_terminal.core.config import Settings, get_settings
 from personal_alpha_terminal.decision_engine.repository import DecisionRepository
@@ -44,6 +44,7 @@ from personal_alpha_terminal.models import (
     QuantDecisionRun,
 )
 from personal_alpha_terminal.portfolio.position_import import (
+    ParsedPositionFile,
     PositionImportResult,
     PositionImportService,
     parse_position_csv,
@@ -268,6 +269,11 @@ class ApplicationService:
                 as_of_date=as_of_date,
                 parsed=parsed,
             )
+
+    def preview_portfolio_csv(self, *, source: Path) -> ParsedPositionFile:
+        """Validate and preview a CSV without mutating the user's ledger or source file."""
+
+        return parse_position_csv(source.read_bytes())
 
     def list_portfolios(self) -> tuple[dict[str, object], ...]:
         with self._factory() as session:

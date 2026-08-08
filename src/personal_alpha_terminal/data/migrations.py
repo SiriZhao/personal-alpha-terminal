@@ -1,9 +1,11 @@
 import sys
 from pathlib import Path
 
+import sqlalchemy as sa
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import text
+from sqlalchemy.sql.type_api import TypeEngine
 
 from personal_alpha_terminal.core.config import Settings, get_settings
 from personal_alpha_terminal.data.database import build_engine
@@ -21,9 +23,18 @@ def migration_root() -> Path:
 
 
 def upgrade_database(settings: Settings | None = None) -> None:
+    # PyInstaller's SQLAlchemy hook can omit this public re-export even though
+    # historical Alembic revisions legitimately reference ``sa.TypeEngine`` in
+    # annotations.  Restore the public alias without mutating those immutable
+    # revisions.
+    if getattr(sa, "TypeEngine", None) is None:
+        setattr(sa, "TypeEngine", TypeEngine)  # noqa: B010 - compatibility export
     resolved = settings or get_settings()
     root = migration_root()
     configuration = Config(str(root / "alembic.ini"))
+    # Product bootstrap owns logging.  Alembic must not replace the terminal's
+    # bounded/redacted handlers or print migration internals to end users.
+    configuration.attributes["configure_logger"] = False
     configuration.set_main_option("script_location", str(root / "migrations"))
     configuration.set_main_option(
         "sqlalchemy.url",

@@ -1,4 +1,4 @@
-from personal_alpha_terminal.cli import main
+from personal_alpha_terminal.console import main
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

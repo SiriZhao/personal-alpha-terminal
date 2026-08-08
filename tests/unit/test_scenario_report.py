@@ -1,11 +1,6 @@
 from datetime import date
 
 from personal_alpha_terminal.analysis.market_graph.schemas import GraphInstrument
-from personal_alpha_terminal.dashboard.charts import (
-    asset_sensitivity_heatmap,
-    scenario_comparison_chart,
-    scenario_risk_map_chart,
-)
 from personal_alpha_terminal.scenario_simulator.catalog import RISK_FACTORS
 from personal_alpha_terminal.scenario_simulator.engine import ScenarioEngine
 from personal_alpha_terminal.scenario_simulator.report import (
@@ -103,6 +98,3 @@ def test_visualizations_include_risk_map_comparison_and_sensitivity() -> None:
     assert payload["risk_map"][0]["asset"] == "QQQM"
     assert payload["asset_sensitivity"][0]["factor"] == "equity_nasdaq"
     assert comparison["scenarios"][0]["scenario"] == "NASDAQ -20%"
-    assert len(scenario_risk_map_chart(result).data) == 1
-    assert len(asset_sensitivity_heatmap(result).data) == 1
-    assert len(scenario_comparison_chart(comparison_model).data) == 1

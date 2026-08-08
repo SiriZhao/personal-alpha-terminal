@@ -1,5 +1,7 @@
 .env
 .venv/
+node_modules/
+frontend/
 __pycache__/
 *.py[cod]
 .pytest_cache/
@@ -29,6 +31,11 @@ updates/
 *.dmp
 *.dump
 *.zip.tmp
+*.old
+*.bak
+*.tmp.csv
+*.download
+.packaging-build/
 .audit-lock
 .build-lock
 .streamlit/secrets.toml

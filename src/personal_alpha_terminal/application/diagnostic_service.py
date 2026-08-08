@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from personal_alpha_terminal import __build_version__
 from personal_alpha_terminal.core.config import Settings
-from personal_alpha_terminal.desktop.runtime import application_data_dir
+from personal_alpha_terminal.core.runtime_bootstrap import application_data_dir
 
 SECRET_PATTERN = re.compile(r"(?i)(api[_-]?key|token|secret)(\s*[=:]\s*)(\S+)")
 

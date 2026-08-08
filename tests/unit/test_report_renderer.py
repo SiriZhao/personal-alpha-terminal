@@ -8,7 +8,7 @@ from personal_alpha_terminal.analysis.market_regime.schemas import (
     MarketRegimeResult,
     RegimeCalibrationReport,
 )
-from personal_alpha_terminal.dashboard.schemas import (
+from personal_alpha_terminal.application.view_models import (
     InstrumentOption,
     MarketIndexSnapshot,
     PricePoint,

@@ -3,39 +3,49 @@ from pathlib import Path
 from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_submodules
 
 project_root = Path.cwd()
-textual_datas, textual_binaries, textual_hidden = collect_all("textual")
 yfinance_datas, yfinance_binaries, yfinance_hidden = collect_all("yfinance")
 
 analysis = Analysis(
     [str(project_root / "src" / "personal_alpha_terminal" / "console.py")],
     pathex=[str(project_root / "src")],
-    binaries=[*textual_binaries, *yfinance_binaries],
+    binaries=yfinance_binaries,
     datas=[
-        *textual_datas,
         *yfinance_datas,
         *collect_data_files("exchange_calendars"),
         (str(project_root / "migrations"), "migrations"),
         (str(project_root / "alembic.ini"), "."),
     ],
     hiddenimports=[
-        *textual_hidden,
         *yfinance_hidden,
         *collect_submodules("personal_alpha_terminal.models"),
         "sqlalchemy.dialects.sqlite",
         "sqlalchemy.dialects.sqlite.pysqlite",
         "exchange_calendars.exchange_calendar_xnys",
+        "sklearn.covariance",
     ],
     hookspath=[],
     runtime_hooks=[],
     excludes=[
         "akshare",
+        "altair",
         "backtrader",
+        "IPython",
+        "jedi",
+        "llvmlite",
         "matplotlib",
+        "mypy",
+        "numba",
         "notebook",
         "plotly",
+        "polars",
+        "polars_st",
+        "_polars_runtime_32",
+        "pyarrow",
+        "psygnal",
+        "coverage",
         "qlib",
-        "sklearn",
         "streamlit",
+        "textual",
         "vectorbt",
     ],
     noarchive=False,
@@ -46,7 +56,7 @@ exe = EXE(
     analysis.scripts,
     [],
     exclude_binaries=True,
-    name="QuantTerminal",
+    name="PersonalAlphaTerminal",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -60,5 +70,5 @@ collect = COLLECT(
     analysis.datas,
     strip=False,
     upx=False,
-    name="QuantTerminal",
+    name="PersonalAlphaTerminal",
 )

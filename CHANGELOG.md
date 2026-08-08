@@ -1,20 +1,26 @@
 # Changelog
 
-## 1.1.0 — Stable Terminal Baseline (2026-08-08)
+## 1.1.0 — Stable Terminal Baseline (2026-08-09)
 
 ### Fixed
 
 - 修复 yfinance 1.5.x 缓存目录 API 兼容，避免只读用户目录导致 Provider 静默失败。
 - 修复非交互 DAILY 命令在退出提示处触发 `EOFError`。
 - 首次运行统一创建用户本地数据库、配置、缓存、报告和轮转日志目录。
+- 修复冻结环境首次迁移缺少 SQLAlchemy `TypeEngine` 导出的问题；历史 Alembic revision 未被改写。
 
 ### Hardened
 
-- 默认入口为 Textual TUI Today 页面，不打开浏览器；Doctor、真实组合和人工成交命令保留。
+- 默认入口为 Rich 终端日报，不使用 Textual、浏览器或 localhost；Doctor、真实组合和人工成交命令保留。
 - Yahoo 主源失败可回退 Stooq；所有可靠来源失败且缓存不安全时 fail closed。
 - 公司行动未认证、模型未生产批准或数据质量不足时只输出 `NO ACTION`。
 - `ACCEPT` 仅进入人工待执行状态，项目不包含券商下单接口。
 - 日志按 5 MB × 3 轮转；日报、诊断和更新临时文件应用有界保留策略。
+
+### Removed
+
+- 删除 Streamlit Dashboard、桌面浏览器启动器、旧 Textual 多页 TUI、前端专用桥接代码和对应测试。
+- 删除旧发布脚本、浏览器截图脚本和已被正式终端包替代的发布产物。
 
 ### Known limitations
 
