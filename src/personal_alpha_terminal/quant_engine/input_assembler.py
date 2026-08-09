@@ -8,6 +8,7 @@ import pandas as pd
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from personal_alpha_terminal.core.effective_config import EffectiveRuntimeConfig
 from personal_alpha_terminal.data.us_market.repository import USPointInTimeRepository
 from personal_alpha_terminal.models import Portfolio, PortfolioPosition, Price, SecurityMaster
 from personal_alpha_terminal.quant_engine.alpha import AlphaSignal
@@ -18,6 +19,10 @@ from personal_alpha_terminal.quant_engine.risk.model import AssetRiskMetadata
 from personal_alpha_terminal.quant_engine.strategies.us_adaptive_alpha_core import (
     StrategyFactorSnapshot,
     USAdaptiveAlphaCoreV1,
+)
+from personal_alpha_terminal.quant_engine.validation_artifacts import (
+    ProbabilityCalibrationIdentity,
+    ValidationArtifactRegistry,
 )
 from personal_alpha_terminal.research.data_gate import (
     ResearchDataAuthorization,
@@ -81,10 +86,20 @@ class ProductionDailyQuantInputAssembler:
     or promotes a model. Missing certified evidence is a hard failure.
     """
 
-    def __init__(self, session: Session, *, strategy: USAdaptiveAlphaCoreV1 | None = None) -> None:
+    def __init__(
+        self,
+        session: Session,
+        *,
+        strategy: USAdaptiveAlphaCoreV1 | None = None,
+        effective_config: EffectiveRuntimeConfig | None = None,
+    ) -> None:
         self.session = session
         self.repository = USPointInTimeRepository(session)
-        self.strategy = strategy or USAdaptiveAlphaCoreV1()
+        self.effective_config = effective_config or EffectiveRuntimeConfig()
+        self.strategy = strategy or USAdaptiveAlphaCoreV1(self.effective_config.strategy)
+        self.validation_registry = ValidationArtifactRegistry(
+            self.effective_config.validation_artifact_dir
+        )
 
     def assemble(
         self,
@@ -163,6 +178,13 @@ class ProductionDailyQuantInputAssembler:
             parameter_fingerprint=self.strategy.config.parameter_fingerprint,
             decision_time=decision_time,
         )
+        calibration = self.validation_registry.matching_probability_calibration(
+            ProbabilityCalibrationIdentity(
+                alpha_model_version=f"{self.strategy.model_id}:{self.strategy.version}",
+                alpha_data_version=universe.data_version,
+                strategy_parameter_hash=self.strategy.config.parameter_fingerprint,
+            )
+        )
         fundamentals = self.repository.fundamental_snapshot(
             universe.securities, as_of=decision_time
         )
@@ -172,6 +194,7 @@ class ProductionDailyQuantInputAssembler:
             decision_time=decision_time,
             data_version=universe.data_version,
             approval=approval,
+            calibration=calibration,
             fundamentals=fundamentals,
         )
         levels = price_frame.pivot(

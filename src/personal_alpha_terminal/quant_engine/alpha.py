@@ -44,6 +44,8 @@ class AlphaSignal:
     validation_status: AlphaValidationStatus
     model_version: str
     data_version: str
+    evidence_coverage: float = 1.0
+    calibration_id: str | None = None
 
     def __post_init__(self) -> None:
         if self.as_of.tzinfo is None or self.valid_until.tzinfo is None:
@@ -57,11 +59,14 @@ class AlphaSignal:
             self.confidence,
             self.statistical_strength,
             self.economic_strength,
+            self.evidence_coverage,
         )
         if any(not isfinite(value) for value in numeric):
             raise ValueError("alpha numeric values must be finite")
         if not 0 <= self.confidence <= 1:
             raise ValueError("alpha confidence must be in [0, 1]")
+        if not 0 <= self.evidence_coverage <= 1:
+            raise ValueError("alpha evidence coverage must be in [0, 1]")
         if self.horizon < 1 or self.sample_size < 0:
             raise ValueError("alpha horizon/sample size is invalid")
         if not self.symbol or not self.model_version or not self.data_version:

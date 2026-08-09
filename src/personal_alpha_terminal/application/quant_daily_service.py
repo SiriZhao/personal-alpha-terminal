@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from decimal import Decimal
 from hashlib import sha256
@@ -10,6 +10,7 @@ from math import floor
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from personal_alpha_terminal.core.effective_config import EffectiveRuntimeConfig
 from personal_alpha_terminal.data.us_market.session import CertifiedUSSessionService
 from personal_alpha_terminal.models import (
     Price,
@@ -17,13 +18,17 @@ from personal_alpha_terminal.models import (
     QuantDecisionRun,
     SecurityMaster,
 )
+from personal_alpha_terminal.quant_engine.costs import TransactionCostModel
 from personal_alpha_terminal.quant_engine.input_assembler import (
     AssembledDailyInput,
     AssembledResearchInput,
     PortfolioInputPosition,
     ProductionDailyQuantInputAssembler,
 )
-from personal_alpha_terminal.quant_engine.portfolio.construction import PortfolioTarget
+from personal_alpha_terminal.quant_engine.portfolio.construction import (
+    PortfolioConstructionEngine,
+    PortfolioTarget,
+)
 from personal_alpha_terminal.quant_engine.portfolio.trades import TradeAction, TradeProposal
 from personal_alpha_terminal.quant_engine.production_pipeline import (
     DailyQuantOutput,
@@ -31,9 +36,13 @@ from personal_alpha_terminal.quant_engine.production_pipeline import (
     PipelineStage,
     ProductionPipelineStatus,
 )
-from personal_alpha_terminal.quant_engine.risk.model import RiskModelEstimate
+from personal_alpha_terminal.quant_engine.risk.model import PortfolioRiskModel, RiskModelEstimate
 from personal_alpha_terminal.quant_engine.strategies.us_adaptive_alpha_core import (
     StrategyFactorSnapshot,
+)
+from personal_alpha_terminal.quant_engine.validation_artifacts import (
+    PortfolioValidationIdentity,
+    ValidationArtifactRegistry,
 )
 
 
@@ -98,16 +107,42 @@ class TodayResult:
     portfolio_positions: tuple[PortfolioInputPosition, ...] = ()
     cash_balance: float | None = None
     configured_target_volatility: float | None = None
+    identity_hashes: dict[str, str] | None = None
+    model_approval_hash: str = "UNAVAILABLE"
+    probability_calibration_status: str = "PROBABILITY_NOT_CALIBRATED"
 
 
 class ProductionDailyWorkflow:
     """Headless production daily path; failures persist diagnosis, never actions."""
 
-    def __init__(self, session: Session) -> None:
+    def __init__(
+        self, session: Session, effective_config: EffectiveRuntimeConfig | None = None
+    ) -> None:
         self.session = session
-        self.assembler = ProductionDailyQuantInputAssembler(session)
-        self.pipeline = DailyQuantPipeline()
+        self.effective_config = effective_config or EffectiveRuntimeConfig()
+        self.assembler = ProductionDailyQuantInputAssembler(
+            session, effective_config=self.effective_config
+        )
+        self.pipeline = self._pipeline(None)
         self.sessions = CertifiedUSSessionService(session)
+        self.validation_registry = ValidationArtifactRegistry(
+            self.effective_config.validation_artifact_dir
+        )
+
+    def _pipeline(self, validation_id: str | None) -> DailyQuantPipeline:
+        costs = TransactionCostModel(self.effective_config.transaction_cost)
+        construction = PortfolioConstructionEngine(
+            constraints=replace(
+                self.effective_config.portfolio_constraints,
+                model_validation_id=validation_id,
+            ),
+            cost_model=costs,
+        )
+        return DailyQuantPipeline(
+            risk_model=PortfolioRiskModel(self.effective_config.risk_model),
+            construction=construction,
+            cost_model=costs,
+        )
 
     def run(self, *, portfolio_id: int | None, decision_time: datetime) -> TodayResult:
         if decision_time.tzinfo is None:
@@ -155,6 +190,23 @@ class ProductionDailyWorkflow:
             assembled = self.assembler.complete_with_portfolio(
                 research,
                 portfolio_id=portfolio_id,
+            )
+            portfolio_approval = self.validation_registry.matching_portfolio_approval(
+                PortfolioValidationIdentity(
+                    alpha_model_version=(
+                        f"{self.assembler.strategy.model_id}:{self.assembler.strategy.version}"
+                    ),
+                    alpha_data_version=research.data_version,
+                    strategy_parameter_hash=research.parameter_fingerprint,
+                    portfolio_constraint_hash=self.effective_config.portfolio_constraint_hash,
+                    risk_model_hash=self.effective_config.risk_model_hash,
+                    cost_model_hash=self.effective_config.cost_model_hash,
+                    runtime_config_hash=self.effective_config.runtime_config_hash,
+                    benchmark_definition=research.benchmark_symbol,
+                )
+            )
+            self.pipeline = self._pipeline(
+                portfolio_approval.validation_id if portfolio_approval is not None else None
             )
             output = self.pipeline.run(assembled.inputs)
         except (ArithmeticError, LookupError, RuntimeError, ValueError) as error:
@@ -381,7 +433,7 @@ class ProductionDailyWorkflow:
             warnings=(),
             data_hash=research.data_version,
             model_hash=self.assembler.strategy.version,
-            config_hash=research.parameter_fingerprint,
+            config_hash=self.effective_config.canonical_run_config_hash,
             pipeline_stages=(*self._research_stages(research), PipelineStage(
                 "Portfolio Construction", "BLOCKED", blocker
             )),
@@ -399,6 +451,7 @@ class ProductionDailyWorkflow:
             portfolio_positions=(),
             cash_balance=None,
             configured_target_volatility=None,
+            identity_hashes=self._identity_hashes(research.data_version),
         )
 
     def _persist_blocked(
@@ -516,7 +569,7 @@ class ProductionDailyWorkflow:
             warnings=(),
             data_hash=run.data_version,
             model_hash=run.model_version,
-            config_hash=config_hash,
+            config_hash=self.effective_config.canonical_run_config_hash,
             pipeline_stages=output.stages if output is not None else (),
             factors=getattr(assembled, "factors", ()),
             risk=output.risk if output is not None else None,
@@ -557,7 +610,29 @@ class ProductionDailyWorkflow:
                 if output is not None
                 else None
             ),
+            identity_hashes=self._identity_hashes(run.data_version),
+            model_approval_hash=(
+                output.target.model_validation_id
+                if output is not None and output.target is not None
+                else "UNAVAILABLE"
+            ),
+            probability_calibration_status=(
+                "CALIBRATED_LOCKED_OOS"
+                if any(item.confidence_calibrated for item in assembled.inputs.alpha_signals)
+                else "PROBABILITY_NOT_CALIBRATED"
+            ) if assembled is not None else "PROBABILITY_NOT_CALIBRATED",
         )
+
+    def _identity_hashes(self, data_version: str) -> dict[str, str]:
+        return {
+            "runtime_config_hash": self.effective_config.runtime_config_hash,
+            "strategy_parameter_hash": self.effective_config.strategy_parameter_hash,
+            "data_version_hash": data_version,
+            "portfolio_constraint_hash": self.effective_config.portfolio_constraint_hash,
+            "risk_model_hash": self.effective_config.risk_model_hash,
+            "cost_model_hash": self.effective_config.cost_model_hash,
+            "canonical_run_config_hash": self.effective_config.canonical_run_config_hash,
+        }
 
 
 def _fingerprint(payload: dict[str, object]) -> str:

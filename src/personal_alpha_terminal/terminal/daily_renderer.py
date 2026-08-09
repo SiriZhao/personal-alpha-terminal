@@ -308,7 +308,7 @@ def _factors(result: DailyQuantResult, console: Console) -> None:
         table.add_column(name[:12], justify="right")
     table.add_column("Composite", justify="right")
     table.add_column("Exp Alpha", justify="right")
-    table.add_column("Confidence", justify="right")
+    table.add_column("Evidence", justify="right")
     table.add_column("Status")
     if not result.candidates:
         table.add_row(
@@ -327,7 +327,7 @@ def _factors(result: DailyQuantResult, console: Console) -> None:
             *(f"{row.components.get(name, 0.0):+.2f}" for name in component_names),
             f"{row.composite:+.2f}",
             _signed_percent(row.expected_alpha),
-            _percent(row.confidence),
+            _percent(row.evidence_coverage),
             row.status,
         )
     console.print(table)

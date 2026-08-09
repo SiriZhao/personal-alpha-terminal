@@ -17,7 +17,19 @@ Streamlit, and production-readiness claims elsewhere under `docs/reports/`.
 | Shadow Forward with executable candidates | BLOCKED_BY_DATA |
 | Small-capital Manual Pilot | DISABLED |
 | Manual execution audit (no automatic holdings mutation) | IMPLEMENTED_FIXTURE_TESTED |
+| EffectiveRuntimeConfig / deterministic fingerprints | IMPLEMENTED_FIXTURE_TESTED |
+| Sequential stage evidence hash chain | IMPLEMENTED_FIXTURE_TESTED |
+| Portfolio validation-artifact injection path | IMPLEMENTED_FIXTURE_TESTED |
+| Real Locked-OOS portfolio approval artifact | BLOCKED_BY_DATA |
+| Probability calibration artifact contract | IMPLEMENTED_FIXTURE_TESTED |
+| Real Locked-OOS probability calibration | BLOCKED_BY_DATA |
+| Immutable section CLI (`--run-id`) | IMPLEMENTED_FIXTURE_TESTED |
 
-Current Alembic head: `b2e3f4a5c6d7`.
+Current Alembic head: `c3f4a5b6d7e8`.
+
+There is no known permanent code path that prevents an exact, independently produced
+portfolio-validation or probability-calibration artifact from being consumed. No such real
+Locked-OOS artifact is currently present, so Portfolio/Action remains blocked even if data
+certification later passes.
 
 No current result guarantees principal preservation or future outperformance.

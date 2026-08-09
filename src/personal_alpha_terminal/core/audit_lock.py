@@ -90,6 +90,6 @@ class AuditBuildLock(AbstractContextManager["AuditBuildLock"]):
             try:
                 payload = json.loads(self.path.read_text(encoding="utf-8"))
             except (FileNotFoundError, OSError, json.JSONDecodeError):
-                return
+                payload = {}
             if payload.get("token") == self.token and not self.path.is_symlink():
                 self.path.unlink(missing_ok=True)

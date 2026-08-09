@@ -4,11 +4,13 @@ import json
 import platform
 import statistics
 import sys
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import date, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, cast
+
+from personal_alpha_terminal.core.fingerprints import fingerprint
 
 
 class StageStatus(StrEnum):
@@ -58,8 +60,11 @@ class FactorRow:
     composite: float
     rank: int
     expected_alpha: float
-    confidence: float
+    evidence_coverage: float
     status: str
+    raw_values: dict[str, float] = field(default_factory=dict)
+    winsorized_values: dict[str, float] = field(default_factory=dict)
+    neutralized_values: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -274,7 +279,8 @@ class DailyQuantResult:
 
         run_directory = directory / self.run_id
         run_directory.mkdir(parents=True, exist_ok=True)
-        for stage in self.stages:
+        evidence_chain = build_stage_evidence_chain(self)
+        for stage, evidence in zip(self.stages, evidence_chain, strict=True):
             payload = {
                 "run_id": self.run_id,
                 "analysis_date": self.analysis_date.isoformat(),
@@ -286,7 +292,7 @@ class DailyQuantResult:
                 "duration_seconds": stage.duration_seconds,
                 "message": stage.message,
                 "diagnostics": stage.metadata,
-                "input_snapshot_hash": self.provenance.get("data_hash", "UNAVAILABLE"),
+                **evidence,
                 "output_row_count": stage.metadata.get("output_row_count", 0),
             }
             _atomic_json(run_directory / f"{stage.name.lower()}_manifest.json", payload)
@@ -294,7 +300,7 @@ class DailyQuantResult:
             item.name: _json_value(item.metadata) for item in self.stages
         }
         certificate = {
-            "certificate_schema": "pat-quant-run-certificate-v1",
+            "certificate_schema": "pat-quant-run-certificate-v2",
             "run_id": self.run_id,
             "classification": self.run_classification,
             "trading_use": (
@@ -303,7 +309,7 @@ class DailyQuantResult:
             "version": self.version,
             "build_identifier": self.provenance.get("build_identifier", self.version),
             "git_commit": self.provenance.get("git_commit", "UNAVAILABLE"),
-            "random_seed": self.provenance.get("random_seed"),
+            "randomness": self.provenance.get("randomness", "NOT_USED"),
             "runtime": {
                 "python": platform.python_version(),
                 "implementation": platform.python_implementation(),
@@ -316,6 +322,11 @@ class DailyQuantResult:
             "market_session": self.market_session,
             "data_cutoff": self.data_cutoff.isoformat() if self.data_cutoff else None,
             "config_hash": self.config_hash,
+            "identity_hashes": self.provenance.get("identity_hashes", {}),
+            "stage_evidence_chain": evidence_chain,
+            "stage_chain_root_hash": (
+                evidence_chain[-1]["output_hash"] if evidence_chain else "UNAVAILABLE"
+            ),
             "model_versions": list(self.model_versions),
             "stages": [_json_value(asdict(item)) for item in self.stages],
             "stage_evidence": stage_evidence,
@@ -342,6 +353,9 @@ class DailyQuantResult:
                 "HOLD": sum(item.action == "HOLD" for item in self.final_decisions),
                 "REJECTED": len(self.rejected_signals),
             },
+            "decision_recommendations": [
+                _json_value(asdict(item)) for item in self.final_decisions
+            ],
             "benchmarks": [_json_value(asdict(item)) for item in self.benchmarks],
             "blockers": list(self.blockers),
             "warnings": list(self.warnings),
@@ -351,6 +365,145 @@ class DailyQuantResult:
         target = run_directory / "run_certificate.json"
         _atomic_json(target, certificate)
         return target
+
+
+def build_stage_evidence_chain(result: DailyQuantResult) -> list[dict[str, object]]:
+    """Create a sequential chain from the exact immutable stage outputs."""
+
+    identity_hashes = result.provenance.get("identity_hashes", {})
+    if not isinstance(identity_hashes, dict):
+        identity_hashes = {}
+    previous = fingerprint(
+        {
+            "run_id": result.run_id,
+            "analysis_date": result.analysis_date,
+            "trade_date": result.trade_date,
+            "data_cutoff": result.data_cutoff,
+            "runtime_config_hash": identity_hashes.get(
+                "runtime_config_hash", result.config_hash
+            ),
+        }
+    )
+    chain: list[dict[str, object]] = []
+    for stage in result.stages:
+        relevant_model_hash = _stage_model_hash(stage.name, identity_hashes, result)
+        input_hash = fingerprint(
+            {
+                "previous_stage_output_hash": previous,
+                "runtime_config_hash": identity_hashes.get(
+                    "runtime_config_hash", result.config_hash
+                ),
+                "relevant_model_hash": relevant_model_hash,
+            }
+        )
+        output_hash = fingerprint(
+            {
+                "stage_name": stage.name,
+                "stage_status": stage.status,
+                "message": stage.message,
+                "diagnostics": stage.metadata,
+                "canonical_stage_output": _stage_output_payload(result, stage.name),
+                "input_hash": input_hash,
+            }
+        )
+        chain.append(
+            {
+                "stage_name": stage.name,
+                "stage_status": stage.status.value,
+                "input_hash": input_hash,
+                "output_hash": output_hash,
+                "previous_stage_output_hash": previous,
+                "runtime_config_hash": identity_hashes.get(
+                    "runtime_config_hash", result.config_hash
+                ),
+                "relevant_model_hash": relevant_model_hash,
+                "code_build_provenance": result.provenance.get(
+                    "build_identifier", result.version
+                ),
+                "started_at": result.started_at.isoformat(),
+                "completed_at": result.finished_at.isoformat(),
+                "blockers": (
+                    list(result.blockers)
+                    if stage.status is StageStatus.FAIL_BLOCKING
+                    else []
+                ),
+                "warnings": (
+                    list(result.warnings)
+                    if stage.status is StageStatus.PASS_DEGRADED
+                    else []
+                ),
+                "artifact_reference": f"{stage.name.lower()}_manifest.json",
+            }
+        )
+        previous = output_hash
+    return chain
+
+
+def _stage_output_payload(result: DailyQuantResult, stage_name: str) -> object:
+    if stage_name == "CALENDAR":
+        return {
+            "analysis_date": result.analysis_date,
+            "trade_date": result.trade_date,
+            "market_session": result.market_session,
+            "market_structure": result.market_structure,
+        }
+    if stage_name == "DATA":
+        return {
+            "data_health": [asdict(item) for item in result.data_health],
+            "data_hash": result.provenance.get("data_hash", "UNAVAILABLE"),
+        }
+    if stage_name == "PIT":
+        return {
+            "data_cutoff": result.data_cutoff,
+            "universe_count": result.provenance.get("universe_count", 0),
+        }
+    if stage_name == "FEATURE":
+        return [
+            {"symbol": item.symbol, "raw_values": item.raw_values}
+            for item in result.factors
+        ]
+    if stage_name == "FACTOR":
+        return [asdict(item) for item in result.factors]
+    if stage_name == "SIGNAL":
+        return [asdict(item) for item in result.candidates]
+    if stage_name == "PROBABILITY":
+        return [asdict(item) for item in result.probabilities]
+    if stage_name == "PORTFOLIO":
+        return asdict(result.portfolio)
+    if stage_name == "RISK":
+        return asdict(result.risk)
+    if stage_name == "DECISION":
+        return [asdict(item) for item in result.final_decisions]
+    if stage_name == "EXECUTION":
+        return asdict(result.execution_plan)
+    if stage_name == "PERSISTENCE":
+        return {
+            "classification": result.run_classification,
+            "blockers": result.blockers,
+            "warnings": result.warnings,
+        }
+    return "NOT_APPLICABLE"
+
+
+def _stage_model_hash(
+    stage_name: str, identity_hashes: dict[str, object], result: DailyQuantResult
+) -> object:
+    if stage_name in {"FACTOR", "SIGNAL", "PROBABILITY"}:
+        return identity_hashes.get("strategy_parameter_hash", result.model_versions)
+    if stage_name == "PORTFOLIO":
+        return identity_hashes.get("portfolio_constraint_hash", "UNAVAILABLE")
+    if stage_name == "RISK":
+        return identity_hashes.get("risk_model_hash", "UNAVAILABLE")
+    if stage_name in {"DECISION", "EXECUTION"}:
+        return {
+            "portfolio": identity_hashes.get("portfolio_constraint_hash", "UNAVAILABLE"),
+            "risk": identity_hashes.get("risk_model_hash", "UNAVAILABLE"),
+            "cost": identity_hashes.get("cost_model_hash", "UNAVAILABLE"),
+            "approval": identity_hashes.get("model_approval_hash", "UNAVAILABLE"),
+        }
+    return identity_hashes.get(
+        "data_version_hash", result.provenance.get("data_hash", "UNAVAILABLE")
+    )
 
 
 def _json_value(value: Any) -> Any:

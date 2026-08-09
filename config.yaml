@@ -16,24 +16,12 @@ max_retries: 2
 retry_backoff_seconds: 0.5
 data_safe_threshold: 80
 data_watch_threshold: 65
-maximum_provider_difference: 0.02
+reconciliation_minimum_coverage: 0.95
+reconciliation_warning_tolerance: 0.01
+maximum_provider_difference: 0.05
+reconciliation_maximum_blocking_ratio: 0.01
 nasdaq_23h_enabled: false
 night_execution_enabled: false
 default_execution_session: REGULAR
-symbols:
-  - AAPL
-  - MSFT
-  - NVDA
-  - GOOGL
-  - AMZN
-  - VOO
-  - QQQM
-required_symbols:
-  - SPY
-  - QQQ
-  - ^VIX
-# Real-account weights for analysis only. No broker order is created.
-holdings:
-  VOO: 0.50
-  QQQM: 0.25
-  AAPL: 0.10
+# Holdings and cash are intentionally absent. The real portfolio ledger is the
+# only source of truth; select it with portfolio_id after portfolio-init/import.

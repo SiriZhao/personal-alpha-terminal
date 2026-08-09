@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 
 import pandas as pd
@@ -17,6 +17,9 @@ from personal_alpha_terminal.quant_engine.factors.cross_sectional import (
 )
 from personal_alpha_terminal.quant_engine.factors.features import compute_price_features
 from personal_alpha_terminal.quant_engine.model_registry import fingerprint_parameters
+from personal_alpha_terminal.quant_engine.validation_artifacts import (
+    ProbabilityCalibrationArtifact,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,8 +47,11 @@ class StrategyFactorSnapshot:
     composite: float
     rank: int
     expected_alpha: float
-    confidence: float
+    evidence_coverage: float
     status: str
+    raw_values: dict[str, float] = field(default_factory=dict)
+    winsorized_values: dict[str, float] = field(default_factory=dict)
+    neutralized_values: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,6 +83,7 @@ class USAdaptiveAlphaCoreV1:
         decision_time: datetime,
         data_version: str,
         approval: ModelApprovalRecord | None,
+        calibration: ProbabilityCalibrationArtifact | None = None,
         fundamentals: pd.DataFrame | None = None,
     ) -> StrategyAlphaResult:
         if decision_time.tzinfo is None:
@@ -134,6 +141,13 @@ class USAdaptiveAlphaCoreV1:
             and approval.parameter_fingerprint == parameter_fingerprint
             and approval.data_version == data_version
         )
+        calibrated = bool(
+            calibration is not None
+            and calibration.locked_oos
+            and calibration.identity.alpha_model_version == f"{self.model_id}:{self.version}"
+            and calibration.identity.alpha_data_version == data_version
+            and calibration.identity.strategy_parameter_hash == parameter_fingerprint
+        )
         if production and any(status.value != "VALID" for status in processed.statuses.values()):
             return StrategyAlphaResult(
                 (),
@@ -169,6 +183,16 @@ class USAdaptiveAlphaCoreV1:
                 components["quality"] = float(row["quality__normalized"])
                 expected += components["quality"] * self.config.quality_coefficient
             coverage = float(row["factor_coverage"])
+            raw_values = {
+                spec.name: float(row[f"{spec.name}__raw"])
+                for spec in specs
+                if pd.notna(row.get(f"{spec.name}__raw"))
+            }
+            winsorized_values = {
+                spec.name: float(row[f"{spec.name}__winsorized"])
+                for spec in specs
+                if pd.notna(row.get(f"{spec.name}__winsorized"))
+            }
             factor_rows.append(
                 StrategyFactorSnapshot(
                     symbol=str(row["ticker"]),
@@ -176,12 +200,15 @@ class USAdaptiveAlphaCoreV1:
                     composite=sum(components.values()) / len(components),
                     rank=0,
                     expected_alpha=expected,
-                    confidence=min(1.0, coverage),
+                    evidence_coverage=min(1.0, coverage),
                     status=(
                         "PRODUCTION_APPROVED"
                         if production
                         else "DIAGNOSTIC_ONLY"
                     ),
+                    raw_values=raw_values,
+                    winsorized_values=winsorized_values,
+                    neutralized_values=components,
                 )
             )
             signals.append(
@@ -193,8 +220,8 @@ class USAdaptiveAlphaCoreV1:
                     horizon=self.config.horizon_sessions,
                     raw_signal=float(row["momentum_12_1__raw"]),
                     normalized_signal=sum(components.values()) / len(components),
-                    confidence=min(1.0, coverage),
-                    confidence_calibrated=production,
+                    confidence=(min(1.0, coverage) if calibrated else 0.0),
+                    confidence_calibrated=calibrated,
                     sample_size=len(processed.frame),
                     statistical_strength=min(1.0, len(processed.frame) / 100),
                     economic_strength=min(1.0, abs(expected) / 0.05),
@@ -209,6 +236,12 @@ class USAdaptiveAlphaCoreV1:
                     ),
                     model_version=f"{self.model_id}:{self.version}:{parameter_fingerprint[:12]}",
                     data_version=data_version,
+                    evidence_coverage=min(1.0, coverage),
+                    calibration_id=(
+                        calibration.calibration_id
+                        if calibrated and calibration
+                        else None
+                    ),
                 )
             )
         ranked = sorted(factor_rows, key=lambda item: (-item.expected_alpha, item.symbol))
@@ -219,8 +252,11 @@ class USAdaptiveAlphaCoreV1:
                 composite=item.composite,
                 rank=index,
                 expected_alpha=item.expected_alpha,
-                confidence=item.confidence,
+                evidence_coverage=item.evidence_coverage,
                 status=item.status,
+                raw_values=item.raw_values,
+                winsorized_values=item.winsorized_values,
+                neutralized_values=item.neutralized_values,
             )
             for index, item in enumerate(ranked, start=1)
         ]

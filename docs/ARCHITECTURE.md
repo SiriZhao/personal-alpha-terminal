@@ -26,9 +26,17 @@ Rich Terminal Renderer
 
 `ApplicationService.run_daily_quant_report()` invokes `DailyQuantOrchestrator`, the unique formal daily entry point. The renderer receives one typed `DailyQuantResult`; it does not query providers, calculate factors, rank stocks, resize positions, or invent actions.
 
+## Effective configuration
+
+`EffectiveRuntimeConfig` is resolved once using `defaults -> config file -> explicit PAT_ environment -> explicit CLI override`. ApplicationService, data services, calendar, strategy, portfolio, risk, cost, doctor, diagnostics, and terminal receive this object or its immutable `Settings` projection. `config.yaml` cannot contain holdings; the real portfolio ledger is the only holdings/cash source.
+
+The run records separate deterministic identities for runtime configuration, strategy parameters, data version, portfolio constraints, risk model, transaction-cost model, and approval artifact. The canonical run-config hash binds those identities without using volatile timestamps.
+
 ## Stage gates
 
-Calendar, Data, PIT, Feature, Factor, Signal, Probability, Portfolio, Risk, Decision, Execution, and Persistence each emit PASS/WARN/FAIL/SKIPPED, duration, message and metadata. A hard failure sets the result to non-actionable and removes executable legs.
+Calendar, Data, PIT, Feature, Factor, Signal, Probability, Portfolio, Risk, Decision, Execution, and Persistence each emit explicit status, duration, message and metadata. Every persisted manifest has its own input/output hash and links to the previous stage output. The certificate stores the final chain root. A hard failure sets the result to non-actionable and removes executable legs.
+
+Portfolio construction is authorized only when the Model Registry and an immutable `PortfolioValidationArtifact` match the exact Alpha/data/strategy/constraint/risk/cost/runtime/benchmark fingerprints. Missing or mismatched evidence remains fail-closed. Probability calibration is a separate Locked-OOS artifact; model approval and factor coverage never imply calibrated probability.
 
 ## Portfolio and execution boundary
 

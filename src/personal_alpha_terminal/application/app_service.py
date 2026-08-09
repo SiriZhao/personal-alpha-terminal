@@ -35,6 +35,10 @@ from personal_alpha_terminal.application.status import (
 from personal_alpha_terminal.application.today_summary import DashboardView
 from personal_alpha_terminal.automation.runner import PipelineExecution
 from personal_alpha_terminal.core.config import Settings, get_settings
+from personal_alpha_terminal.core.effective_config import (
+    EffectiveRuntimeConfig,
+    effective_config_from_settings,
+)
 from personal_alpha_terminal.decision_engine.repository import DecisionRepository
 from personal_alpha_terminal.decision_engine.schemas import UserDecision
 from personal_alpha_terminal.models import (
@@ -66,11 +70,15 @@ class ApplicationService:
         *,
         snapshot_root: Path | None = None,
         sync_runner: SyncRunner | None = None,
+        effective_config: EffectiveRuntimeConfig | None = None,
     ) -> None:
         self._factory = session_factory
         self._settings = settings or get_settings()
         self._snapshot_root = snapshot_root
         self._sync_runner = sync_runner
+        self._effective_config = effective_config or effective_config_from_settings(
+            self._settings
+        )
 
     def get_system_health(self) -> SystemReadiness:
         try:
@@ -163,7 +171,7 @@ class ApplicationService:
         """Run the gated DB -> alpha -> portfolio -> action production chain."""
 
         with self._factory.begin() as session:
-            return ProductionDailyWorkflow(session).run(
+            return ProductionDailyWorkflow(session, self._effective_config).run(
                 portfolio_id=portfolio_id,
                 decision_time=decision_time or datetime.now(UTC),
             )
@@ -179,7 +187,7 @@ class ApplicationService:
 
         return DailyQuantOrchestrator(
             self._factory,
-            self._settings,
+            self._effective_config,
             snapshot_root=(
                 self._snapshot_root / "daily-runs"
                 if self._snapshot_root is not None

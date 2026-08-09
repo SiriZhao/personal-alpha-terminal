@@ -14,7 +14,13 @@
     "pit_historical_data": "BLOCKED_BY_DATA",
     "locked_oos": "BLOCKED_BY_DATA",
     "production_action": "BLOCKED_BY_DATA",
-    "small_capital_manual_pilot": "DISABLED"
+    "small_capital_manual_pilot": "DISABLED",
+    "effective_runtime_config": "IMPLEMENTED_FIXTURE_TESTED",
+    "stage_evidence_hash_chain": "IMPLEMENTED_FIXTURE_TESTED",
+    "portfolio_validation_artifact_contract": "IMPLEMENTED_FIXTURE_TESTED",
+    "portfolio_locked_oos_approval": "BLOCKED_BY_DATA",
+    "probability_calibration_artifact_contract": "IMPLEMENTED_FIXTURE_TESTED",
+    "probability_locked_oos_calibration": "BLOCKED_BY_DATA"
   },
-  "alembic_head": "b2e3f4a5c6d7"
+  "alembic_head": "c3f4a5b6d7e8"
 }

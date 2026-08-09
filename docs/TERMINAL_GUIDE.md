@@ -52,15 +52,15 @@ The distinctions are mandatory:
 ## Manual decision and fill workflow
 
 ```text
-PersonalAlphaTerminal.exe accept <recommendation_id> --reason "reviewed"
-PersonalAlphaTerminal.exe reject <recommendation_id> --reason "tax constraint"
-PersonalAlphaTerminal.exe watch <recommendation_id>
+PersonalAlphaTerminal.exe accept <recommendation_id> --run-id <run_id> --reason "reviewed"
+PersonalAlphaTerminal.exe reject <recommendation_id> --run-id <run_id> --reason "tax constraint"
+PersonalAlphaTerminal.exe watch <recommendation_id> --run-id <run_id>
 ```
 
 ACCEPT produces `PENDING MANUAL EXECUTION`; it does not change holdings. After a real Schwab fill:
 
 ```text
-PersonalAlphaTerminal.exe mark-executed <recommendation_id> --price 187.25 --quantity 10 --fees 0
+PersonalAlphaTerminal.exe mark-executed <recommendation_id> --run-id <run_id> --price 187.25 --quantity 10 --fees 0
 ```
 
 The timestamp must be eligible, data/model gates must still match, and price/quantity/fees must be valid.
@@ -68,11 +68,13 @@ The timestamp must be eligible, data/model gates must still match, and price/qua
 ## Other commands
 
 - `refresh`: refresh market data, then run daily.
-- `data`, `factors`, `probability`, `risk`, `decisions`: render the current canonical daily report without a data refresh.
+- `data`, `factors`, `probability`, `risk`, `decisions`: read the latest persisted immutable run. They never execute the pipeline. Add `--run-id <id>` to inspect history; when no run exists they return `NO_PERSISTED_RUN`.
 - `backtest`: show/run the PIT-gated production backtest capability; a blocked gate lists missing evidence.
 - `research`: run research workflow, never an execution bypass.
 - `doctor` / `diagnostics`: check configuration, database/migration, storage, calendar, portfolio, broker and optional AI state.
-- `settings`: show the active configuration path.
+- `settings`: show resolved effective values plus stable runtime/root hashes, not raw YAML text.
+
+Decision Trace uses `NOT_CAPTURED` when a real intermediate (for example winsorized values or a pre-risk target) was not persisted. It never copies a normalized value into a raw field or a post-risk target into a pre-risk field.
 
 ## Safety behavior
 

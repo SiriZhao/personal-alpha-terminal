@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import json
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
-from hashlib import sha256
 from pathlib import Path
 from time import perf_counter
 from uuid import uuid4
@@ -11,7 +9,7 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from personal_alpha_terminal import __build_version__, __version__
+from personal_alpha_terminal import __version__
 from personal_alpha_terminal.application.daily_result import (
     BenchmarkSummary,
     DailyQuantResult,
@@ -37,7 +35,12 @@ from personal_alpha_terminal.application.quant_daily_service import (
     ProductionDailyWorkflow,
     TodayResult,
 )
+from personal_alpha_terminal.core.build_metadata import current_build_metadata
 from personal_alpha_terminal.core.config import Settings
+from personal_alpha_terminal.core.effective_config import (
+    EffectiveRuntimeConfig,
+    effective_config_from_settings,
+)
 from personal_alpha_terminal.models import Portfolio
 from personal_alpha_terminal.terminal.market_sessions import (
     MarketSession,
@@ -71,20 +74,23 @@ class DailyQuantOrchestrator:
     def __init__(
         self,
         session_factory: sessionmaker[Session],
-        settings: Settings,
+        effective_config: EffectiveRuntimeConfig | Settings,
         *,
         snapshot_root: Path | None = None,
         sync_runner: SyncRunner | None = None,
     ) -> None:
         self._factory = session_factory
-        self._settings = settings
+        if isinstance(effective_config, Settings):
+            effective_config = effective_config_from_settings(effective_config)
+        self._effective_config = effective_config
+        self._settings = effective_config.settings
         self._snapshot_root = snapshot_root or (
-            settings.daily_pipeline_report_path.parent / "daily-runs"
+            effective_config.report_dir / "daily-runs"
         )
         self._sync_runner = sync_runner
         self._calendar = MarketSessionCalendar(
-            nasdaq_23h_enabled=settings.nasdaq_23h_enabled,
-            nasdaq_23h_effective_date=settings.nasdaq_23h_effective_date,
+            nasdaq_23h_enabled=effective_config.nasdaq_23h_enabled,
+            nasdaq_23h_effective_date=effective_config.nasdaq_23h_effective_date,
             night_execution_enabled=False,
         )
 
@@ -256,7 +262,7 @@ class DailyQuantOrchestrator:
 
         stage_started = perf_counter()
         with self._factory.begin() as session:
-            workflow_result = ProductionDailyWorkflow(session).run(
+            workflow_result = ProductionDailyWorkflow(session, self._effective_config).run(
                 portfolio_id=resolved_portfolio,
                 decision_time=effective_decision_time,
             )
@@ -445,6 +451,7 @@ class DailyQuantOrchestrator:
         warnings: tuple[str, ...],
     ) -> DailyQuantResult:
         actionable = workflow.status in {"GENERATED", "NO_DECISION"} and not blockers
+        build = current_build_metadata()
         factors = tuple(
             FactorRow(
                 item.symbol,
@@ -452,8 +459,11 @@ class DailyQuantOrchestrator:
                 item.composite,
                 item.rank,
                 item.expected_alpha,
-                item.confidence,
+                item.evidence_coverage,
                 item.status,
+                item.raw_values,
+                item.winsorized_values,
+                item.neutralized_values,
             )
             for item in workflow.factors
         )
@@ -471,7 +481,7 @@ class DailyQuantOrchestrator:
                 None,
                 None,
                 "INSUFFICIENT EVIDENCE",
-                "NOT CALIBRATED OOS",
+                workflow.probability_calibration_status,
                 "PASS_DEGRADED",
             ),
         )
@@ -635,15 +645,22 @@ class DailyQuantOrchestrator:
                 "database_run_id": workflow.run_id,
                 "data_hash": workflow.data_hash,
                 "model_hash": workflow.model_hash,
-                "build_identifier": __build_version__,
-                "git_commit": "UNAVAILABLE",
-                "random_seed": None,
+                "build_identifier": build.build_id,
+                "git_commit": build.git_commit,
+                "build_time": build.build_time,
+                "dependency_lock_hash": build.dependency_lock_hash,
+                "randomness": "NOT_USED",
                 "source_ids": workflow.source_ids,
                 "universe_count": workflow.universe_count,
                 "manual_broker": "Charles Schwab",
                 "automatic_execution": False,
+                "identity_hashes": {
+                    **(workflow.identity_hashes or {}),
+                    "model_approval_hash": workflow.model_approval_hash,
+                },
+                "probability_calibration_status": workflow.probability_calibration_status,
             },
-            workflow.config_hash,
+            self._effective_config.canonical_run_config_hash,
             tuple(
                 sorted(
                     {
@@ -668,15 +685,24 @@ class DailyQuantOrchestrator:
         for factor in factors:
             decision = decision_by_symbol.get(factor.symbol)
             traces[factor.symbol] = {
-                "data_quality": decision.data_quality if decision else "CERTIFIED_PIT",
-                "factor_raw_values": factor.components,
-                "factor_normalized_values": factor.components,
+                "data_quality": decision.data_quality if decision else "NOT_CAPTURED",
+                "factor_raw_values": factor.raw_values or "NOT_CAPTURED",
+                "factor_winsorized_values": (
+                    factor.winsorized_values or "NOT_CAPTURED"
+                ),
+                "factor_normalized_values": "NOT_CAPTURED",
+                "factor_neutralized_values": (
+                    factor.neutralized_values or factor.components
+                ),
                 "cross_sectional_rank": factor.rank,
                 "composite_alpha": factor.composite,
                 "expected_alpha": factor.expected_alpha,
-                "confidence": factor.confidence,
-                "raw_target": target_weights.get(factor.symbol),
+                "evidence_coverage": factor.evidence_coverage,
+                "calibrated_probability": "NOT_CAPTURED",
+                "raw_alpha_target": "NOT_CAPTURED",
+                "portfolio_optimized_target": "NOT_CAPTURED",
                 "risk_adjusted_target": target_weights.get(factor.symbol),
+                "final_trade_target": decision.target_weight if decision else None,
                 "current_weight": current_weights.get(factor.symbol, 0.0),
                 "target_weight": target_weights.get(factor.symbol),
                 "delta_weight": (
@@ -797,6 +823,7 @@ class DailyQuantOrchestrator:
         data_metadata = stages.get(
             "DATA", StageResult("DATA", StageStatus.NOT_RUN, 0.0, "", {})
         ).metadata
+        build = current_build_metadata()
         for name in _STAGE_ORDER:
             if name != "PERSISTENCE" and name not in stages:
                 stages[name] = StageResult(
@@ -885,15 +912,26 @@ class DailyQuantOrchestrator:
             {
                 "automatic_execution": False,
                 "manual_broker": "Charles Schwab",
-                "build_identifier": __build_version__,
-                "git_commit": "UNAVAILABLE",
-                "random_seed": None,
+                "build_identifier": build.build_id,
+                "git_commit": build.git_commit,
+                "build_time": build.build_time,
+                "dependency_lock_hash": build.dependency_lock_hash,
+                "randomness": "NOT_USED",
                 "data_snapshot_id": data_metadata.get("snapshot_id"),
                 "data_hash": data_metadata.get("data_hash", "UNAVAILABLE"),
                 "data_evidence_paths": data_metadata.get("evidence_paths", {}),
                 "pit_cutoff": data_metadata.get("pit_cutoff"),
+                "identity_hashes": {
+                    "runtime_config_hash": self._effective_config.runtime_config_hash,
+                    "strategy_parameter_hash": self._effective_config.strategy_parameter_hash,
+                    "data_version_hash": data_metadata.get("data_hash", "UNAVAILABLE"),
+                    "portfolio_constraint_hash": self._effective_config.portfolio_constraint_hash,
+                    "risk_model_hash": self._effective_config.risk_model_hash,
+                    "cost_model_hash": self._effective_config.cost_model_hash,
+                    "model_approval_hash": "UNAVAILABLE",
+                },
             },
-            self._config_fingerprint(),
+            self._effective_config.canonical_run_config_hash,
             (),
         )
         return self._persist_result(result)
@@ -964,11 +1002,4 @@ class DailyQuantOrchestrator:
         )
 
     def _config_fingerprint(self) -> str:
-        safe = {
-            key: value
-            for key, value in self._settings.model_dump(mode="json").items()
-            if not any(marker in key.lower() for marker in ("key", "token", "secret", "password"))
-        }
-        return sha256(
-            json.dumps(safe, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        ).hexdigest()
+        return self._effective_config.canonical_run_config_hash

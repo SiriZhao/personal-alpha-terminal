@@ -21,6 +21,7 @@ from personal_alpha_terminal.terminal.market_sessions import MarketSessionCalend
 
 if TYPE_CHECKING:
     from personal_alpha_terminal.application import ApplicationService
+    from personal_alpha_terminal.core.effective_config import EffectiveRuntimeConfig
 
 console = Console()
 logger = logging.getLogger(__name__)
@@ -31,7 +32,9 @@ def run_daily(config_path: Path, *, refresh: bool = True, wait: bool = True) -> 
 
     try:
         config = load_config(config_path)
-        result = _application_service(snapshot_root=config.report_dir).run_daily_quant_report(
+        result = _application_service(
+            snapshot_root=config.report_dir, effective_config=config
+        ).run_daily_quant_report(
             portfolio_id=config.portfolio_id,
             refresh=refresh,
         )
@@ -55,26 +58,42 @@ def run_daily(config_path: Path, *, refresh: bool = True, wait: bool = True) -> 
     return 0 if result.actionable else 3
 
 
-def _application_service(*, snapshot_root: Path | None = None) -> ApplicationService:
+def _application_service(
+    *,
+    snapshot_root: Path | None = None,
+    effective_config: EffectiveRuntimeConfig | None = None,
+) -> ApplicationService:
     from personal_alpha_terminal.application import ApplicationService
     from personal_alpha_terminal.core.config import get_settings
     from personal_alpha_terminal.data.database import get_session_factory
     from personal_alpha_terminal.data.migrations import upgrade_database
 
     upgrade_database()
+    settings = effective_config.settings if effective_config is not None else get_settings()
     return ApplicationService(
-        get_session_factory(), get_settings(), snapshot_root=snapshot_root
+        get_session_factory(),
+        settings,
+        snapshot_root=snapshot_root,
+        effective_config=effective_config,
     )
 
 
-def _review(recommendation_id: str, decision: str, reason: str) -> int:
-    service = _application_service()
+def _service_for_args(args: argparse.Namespace) -> ApplicationService:
+    config_path = getattr(args, "config", None)
+    if config_path is None:
+        return _application_service()
+    config = load_config(config_path)
+    return _application_service(effective_config=config)
+
+
+def _review(args: argparse.Namespace, decision: str) -> int:
+    service = _service_for_args(args)
     operation = {
         "accept": service.accept_candidate,
         "reject": service.reject_candidate,
         "watch": service.watch_candidate,
     }[decision]
-    result = operation(recommendation_id, reason)
+    result = operation(args.recommendation_id, args.reason)
     console.print(result)
     if decision == "accept":
         console.print(
@@ -84,7 +103,7 @@ def _review(recommendation_id: str, decision: str, reason: str) -> int:
 
 
 def _record_execution(args: argparse.Namespace) -> int:
-    result = _application_service().mark_candidate_executed(
+    result = _service_for_args(args).mark_candidate_executed(
         args.recommendation_id,
         actual_price=args.price,
         quantity=args.quantity,
@@ -97,7 +116,7 @@ def _record_execution(args: argparse.Namespace) -> int:
 
 
 def _portfolio_command(args: argparse.Namespace) -> int:
-    service = _application_service()
+    service = _service_for_args(args)
     if args.command == "portfolio-init":
         portfolio_id = service.create_portfolio(
             name=args.name,
@@ -190,7 +209,9 @@ def _doctor(config_path: Path) -> int:
                 checks.append(("PASS", label, str(directory.resolve())))
             except OSError as error:
                 checks.append(("FAIL", label, type(error).__name__))
-        application = _application_service()
+        checks.append(("PASS", "Runtime config hash", config.runtime_config_hash))
+        checks.append(("PASS", "Effective symbols", ",".join(config.symbols)))
+        application = _application_service(effective_config=config)
         readiness = application.get_system_health()
         checks.append(
             (
@@ -242,8 +263,9 @@ def _doctor(config_path: Path) -> int:
     return 2 if any(status == "FAIL" for status, _, _ in checks) else 0
 
 
-def _research() -> int:
-    service = _application_service()
+def _research(config_path: Path) -> int:
+    config = load_config(config_path)
+    service = _application_service(effective_config=config)
     readiness = service.get_system_health()
     if not readiness.data.allow_research:
         console.print(
@@ -263,10 +285,11 @@ def _research() -> int:
     return 2 if result.status == "failed" else 0
 
 
-def _backtest_status() -> int:
+def _backtest_status(config_path: Path) -> int:
     from personal_alpha_terminal.application.backtest_service import BacktestService
 
-    service = _application_service()
+    config = load_config(config_path)
+    service = _application_service(effective_config=config)
     availability = BacktestService().availability(
         gate_approved=service.get_model_readiness().allow_candidates
     )
@@ -280,16 +303,27 @@ def _backtest_status() -> int:
     return 0 if availability.available else 3
 
 
-def _explain(config_path: Path, symbol: str) -> int:
+def _certificate_path(config_path: Path, run_id: str | None) -> Path:
     config = load_config(config_path)
-    candidates = sorted(
-        (config.report_dir / "daily-runs").glob("*/run_certificate.json"),
-        key=lambda item: item.stat().st_mtime,
-        reverse=True,
+    root = config.report_dir / "daily-runs"
+    candidates = (
+        [root / run_id / "run_certificate.json"]
+        if run_id
+        else sorted(
+            root.glob("*/run_certificate.json"),
+            key=lambda item: item.stat().st_mtime,
+            reverse=True,
+        )
     )
+    candidates = [item for item in candidates if item.exists()]
     if not candidates:
-        raise ValueError("no quant run certificate exists; run daily first")
-    certificate = json.loads(candidates[0].read_text(encoding="utf-8"))
+        raise ValueError("NO_PERSISTED_RUN; run daily or refresh first")
+    return candidates[0]
+
+
+def _explain(config_path: Path, symbol: str, run_id: str | None = None) -> int:
+    path = _certificate_path(config_path, run_id)
+    certificate = json.loads(path.read_text(encoding="utf-8"))
     normalized = symbol.strip().upper()
     trace = certificate.get("decision_traces", {}).get(normalized)
     if not isinstance(trace, dict):
@@ -300,9 +334,49 @@ def _explain(config_path: Path, symbol: str) -> int:
     for key, value in trace.items():
         table.add_row(str(key), json.dumps(value, ensure_ascii=False, sort_keys=True))
     console.print(table)
-    console.print(f"Certificate: {candidates[0].resolve()}")
+    console.print(f"Certificate: {path.resolve()}")
     console.print("LLM contribution: NONE")
     return 0
+
+
+def _render_persisted_section(
+    config_path: Path, section: str, run_id: str | None
+) -> int:
+    path = _certificate_path(config_path, run_id)
+    certificate = json.loads(path.read_text(encoding="utf-8"))
+    mapping = {
+        "data": ("data_certification", "data"),
+        "factors": ("factor_statistics", "signals"),
+        "probability": ("probability",),
+        "risk": ("risk",),
+        "decisions": ("decision_counts", "decision_traces"),
+    }
+    payload = {key: certificate.get(key) for key in mapping[section]}
+    console.print(
+        Panel(
+            json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2),
+            title=f"{section.upper()} / IMMUTABLE RUN {certificate.get('run_id')}",
+        )
+    )
+    console.print(f"Certificate: {path.resolve()}")
+    return 0
+
+
+def _verify_recommendation_run(
+    config_path: Path, run_id: str, recommendation_id: str
+) -> None:
+    path = _certificate_path(config_path, run_id)
+    certificate = json.loads(path.read_text(encoding="utf-8"))
+    decisions = certificate.get("decision_recommendations", [])
+    identifiers = {
+        str(item.get("recommendation_id"))
+        for item in decisions
+        if isinstance(item, dict)
+    }
+    if recommendation_id not in identifiers:
+        raise ValueError(
+            f"recommendation {recommendation_id} is not bound to immutable run {run_id}"
+        )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -319,7 +393,8 @@ def build_parser() -> argparse.ArgumentParser:
         ("risk", "Render portfolio risk from the daily snapshot"),
         ("decisions", "Render final validated decisions"),
     ):
-        subparsers.add_parser(name, help=help_text)
+        section = subparsers.add_parser(name, help=help_text)
+        section.add_argument("--run-id", default=None)
     subparsers.add_parser("doctor")
     subparsers.add_parser("diagnostics", help="Alias for doctor")
     subparsers.add_parser("settings", help="Show the active terminal configuration path")
@@ -330,9 +405,11 @@ def build_parser() -> argparse.ArgumentParser:
     for name in ("accept", "reject", "watch"):
         command = subparsers.add_parser(name)
         command.add_argument("recommendation_id")
+        command.add_argument("--run-id", required=True)
         command.add_argument("--reason", default="")
     execution = subparsers.add_parser("mark-executed")
     execution.add_argument("recommendation_id")
+    execution.add_argument("--run-id", required=True)
     execution.add_argument("--price", type=float, required=True)
     execution.add_argument("--quantity", type=float, required=True)
     execution.add_argument("--fees", type=float, default=0.0)
@@ -353,6 +430,7 @@ def build_parser() -> argparse.ArgumentParser:
     portfolio_show.add_argument("--portfolio-id", type=int, required=True)
     explain = subparsers.add_parser("explain")
     explain.add_argument("symbol")
+    explain.add_argument("--run-id", default=None)
     return parser
 
 
@@ -370,7 +448,20 @@ def main(argv: list[str] | None = None) -> int:
         if command in {"doctor", "diagnostics"}:
             return _doctor(args.config)
         if command == "settings":
-            console.print(f"Active configuration: {args.config.resolve()}")
+            config = load_config(args.config)
+            console.print(
+                json.dumps(
+                    {
+                        **config.identity_payload(),
+                        "runtime_config_hash": config.runtime_config_hash,
+                        "canonical_run_config_hash": config.canonical_run_config_hash,
+                    },
+                    default=str,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    indent=2,
+                )
+            )
             return 0
         if command == "version":
             from personal_alpha_terminal import __version__
@@ -378,14 +469,16 @@ def main(argv: list[str] | None = None) -> int:
             console.print(f"Personal Alpha Terminal {__version__}")
             return 0
         if command == "research":
-            return _research()
+            return _research(args.config)
         if command == "backtest":
-            return _backtest_status()
+            return _backtest_status(args.config)
         if command == "explain":
-            return _explain(args.config, args.symbol)
+            return _explain(args.config, args.symbol, args.run_id)
         if command in {"accept", "reject", "watch"}:
-            return _review(args.recommendation_id, command, args.reason)
+            _verify_recommendation_run(args.config, args.run_id, args.recommendation_id)
+            return _review(args, command)
         if command == "mark-executed":
+            _verify_recommendation_run(args.config, args.run_id, args.recommendation_id)
             return _record_execution(args)
         if command == "portfolio":
             args.command = "portfolio-list"
@@ -400,7 +493,7 @@ def main(argv: list[str] | None = None) -> int:
         if command == "refresh":
             return run_daily(args.config, refresh=True)
         if command in {"data", "factors", "probability", "risk", "decisions"}:
-            return run_daily(args.config, refresh=False)
+            return _render_persisted_section(args.config, command, args.run_id)
         return run_daily(args.config, refresh=not args.no_refresh)
     except (FileNotFoundError, OSError, RuntimeError, ValueError) as error:
         logger.exception("Command failed")
