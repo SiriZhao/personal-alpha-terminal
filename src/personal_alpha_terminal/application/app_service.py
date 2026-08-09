@@ -238,9 +238,11 @@ class ApplicationService:
         *,
         name: str,
         cash_balance: float = 0.0,
+        currency: str = "USD",
     ) -> int:
         normalized = name.strip()
-        if not normalized or cash_balance < 0:
+        normalized_currency = currency.strip().upper()
+        if not normalized or cash_balance < 0 or normalized_currency != "USD":
             raise ValueError("portfolio name and non-negative cash are required")
         with self._factory.begin() as session:
             if session.scalar(select(Portfolio).where(Portfolio.name == normalized)) is not None:
@@ -248,7 +250,7 @@ class ApplicationService:
             model = Portfolio(
                 name=normalized,
                 description="Manual Charles Schwab tracking; no broker connection",
-                base_currency="USD",
+                base_currency=normalized_currency,
                 cash_balance=cash_balance,
             )
             session.add(model)
@@ -262,6 +264,8 @@ class ApplicationService:
         source: Path,
         as_of_date: date,
     ) -> PositionImportResult:
+        if as_of_date > datetime.now(UTC).date():
+            raise ValueError("portfolio as_of date cannot be in the future")
         parsed = parse_position_csv(source.read_bytes())
         with self._factory.begin() as session:
             return PositionImportService(session).import_snapshot(
@@ -287,6 +291,48 @@ class ApplicationService:
                 }
                 for item in portfolios
             )
+
+    def get_portfolio_status(self, portfolio_id: int) -> dict[str, object]:
+        with self._factory() as session:
+            portfolio = session.get(Portfolio, portfolio_id)
+            if portfolio is None:
+                raise ValueError("portfolio does not exist")
+            latest_date = session.scalar(
+                select(func.max(PortfolioPosition.as_of_date)).where(
+                    PortfolioPosition.portfolio_id == portfolio_id
+                )
+            )
+            positions = (
+                tuple(
+                    session.scalars(
+                        select(PortfolioPosition)
+                        .where(
+                            PortfolioPosition.portfolio_id == portfolio_id,
+                            PortfolioPosition.as_of_date == latest_date,
+                        )
+                        .order_by(PortfolioPosition.stock_id)
+                    )
+                )
+                if latest_date is not None
+                else ()
+            )
+            return {
+                "id": portfolio.id,
+                "name": portfolio.name,
+                "currency": portfolio.base_currency,
+                "cash": float(portfolio.cash_balance),
+                "as_of": latest_date,
+                "positions": tuple(
+                    {
+                        "symbol": item.stock.symbol,
+                        "shares": float(item.quantity),
+                        "average_cost": (
+                            float(item.average_cost) if item.average_cost is not None else None
+                        ),
+                    }
+                    for item in positions
+                ),
+            }
 
     def get_action_candidates(self) -> tuple[CandidateView, ...]:
         with self._factory() as session:

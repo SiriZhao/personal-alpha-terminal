@@ -19,6 +19,7 @@ from personal_alpha_terminal.models import (
 )
 from personal_alpha_terminal.quant_engine.input_assembler import (
     AssembledDailyInput,
+    AssembledResearchInput,
     PortfolioInputPosition,
     ProductionDailyQuantInputAssembler,
 )
@@ -108,13 +109,52 @@ class ProductionDailyWorkflow:
         self.pipeline = DailyQuantPipeline()
         self.sessions = CertifiedUSSessionService(session)
 
-    def run(self, *, portfolio_id: int, decision_time: datetime) -> TodayResult:
+    def run(self, *, portfolio_id: int | None, decision_time: datetime) -> TodayResult:
         if decision_time.tzinfo is None:
             raise ValueError("decision_time must be timezone-aware")
         try:
-            assembled = self.assembler.assemble(
-                portfolio_id=portfolio_id,
+            research = self.assembler.assemble_research(
                 decision_time=decision_time,
+            )
+        except (ArithmeticError, LookupError, RuntimeError, ValueError) as error:
+            blocker = str(error) or type(error).__name__
+            run_id = 0
+            if portfolio_id is not None:
+                run_id = self._persist_blocked(
+                    portfolio_id=portfolio_id,
+                    decision_time=decision_time,
+                    blockers=(blocker,),
+                ).id
+            return TodayResult(
+                run_id=run_id,
+                decision_time=decision_time,
+                market_session="UNKNOWN",
+                data_freshness="UNAVAILABLE",
+                status="BLOCKED",
+                data_certification="BLOCKED",
+                model_status="NOT_READY",
+                portfolio_status=("NOT_INITIALIZED" if portfolio_id is None else "UNCHANGED"),
+                risk_regime="SCORE_UNAVAILABLE",
+                gross_target=None,
+                cash_target=None,
+                recommendations=(),
+                no_rebalance_reason=None,
+                blockers=(blocker,),
+                warnings=(),
+                data_hash="UNAVAILABLE",
+                model_hash="UNAVAILABLE",
+                config_hash="UNAVAILABLE",
+                pipeline_stages=self._blocked_research_stages(blocker),
+            )
+
+        if portfolio_id is None:
+            blocker = "PORTFOLIO NOT INITIALIZED; run portfolio-init or portfolio-import"
+            return self._research_only_result(research, blocker)
+
+        try:
+            assembled = self.assembler.complete_with_portfolio(
+                research,
+                portfolio_id=portfolio_id,
             )
             output = self.pipeline.run(assembled.inputs)
         except (ArithmeticError, LookupError, RuntimeError, ValueError) as error:
@@ -143,7 +183,18 @@ class ProductionDailyWorkflow:
                 data_hash="UNAVAILABLE",
                 model_hash="UNAVAILABLE",
                 config_hash="UNAVAILABLE",
-                pipeline_stages=(),
+                pipeline_stages=(*self._research_stages(research), PipelineStage(
+                    "Portfolio Construction", "BLOCKED", blocker
+                )),
+                factors=research.factors,
+                data_cutoff=research.data_cutoff,
+                universe_count=research.universe_count,
+                source_ids=research.source_ids,
+                disabled_components=research.disabled_components,
+                benchmark_symbol=research.benchmark_symbol,
+                benchmark_observations=research.benchmark_observations,
+                benchmark_period_return=research.benchmark_period_return,
+                benchmark_annualized_volatility=research.benchmark_annualized_volatility,
             )
 
         inputs = assembled.inputs
@@ -273,6 +324,81 @@ class ProductionDailyWorkflow:
             assembled.parameter_fingerprint,
             assembled=assembled,
             output=output,
+        )
+
+    @staticmethod
+    def _research_stages(research: AssembledResearchInput) -> tuple[PipelineStage, ...]:
+        return (
+            PipelineStage("Data Quality Gate", "VALID", "CERTIFIED"),
+            PipelineStage("PIT Universe", "VALID", research.universe_snapshot_id),
+            PipelineStage("Point-in-Time Inputs", "VALID", "no future observations"),
+            PipelineStage(
+                "Feature Engine",
+                "VALID",
+                f"{len(research.factors)} PIT feature rows",
+            ),
+            PipelineStage(
+                "Factor Engine",
+                "VALID",
+                f"{len(research.factors)} cross-sectional factor rows",
+            ),
+            PipelineStage(
+                "Alpha Signals",
+                "VALID",
+                f"{len(research.alpha_signals)} model-approved signals",
+            ),
+        )
+
+    @staticmethod
+    def _blocked_research_stages(blocker: str) -> tuple[PipelineStage, ...]:
+        lowered = blocker.lower()
+        if "universe" in lowered:
+            return (PipelineStage("PIT Universe", "BLOCKED", blocker),)
+        if "total-return" in lowered or "point-in-time" in lowered or "pit" in lowered:
+            return (PipelineStage("Point-in-Time Inputs", "BLOCKED", blocker),)
+        if "alpha" in lowered or "model" in lowered:
+            return (PipelineStage("Alpha Signals", "BLOCKED", blocker),)
+        return (PipelineStage("Data Quality Gate", "BLOCKED", blocker),)
+
+    def _research_only_result(
+        self, research: AssembledResearchInput, blocker: str
+    ) -> TodayResult:
+        return TodayResult(
+            run_id=0,
+            decision_time=research.decision_time,
+            market_session="POST_CLOSE_DECISION",
+            data_freshness="CERTIFIED_AS_OF_DECISION",
+            status="BLOCKED",
+            data_certification="APPROVED",
+            model_status="APPROVED",
+            portfolio_status="NOT_INITIALIZED",
+            risk_regime="SCORE_UNAVAILABLE",
+            gross_target=None,
+            cash_target=None,
+            recommendations=(),
+            no_rebalance_reason=None,
+            blockers=(blocker,),
+            warnings=(),
+            data_hash=research.data_version,
+            model_hash=self.assembler.strategy.version,
+            config_hash=research.parameter_fingerprint,
+            pipeline_stages=(*self._research_stages(research), PipelineStage(
+                "Portfolio Construction", "BLOCKED", blocker
+            )),
+            factors=research.factors,
+            portfolio_value=None,
+            current_weights=None,
+            data_cutoff=research.data_cutoff,
+            universe_count=research.universe_count,
+            source_ids=research.source_ids,
+            disabled_components=research.disabled_components,
+            benchmark_symbol=research.benchmark_symbol,
+            benchmark_observations=research.benchmark_observations,
+            benchmark_period_return=research.benchmark_period_return,
+            benchmark_annualized_volatility=research.benchmark_annualized_volatility,
+            portfolio_positions=(),
+            cash_balance=None,
+            configured_target_volatility=None,
         )
 
     def _persist_blocked(

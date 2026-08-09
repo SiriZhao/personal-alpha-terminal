@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
+from hashlib import sha256
 from pathlib import Path
 from time import perf_counter
 from uuid import uuid4
@@ -9,7 +11,7 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from personal_alpha_terminal import __version__
+from personal_alpha_terminal import __build_version__, __version__
 from personal_alpha_terminal.application.daily_result import (
     BenchmarkSummary,
     DailyQuantResult,
@@ -26,6 +28,9 @@ from personal_alpha_terminal.application.daily_result import (
     RiskSummary,
     StageResult,
     StageStatus,
+)
+from personal_alpha_terminal.application.data_certification import (
+    DailyDataCertification,
 )
 from personal_alpha_terminal.application.data_service import DataService, SyncRunner
 from personal_alpha_terminal.application.quant_daily_service import (
@@ -128,7 +133,14 @@ class DailyQuantOrchestrator:
                 stages=stages,
             )
 
+        resolved_portfolio = self._resolve_portfolio(portfolio_id)
+        portfolio_issue = self._portfolio_preflight_issue(
+            requested=portfolio_id,
+            resolved=resolved_portfolio,
+        )
         data_health: tuple[DataHealthItem, ...] = ()
+        certification: DailyDataCertification | None = None
+        data_failure_reasons: list[str] = []
         stage_started = perf_counter()
         try:
             with self._factory.begin() as session:
@@ -140,12 +152,13 @@ class DailyQuantOrchestrator:
                 )
                 if refresh:
                     sync = data_service.sync_market_data(
-                        start_date=analysis_date
-                        - timedelta(days=max(7, self._settings.market_data_overlap_days)),
+                        start_date=data_service.refresh_start_date(
+                            analysis_date=analysis_date
+                        ),
                         end_date=analysis_date,
                     )
                     if sync.status == "BLOCKED":
-                        raise RuntimeError(
+                        data_failure_reasons.append(
                             "required provider refresh failed: "
                             + ", ".join(sync.failed_symbols)
                         )
@@ -153,75 +166,67 @@ class DailyQuantOrchestrator:
                         warnings.append(f"market refresh completed as {sync.status}")
                 readiness = data_service.get_data_readiness(as_of=now)
                 manifest = data_service.latest_manifest()
+                certification = data_service.daily_certification(
+                    analysis_date=analysis_date,
+                    decision_time=now,
+                )
                 data_health = (
                     DataHealthItem(
                         dataset="LIVE_RAW_OHLCV",
                         expected_date=analysis_date,
-                        latest_date=(manifest.end_date if manifest is not None else None),
+                        latest_date=certification.latest_date,
                         age_days=(
-                            (analysis_date - manifest.end_date).days
-                            if manifest is not None
+                            (analysis_date - certification.latest_date).days
+                            if certification.latest_date is not None
                             else None
                         ),
-                        coverage=None,
+                        coverage=certification.coverage,
                         missing_ratio=self._missing_ratio(manifest),
-                        source=(manifest.provider_name if manifest is not None else "UNAVAILABLE"),
-                        status=(
-                            StageStatus.PASS
-                            if readiness.code == "CERTIFIED"
-                            else (
-                                StageStatus.FAIL
-                                if readiness.code in {"EMPTY", "STALE", "PROVIDER_ERROR"}
-                                else StageStatus.WARN
-                            )
+                        source=certification.provider,
+                        status=certification.status,
+                        detail=(
+                            "; ".join((*certification.blockers, *certification.warnings))
+                            or readiness.technical_reason
                         ),
-                        detail=readiness.technical_reason,
                     ),
                 )
-                if readiness.code in {"EMPTY", "STALE", "PROVIDER_ERROR"}:
-                    raise RuntimeError(f"{readiness.code}: {readiness.technical_reason}")
-                if readiness.code != "CERTIFIED":
-                    warnings.append(
-                        f"live market data readiness is {readiness.code}; "
-                        "PIT and model gates remain authoritative"
-                    )
+                warnings.extend(certification.warnings)
+                if certification.status is StageStatus.FAIL_BLOCKING:
+                    data_failure_reasons.extend(certification.blockers)
+            if data_failure_reasons:
+                raise RuntimeError("; ".join(dict.fromkeys(data_failure_reasons)))
             stages["DATA"] = StageResult(
                 "DATA",
-                StageStatus.PASS if not warnings else StageStatus.WARN,
+                certification.status,
                 perf_counter() - stage_started,
-                "canonical market data loaded" if not warnings else warnings[-1],
-                {"refresh": refresh},
+                (
+                    "canonical required market data certified"
+                    if certification.status is StageStatus.PASS
+                    else "optional data degraded; required strategy inputs are intact"
+                ),
+                {
+                    "refresh": refresh,
+                    **certification.metadata(),
+                    "output_row_count": certification.valid_bars,
+                },
             )
         except (OSError, RuntimeError, ValueError) as error:
             blockers.append(str(error))
+            if portfolio_issue is not None:
+                blockers.append(portfolio_issue)
+            evidence = certification.metadata() if certification is not None else {}
             stages["DATA"] = StageResult(
-                "DATA", StageStatus.FAIL, perf_counter() - stage_started, str(error), {}
-            )
-            return self._finalize_blocked(
-                run_id,
-                started_at,
-                now,
-                analysis_date,
-                market.trade_date,
-                market.session.value,
-                market.structure_version.value,
-                stages,
-                data_health,
-                blockers,
-                warnings,
-            )
-
-        resolved_portfolio = self._resolve_portfolio(portfolio_id)
-        if resolved_portfolio is None:
-            blockers.append(
-                "PORTFOLIO NOT INITIALIZED; run portfolio-init or portfolio-import"
-            )
-            stages["PORTFOLIO"] = StageResult(
-                "PORTFOLIO",
-                StageStatus.FAIL,
-                0.0,
-                blockers[-1],
-                {"configured_portfolio_id": portfolio_id},
+                "DATA",
+                StageStatus.FAIL_BLOCKING,
+                perf_counter() - stage_started,
+                str(error),
+                {
+                    "refresh": refresh,
+                    **evidence,
+                    "output_row_count": (
+                        certification.valid_bars if certification is not None else 0
+                    ),
+                },
             )
             return self._finalize_blocked(
                 run_id,
@@ -251,10 +256,10 @@ class DailyQuantOrchestrator:
             if name != "PERSISTENCE" and name not in stages:
                 stages[name] = StageResult(
                     name,
-                    StageStatus.SKIPPED,
+                    StageStatus.NOT_RUN,
                     0.0,
-                    "not reached by the production pipeline",
-                    {},
+                    f"NOT RUN; Blocked by {self._failed_stage(stages)}",
+                    {"blocked_by": self._failed_stage(stages)},
                 )
         result = self._build_result(
             run_id=run_id,
@@ -279,6 +284,22 @@ class DailyQuantOrchestrator:
             ids = tuple(session.scalars(select(Portfolio.id).order_by(Portfolio.id).limit(2)))
         return ids[0] if len(ids) == 1 else None
 
+    def _portfolio_preflight_issue(
+        self,
+        *,
+        requested: int | None,
+        resolved: int | None,
+    ) -> str | None:
+        if resolved is not None:
+            return None
+        with self._factory() as session:
+            count = len(tuple(session.scalars(select(Portfolio.id).limit(2))))
+        if count == 0:
+            return "PORTFOLIO NOT INITIALIZED; run portfolio-init or portfolio-import"
+        if requested is not None:
+            return f"configured portfolio id {requested} does not exist"
+        return "multiple portfolios exist; select portfolio_id explicitly"
+
     def _analysis_date(self, timestamp_et: datetime, session: MarketSession) -> date:
         candidate = timestamp_et.date()
         if session is MarketSession.POSTMARKET and self._calendar.is_trading_day(candidate):
@@ -296,6 +317,8 @@ class DailyQuantOrchestrator:
             "Data Quality Gate": "DATA",
             "PIT Universe": "PIT",
             "Point-in-Time Inputs": "PIT",
+            "Feature Engine": "FEATURE",
+            "Factor Engine": "FACTOR",
             "Alpha Signals": "SIGNAL",
             "Risk Model": "RISK",
             "Risk Budget": "RISK",
@@ -307,15 +330,51 @@ class DailyQuantOrchestrator:
             name = mapping.get(item.name)
             if name is None:
                 continue
-            status = StageStatus.FAIL if item.status == "BLOCKED" else StageStatus.PASS
+            status = (
+                StageStatus.FAIL_BLOCKING
+                if item.status == "BLOCKED"
+                else StageStatus.PASS
+            )
             previous = stages.get(name)
             if previous is not None and previous.status is StageStatus.FAIL:
                 continue
-            stages[name] = StageResult(name, status, 0.0, item.detail, {"source": item.name})
+            if name == "DATA" and previous is not None and status is StageStatus.PASS:
+                continue
+            stages[name] = StageResult(
+                name,
+                status,
+                0.0,
+                item.detail,
+                {
+                    "source": item.name,
+                    "output_row_count": (
+                        len(workflow.factors)
+                        if name in {"FEATURE", "FACTOR"}
+                        else (
+                            len(workflow.recommendations)
+                            if name in {"SIGNAL", "DECISION", "EXECUTION"}
+                            else 1
+                        )
+                    ),
+                },
+            )
         if workflow.factors:
             stages.setdefault(
                 "FEATURE",
-                StageResult("FEATURE", StageStatus.PASS, 0.0, "PIT price features computed", {}),
+                StageResult(
+                    "FEATURE",
+                    StageStatus.PASS,
+                    0.0,
+                    "PIT price features computed",
+                    {
+                        "feature_names": sorted(
+                            {name for item in workflow.factors for name in item.components}
+                        ),
+                        "valid_count": len(workflow.factors),
+                        "missing_count": max(0, workflow.universe_count - len(workflow.factors)),
+                        "output_row_count": len(workflow.factors),
+                    },
+                ),
             )
             stages.setdefault(
                 "FACTOR",
@@ -324,17 +383,23 @@ class DailyQuantOrchestrator:
                     StageStatus.PASS,
                     0.0,
                     f"{len(workflow.factors)} cross-sectional observations",
-                    {},
+                    {
+                        "factor_names": sorted(
+                            {name for item in workflow.factors for name in item.components}
+                        ),
+                        "cross_sectional_sample_size": len(workflow.factors),
+                        "output_row_count": len(workflow.factors),
+                    },
                 ),
             )
         stages.setdefault(
             "PROBABILITY",
             StageResult(
                 "PROBABILITY",
-                StageStatus.SKIPPED,
+                StageStatus.PASS_DEGRADED,
                 0.0,
-                "no validated PIT conditional overlay; base alpha is unchanged",
-                {"position_influence": 0.0},
+                "no calibrated PIT conditional overlay; deterministic base alpha is unchanged",
+                {"position_influence": 0.0, "output_row_count": 1},
             ),
         )
         first_quant = next(
@@ -395,7 +460,7 @@ class DailyQuantOrchestrator:
                 None,
                 "INSUFFICIENT EVIDENCE",
                 "NOT CALIBRATED OOS",
-                "SKIPPED",
+                "PASS_DEGRADED",
             ),
         )
         target_weights = workflow.target.target_weights if workflow.target else {}
@@ -558,6 +623,9 @@ class DailyQuantOrchestrator:
                 "database_run_id": workflow.run_id,
                 "data_hash": workflow.data_hash,
                 "model_hash": workflow.model_hash,
+                "build_identifier": __build_version__,
+                "git_commit": "UNAVAILABLE",
+                "random_seed": None,
                 "source_ids": workflow.source_ids,
                 "universe_count": workflow.universe_count,
                 "manual_broker": "Charles Schwab",
@@ -573,7 +641,41 @@ class DailyQuantOrchestrator:
                     }
                 )
             ),
+            self._decision_traces(factors, decisions, target_weights, current),
         )
+
+    @staticmethod
+    def _decision_traces(
+        factors: tuple[FactorRow, ...],
+        decisions: tuple[DecisionRow, ...],
+        target_weights: dict[str, float],
+        current_weights: dict[str, float],
+    ) -> dict[str, dict[str, object]]:
+        decision_by_symbol = {item.symbol: item for item in decisions}
+        traces: dict[str, dict[str, object]] = {}
+        for factor in factors:
+            decision = decision_by_symbol.get(factor.symbol)
+            traces[factor.symbol] = {
+                "data_quality": decision.data_quality if decision else "CERTIFIED_PIT",
+                "factor_raw_values": factor.components,
+                "factor_normalized_values": factor.components,
+                "cross_sectional_rank": factor.rank,
+                "composite_alpha": factor.composite,
+                "expected_alpha": factor.expected_alpha,
+                "confidence": factor.confidence,
+                "raw_target": target_weights.get(factor.symbol),
+                "risk_adjusted_target": target_weights.get(factor.symbol),
+                "current_weight": current_weights.get(factor.symbol, 0.0),
+                "target_weight": target_weights.get(factor.symbol),
+                "delta_weight": (
+                    target_weights[factor.symbol] - current_weights.get(factor.symbol, 0.0)
+                    if factor.symbol in target_weights
+                    else None
+                ),
+                "final_action": decision.action if decision else "REJECTED_OR_HOLD",
+                "rejection_reason": None if decision else factor.status,
+            }
+        return traces
 
     @staticmethod
     def _execution_plan(
@@ -642,12 +744,14 @@ class DailyQuantOrchestrator:
                         "PERSISTENCE",
                         StageStatus.PASS,
                         0.0,
-                        "immutable JSON snapshot saved",
-                        {},
+                        "immutable snapshot and stage evidence saved",
+                        {"output_row_count": 1},
                     ),
                 ),
                 finished_at=datetime.now(UTC),
             )
+            certificate = updated.persist_evidence(self._snapshot_root)
+            updated = replace(updated, certificate_path=str(certificate.resolve()))
             updated.persist(self._snapshot_root)
             return updated
         except OSError as error:
@@ -681,7 +785,11 @@ class DailyQuantOrchestrator:
         for name in _STAGE_ORDER:
             if name != "PERSISTENCE" and name not in stages:
                 stages[name] = StageResult(
-                    name, StageStatus.SKIPPED, 0.0, "blocked by an earlier required stage", {}
+                    name,
+                    StageStatus.NOT_RUN,
+                    0.0,
+                    f"NOT RUN; Blocked by {self._failed_stage(stages)}",
+                    {"blocked_by": self._failed_stage(stages)},
                 )
         result = DailyQuantResult(
             run_id,
@@ -703,7 +811,7 @@ class DailyQuantOrchestrator:
             (ProbabilityRow(
                 "Validated conditional overlay", "base alpha confidence / position cap", 0,
                 None, None, None, None, None, None, None, None,
-                "INSUFFICIENT EVIDENCE", "NOT CALIBRATED OOS", "SKIPPED"
+                "INSUFFICIENT EVIDENCE", "NOT CALIBRATED OOS", "NOT_RUN"
             ),),
             (),
             PortfolioSummary(
@@ -748,8 +856,14 @@ class DailyQuantOrchestrator:
             (),
             tuple(blockers),
             tuple(warnings),
-            {"automatic_execution": False, "manual_broker": "Charles Schwab"},
-            "UNAVAILABLE",
+            {
+                "automatic_execution": False,
+                "manual_broker": "Charles Schwab",
+                "build_identifier": __build_version__,
+                "git_commit": "UNAVAILABLE",
+                "random_seed": None,
+            },
+            self._config_fingerprint(),
             (),
         )
         return self._persist_result(result)
@@ -807,3 +921,13 @@ class DailyQuantOrchestrator:
             ),
             "GATE",
         )
+
+    def _config_fingerprint(self) -> str:
+        safe = {
+            key: value
+            for key, value in self._settings.model_dump(mode="json").items()
+            if not any(marker in key.lower() for marker in ("key", "token", "secret", "password"))
+        }
+        return sha256(
+            json.dumps(safe, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()

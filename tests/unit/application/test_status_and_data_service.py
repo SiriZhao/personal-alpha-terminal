@@ -9,7 +9,11 @@ from personal_alpha_terminal.data.market_data.schemas import (
     DailyUpdateReport,
     InstrumentUpdateResult,
 )
-from personal_alpha_terminal.models import DataSnapshotManifest, MarketUniverseMember
+from personal_alpha_terminal.models import (
+    DataSnapshotManifest,
+    MarketUniverseMember,
+    MarketUniverseSnapshot,
+)
 
 
 def _successful_report() -> DailyUpdateReport:
@@ -131,3 +135,32 @@ def test_minimum_universe_uses_machine_segments_not_human_roles(
     assert {item.size_bucket for item in members} == {"unknown"}
     assert {item.listing_age_bucket for item in members} == {"unknown"}
     assert all("minimum liquid research universe:" in item.reason for item in members)
+
+
+def test_sync_repairs_an_existing_empty_current_universe_snapshot(
+    session_factory, tmp_path: Path
+) -> None:
+    with session_factory.begin() as session:
+        session.add(
+            MarketUniverseSnapshot(
+                market="US",
+                as_of_date=date(2026, 8, 1),
+                source="console_minimum_universe",
+                provider="application_config",
+                available_time=datetime(2026, 8, 1, tzinfo=UTC),
+                ingested_time=datetime(2026, 8, 1, tzinfo=UTC),
+            )
+        )
+        session.flush()
+        service = DataService(
+            session,
+            Settings(database_url="sqlite://"),
+            snapshot_root=tmp_path,
+            sync_runner=lambda _session, _start, _end: _successful_report(),
+        )
+        service.sync_market_data(
+            start_date=date(2026, 7, 1), end_date=date(2026, 8, 1)
+        )
+        members = tuple(session.query(MarketUniverseMember).all())
+
+    assert len(members) == len(MINIMUM_US_RESEARCH_UNIVERSE)

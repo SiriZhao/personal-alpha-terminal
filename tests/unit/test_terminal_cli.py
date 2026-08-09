@@ -1,3 +1,4 @@
+import json
 from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
@@ -85,3 +86,26 @@ def test_portfolio_import_is_preview_only_without_commit(tmp_path: Path, monkeyp
 
     assert terminal_cli._portfolio_command(args) == 0
     assert commits == []
+
+
+def test_explain_reads_only_persisted_decision_trace(tmp_path: Path, monkeypatch) -> None:
+    config = _config(tmp_path)
+    certificate = config.report_dir / "daily-runs" / "run-1" / "run_certificate.json"
+    certificate.parent.mkdir(parents=True)
+    certificate.write_text(
+        json.dumps(
+            {
+                "run_id": "run-1",
+                "decision_traces": {
+                    "MSFT": {
+                        "data_quality": "CERTIFIED_PIT",
+                        "composite_alpha": 0.25,
+                        "final_action": "HOLD",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(terminal_cli, "load_config", lambda _path: config)
+    assert terminal_cli._explain(tmp_path / "config.yaml", "msft") == 0

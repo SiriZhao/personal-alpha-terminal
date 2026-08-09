@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import sys
 from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from rich.console import Console
 from rich.panel import Panel
@@ -98,7 +99,11 @@ def _record_execution(args: argparse.Namespace) -> int:
 def _portfolio_command(args: argparse.Namespace) -> int:
     service = _application_service()
     if args.command == "portfolio-init":
-        portfolio_id = service.create_portfolio(name=args.name, cash_balance=args.cash)
+        portfolio_id = service.create_portfolio(
+            name=args.name,
+            cash_balance=args.cash,
+            currency=args.currency,
+        )
         console.print(f"Created portfolio id={portfolio_id}; broker connection: NONE")
         return 0
     if args.command == "portfolio-import":
@@ -132,6 +137,25 @@ def _portfolio_command(args: argparse.Namespace) -> int:
         )
         for warning in result.warnings:
             console.print(f"WARNING: {warning}")
+        return 0
+    if args.command == "portfolio-show":
+        status = service.get_portfolio_status(args.portfolio_id)
+        console.print(
+            f"id={status['id']} name={status['name']} currency={status['currency']} "
+            f"cash={status['cash']} as_of={status['as_of']}"
+        )
+        table = Table(title="REAL PORTFOLIO / MANUAL SCHWAB LEDGER")
+        table.add_column("Ticker")
+        table.add_column("Shares", justify="right")
+        table.add_column("Average cost", justify="right")
+        positions = cast(tuple[dict[str, object], ...], status["positions"])
+        for item in positions:
+            table.add_row(
+                str(item["symbol"]),
+                str(item["shares"]),
+                str(item["average_cost"] if item["average_cost"] is not None else "--"),
+            )
+        console.print(table)
         return 0
     portfolios = service.list_portfolios()
     if not portfolios:
@@ -256,6 +280,31 @@ def _backtest_status() -> int:
     return 0 if availability.available else 3
 
 
+def _explain(config_path: Path, symbol: str) -> int:
+    config = load_config(config_path)
+    candidates = sorted(
+        (config.report_dir / "daily-runs").glob("*/run_certificate.json"),
+        key=lambda item: item.stat().st_mtime,
+        reverse=True,
+    )
+    if not candidates:
+        raise ValueError("no quant run certificate exists; run daily first")
+    certificate = json.loads(candidates[0].read_text(encoding="utf-8"))
+    normalized = symbol.strip().upper()
+    trace = certificate.get("decision_traces", {}).get(normalized)
+    if not isinstance(trace, dict):
+        raise ValueError(f"{normalized} is absent from run {certificate.get('run_id')}")
+    table = Table(title=f"DECISION TRACE / {normalized} / {certificate.get('run_id')}")
+    table.add_column("Evidence")
+    table.add_column("Value", overflow="fold")
+    for key, value in trace.items():
+        table.add_row(str(key), json.dumps(value, ensure_ascii=False, sort_keys=True))
+    console.print(table)
+    console.print(f"Certificate: {candidates[0].resolve()}")
+    console.print("LLM contribution: NONE")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="PersonalAlphaTerminal")
     parser.add_argument("--config", type=Path, default=Path("config.yaml"))
@@ -292,6 +341,7 @@ def build_parser() -> argparse.ArgumentParser:
     portfolio_init = subparsers.add_parser("portfolio-init")
     portfolio_init.add_argument("--name", default="My Portfolio")
     portfolio_init.add_argument("--cash", type=float, default=0.0)
+    portfolio_init.add_argument("--currency", default="USD")
     portfolio_import = subparsers.add_parser("portfolio-import")
     portfolio_import.add_argument("csv", type=Path)
     portfolio_import.add_argument("--portfolio-id", type=int, required=True)
@@ -299,6 +349,10 @@ def build_parser() -> argparse.ArgumentParser:
     portfolio_import.add_argument("--commit", action="store_true")
     subparsers.add_parser("portfolio-list")
     subparsers.add_parser("portfolio", help="Alias for portfolio-list")
+    portfolio_show = subparsers.add_parser("portfolio-show")
+    portfolio_show.add_argument("--portfolio-id", type=int, required=True)
+    explain = subparsers.add_parser("explain")
+    explain.add_argument("symbol")
     return parser
 
 
@@ -327,6 +381,8 @@ def main(argv: list[str] | None = None) -> int:
             return _research()
         if command == "backtest":
             return _backtest_status()
+        if command == "explain":
+            return _explain(args.config, args.symbol)
         if command in {"accept", "reject", "watch"}:
             return _review(args.recommendation_id, command, args.reason)
         if command == "mark-executed":
@@ -334,7 +390,12 @@ def main(argv: list[str] | None = None) -> int:
         if command == "portfolio":
             args.command = "portfolio-list"
             return _portfolio_command(args)
-        if command in {"portfolio-init", "portfolio-import", "portfolio-list"}:
+        if command in {
+            "portfolio-init",
+            "portfolio-import",
+            "portfolio-list",
+            "portfolio-show",
+        }:
             return _portfolio_command(args)
         if command == "refresh":
             return run_daily(args.config, refresh=True)

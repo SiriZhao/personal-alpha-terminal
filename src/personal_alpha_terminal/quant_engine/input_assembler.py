@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from personal_alpha_terminal.data.us_market.repository import USPointInTimeRepository
 from personal_alpha_terminal.models import Portfolio, PortfolioPosition, Price, SecurityMaster
+from personal_alpha_terminal.quant_engine.alpha import AlphaSignal
 from personal_alpha_terminal.quant_engine.model_registry import ModelRegistryService
 from personal_alpha_terminal.quant_engine.production_pipeline import DailyQuantInput
 from personal_alpha_terminal.quant_engine.risk.budget import PortfolioRiskState
@@ -18,7 +19,11 @@ from personal_alpha_terminal.quant_engine.strategies.us_adaptive_alpha_core impo
     StrategyFactorSnapshot,
     USAdaptiveAlphaCoreV1,
 )
-from personal_alpha_terminal.research.data_gate import ResearchDataRequest, ResearchPurpose
+from personal_alpha_terminal.research.data_gate import (
+    ResearchDataAuthorization,
+    ResearchDataRequest,
+    ResearchPurpose,
+)
 from personal_alpha_terminal.research.service import ResearchDataGateService
 
 
@@ -47,6 +52,28 @@ class AssembledDailyInput:
     cash_balance: float
 
 
+@dataclass(frozen=True, slots=True)
+class AssembledResearchInput:
+    authorization: ResearchDataAuthorization
+    decision_time: datetime
+    alpha_signals: tuple[AlphaSignal, ...]
+    returns: pd.DataFrame
+    benchmark_returns: pd.Series
+    risk_metadata: tuple[AssetRiskMetadata, ...]
+    disabled_components: tuple[str, ...]
+    parameter_fingerprint: str
+    factors: tuple[StrategyFactorSnapshot, ...]
+    universe_count: int
+    data_cutoff: datetime
+    source_ids: tuple[str, ...]
+    benchmark_symbol: str
+    benchmark_observations: int
+    benchmark_period_return: float | None
+    benchmark_annualized_volatility: float | None
+    universe_snapshot_id: str
+    data_version: str
+
+
 class ProductionDailyQuantInputAssembler:
     """The only production DB -> DailyQuantInput adapter.
 
@@ -67,6 +94,20 @@ class ProductionDailyQuantInputAssembler:
         history_days: int = 550,
         benchmark_symbol: str = "SPY",
     ) -> AssembledDailyInput:
+        research = self.assemble_research(
+            decision_time=decision_time,
+            history_days=history_days,
+            benchmark_symbol=benchmark_symbol,
+        )
+        return self.complete_with_portfolio(research, portfolio_id=portfolio_id)
+
+    def assemble_research(
+        self,
+        *,
+        decision_time: datetime,
+        history_days: int = 550,
+        benchmark_symbol: str = "SPY",
+    ) -> AssembledResearchInput:
         if decision_time.tzinfo is None:
             raise ValueError("decision_time must be timezone-aware")
         universe = self.repository.certified_universe(as_of=decision_time)
@@ -152,31 +193,13 @@ class ProductionDailyQuantInputAssembler:
             )
             for row in metadata.itertuples(index=False)
         )
-        (
-            current_weights,
-            portfolio_value,
-            portfolio_positions,
-            cash_balance,
-        ) = self._portfolio_state(
-            portfolio_id=portfolio_id, decision_time=decision_time
-        )
-        risk_state = self._risk_state(returns, benchmark_returns, current_weights)
-        return AssembledDailyInput(
-            DailyQuantInput(
-                authorization=authorization,
-                decision_time=decision_time,
-                alpha_signals=strategy_result.signals,
-                returns=returns,
-                benchmark_returns=benchmark_returns,
-                risk_metadata=risk_metadata,
-                current_weights=current_weights,
-                portfolio_value=portfolio_value,
-                portfolio_risk_state=risk_state,
-                regime=None,
-                pit_valid=True,
-                universe_snapshot_id=universe.snapshot_id,
-                data_quality="CERTIFIED",
-            ),
+        return AssembledResearchInput(
+            authorization,
+            decision_time,
+            tuple(strategy_result.signals),
+            returns,
+            benchmark_returns,
+            risk_metadata,
             strategy_result.disabled_components,
             strategy_result.parameter_fingerprint,
             strategy_result.factors,
@@ -195,6 +218,53 @@ class ProductionDailyQuantInputAssembler:
                 if len(benchmark_returns) > 1
                 else None
             ),
+            universe.snapshot_id,
+            universe.data_version,
+        )
+
+    def complete_with_portfolio(
+        self,
+        research: AssembledResearchInput,
+        *,
+        portfolio_id: int,
+    ) -> AssembledDailyInput:
+        (
+            current_weights,
+            portfolio_value,
+            portfolio_positions,
+            cash_balance,
+        ) = self._portfolio_state(
+            portfolio_id=portfolio_id, decision_time=research.decision_time
+        )
+        risk_state = self._risk_state(
+            research.returns, research.benchmark_returns, current_weights
+        )
+        return AssembledDailyInput(
+            DailyQuantInput(
+                authorization=research.authorization,
+                decision_time=research.decision_time,
+                alpha_signals=research.alpha_signals,
+                returns=research.returns,
+                benchmark_returns=research.benchmark_returns,
+                risk_metadata=research.risk_metadata,
+                current_weights=current_weights,
+                portfolio_value=portfolio_value,
+                portfolio_risk_state=risk_state,
+                regime=None,
+                pit_valid=True,
+                universe_snapshot_id=research.universe_snapshot_id,
+                data_quality="CERTIFIED",
+            ),
+            research.disabled_components,
+            research.parameter_fingerprint,
+            research.factors,
+            research.universe_count,
+            research.data_cutoff,
+            research.source_ids,
+            research.benchmark_symbol,
+            research.benchmark_observations,
+            research.benchmark_period_return,
+            research.benchmark_annualized_volatility,
             portfolio_positions,
             cash_balance,
         )

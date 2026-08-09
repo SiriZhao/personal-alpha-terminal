@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import platform
+import statistics
+import sys
 from dataclasses import asdict, dataclass
 from datetime import date, datetime
 from enum import StrEnum
@@ -10,9 +13,15 @@ from typing import Any, cast
 
 class StageStatus(StrEnum):
     PASS = "PASS"
-    WARN = "WARN"
-    FAIL = "FAIL"
-    SKIPPED = "SKIPPED"
+    PASS_DEGRADED = "PASS_DEGRADED"
+    FAIL_BLOCKING = "FAIL_BLOCKING"
+    NOT_RUN = "NOT_RUN"
+
+    # Compatibility aliases for persisted pre-certificate snapshots.  New output
+    # always serializes the explicit values above.
+    WARN = "PASS_DEGRADED"
+    FAIL = "FAIL_BLOCKING"
+    SKIPPED = "NOT_RUN"
 
 
 class DecisionReadiness(StrEnum):
@@ -201,6 +210,8 @@ class DailyQuantResult:
     provenance: dict[str, object]
     config_hash: str
     model_versions: tuple[str, ...]
+    decision_traces: dict[str, dict[str, object]] | None = None
+    certificate_path: str | None = None
 
     @property
     def duration_seconds(self) -> float:
@@ -208,7 +219,36 @@ class DailyQuantResult:
 
     @property
     def actionable(self) -> bool:
-        return self.decision_readiness is DecisionReadiness.READY
+        required = {
+            "CALENDAR",
+            "DATA",
+            "PIT",
+            "FEATURE",
+            "FACTOR",
+            "SIGNAL",
+            "PROBABILITY",
+            "PORTFOLIO",
+            "RISK",
+            "DECISION",
+            "EXECUTION",
+        }
+        completed = {
+            item.name
+            for item in self.stages
+            if item.status in {StageStatus.PASS, StageStatus.PASS_DEGRADED}
+        }
+        return (
+            self.decision_readiness is DecisionReadiness.READY
+            and required <= completed
+        )
+
+    @property
+    def run_classification(self) -> str:
+        if not self.actionable:
+            return "INVALID_NON_ACTIONABLE"
+        if self.execution_plan.legs:
+            return "CERTIFIED_ACTIONABLE"
+        return "CERTIFIED_NO_ACTION"
 
     def to_dict(self) -> dict[str, Any]:
         return cast(dict[str, Any], _json_value(asdict(self)))
@@ -224,6 +264,94 @@ class DailyQuantResult:
         temporary.replace(output)
         return output
 
+    def persist_evidence(self, directory: Path) -> Path:
+        """Persist stage manifests and the run certificate from this exact result.
+
+        This method never calculates quant values.  It materializes evidence already
+        produced by the canonical pipeline so every manifest has the same run id and
+        cutoff as the terminal report.
+        """
+
+        run_directory = directory / self.run_id
+        run_directory.mkdir(parents=True, exist_ok=True)
+        for stage in self.stages:
+            payload = {
+                "run_id": self.run_id,
+                "analysis_date": self.analysis_date.isoformat(),
+                "trade_date": self.trade_date.isoformat(),
+                "data_cutoff": self.data_cutoff.isoformat() if self.data_cutoff else None,
+                "stage": stage.name,
+                "stage_version": self.version,
+                "status": stage.status.value,
+                "duration_seconds": stage.duration_seconds,
+                "message": stage.message,
+                "diagnostics": stage.metadata,
+                "input_snapshot_hash": self.provenance.get("data_hash", "UNAVAILABLE"),
+                "output_row_count": stage.metadata.get("output_row_count", 0),
+            }
+            _atomic_json(run_directory / f"{stage.name.lower()}_manifest.json", payload)
+        stage_evidence = {
+            item.name: _json_value(item.metadata) for item in self.stages
+        }
+        certificate = {
+            "certificate_schema": "pat-quant-run-certificate-v1",
+            "run_id": self.run_id,
+            "classification": self.run_classification,
+            "trading_use": (
+                "MANUAL_REVIEW_REQUIRED" if self.actionable else "DO_NOT_USE_FOR_TRADING"
+            ),
+            "version": self.version,
+            "build_identifier": self.provenance.get("build_identifier", self.version),
+            "git_commit": self.provenance.get("git_commit", "UNAVAILABLE"),
+            "random_seed": self.provenance.get("random_seed"),
+            "runtime": {
+                "python": platform.python_version(),
+                "implementation": platform.python_implementation(),
+                "platform": sys.platform,
+            },
+            "started_at": self.started_at.isoformat(),
+            "finished_at": self.finished_at.isoformat(),
+            "analysis_date": self.analysis_date.isoformat(),
+            "trade_date": self.trade_date.isoformat(),
+            "market_session": self.market_session,
+            "data_cutoff": self.data_cutoff.isoformat() if self.data_cutoff else None,
+            "config_hash": self.config_hash,
+            "model_versions": list(self.model_versions),
+            "stages": [_json_value(asdict(item)) for item in self.stages],
+            "stage_evidence": stage_evidence,
+            "data_certification": stage_evidence.get("DATA", {}),
+            "data": [_json_value(asdict(item)) for item in self.data_health],
+            "factor_count": len(self.factors),
+            "factor_statistics": _factor_statistics(self.factors),
+            "candidate_count": len(self.candidates),
+            "signals": {
+                "universe_size": self.provenance.get("universe_count", 0),
+                "eligible": len(self.factors),
+                "top_candidates": [item.symbol for item in self.candidates],
+                "rejected": len(self.rejected_signals),
+            },
+            "probability": [_json_value(asdict(item)) for item in self.probabilities],
+            "portfolio": _json_value(asdict(self.portfolio)),
+            "risk": _json_value(asdict(self.risk)),
+            "decision_counts": {
+                "BUY": sum(
+                    item.action in {"BUY", "ADD", "INCREASE"}
+                    for item in self.final_decisions
+                ),
+                "SELL": sum(item.action in {"SELL", "REDUCE"} for item in self.final_decisions),
+                "HOLD": sum(item.action == "HOLD" for item in self.final_decisions),
+                "REJECTED": len(self.rejected_signals),
+            },
+            "benchmarks": [_json_value(asdict(item)) for item in self.benchmarks],
+            "blockers": list(self.blockers),
+            "warnings": list(self.warnings),
+            "provenance": _json_value(self.provenance),
+            "decision_traces": _json_value(self.decision_traces or {}),
+        }
+        target = run_directory / "run_certificate.json"
+        _atomic_json(target, certificate)
+        return target
+
 
 def _json_value(value: Any) -> Any:
     if isinstance(value, dict):
@@ -235,3 +363,32 @@ def _json_value(value: Any) -> Any:
     if isinstance(value, StrEnum):
         return value.value
     return value
+
+
+def _atomic_json(path: Path, payload: object) -> None:
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(
+        json.dumps(_json_value(payload), ensure_ascii=False, sort_keys=True, indent=2),
+        encoding="utf-8",
+    )
+    temporary.replace(path)
+
+
+def _factor_statistics(rows: tuple[FactorRow, ...]) -> dict[str, dict[str, float | int]]:
+    names = sorted({name for row in rows for name in row.components})
+    result: dict[str, dict[str, float | int]] = {}
+    for name in names:
+        values = [row.components[name] for row in rows if name in row.components]
+        if not values:
+            continue
+        result[name] = {
+            "N": len(values),
+            "mean": statistics.fmean(values),
+            "std": statistics.pstdev(values) if len(values) > 1 else 0.0,
+            "min": min(values),
+            "median": statistics.median(values),
+            "max": max(values),
+            "missing": len(rows) - len(values),
+            "cross_sectional_rank_coverage": len(values) / len(rows) if rows else 0.0,
+        }
+    return result

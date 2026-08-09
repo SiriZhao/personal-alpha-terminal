@@ -12,6 +12,10 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from personal_alpha_terminal import __build_version__
+from personal_alpha_terminal.application.data_certification import (
+    DailyDataCertification,
+    DailyDataCertifier,
+)
 from personal_alpha_terminal.application.status import DataStatus, StatusDetail
 from personal_alpha_terminal.application.universe import (
     MINIMUM_US_RESEARCH_UNIVERSE,
@@ -154,6 +158,8 @@ class DataService:
         return outcome
 
     def sync_market_data(self, *, start_date: date, end_date: date) -> SyncOutcome:
+        self._register_minimum_universe()
+        self._create_universe_snapshot(end_date)
         requested_at = datetime.now(UTC)
         report = self._sync_runner(self._session, start_date, end_date)
         completed_at = datetime.now(UTC)
@@ -162,6 +168,45 @@ class DataService:
     def latest_manifest(self) -> DataSnapshotManifest | None:
         return self._session.scalar(
             select(DataSnapshotManifest).order_by(DataSnapshotManifest.completed_at.desc()).limit(1)
+        )
+
+    def daily_certification(
+        self, *, analysis_date: date, decision_time: datetime
+    ) -> DailyDataCertification:
+        return DailyDataCertifier(self._session, self._settings).certify(
+            analysis_date=analysis_date,
+            decision_time=decision_time,
+            manifest=self.latest_manifest(),
+        )
+
+    def refresh_start_date(self, *, analysis_date: date) -> date:
+        """Use a full bootstrap window until every required asset has model history."""
+
+        required = {
+            item.ticker for item in MINIMUM_US_RESEARCH_UNIVERSE if item.required
+        }
+        counts: dict[str, int] = {
+            symbol: int(count)
+            for symbol, count in self._session.execute(
+                select(Stock.symbol, func.count(Price.id))
+                .join(Price, Price.stock_id == Stock.id)
+                .where(
+                    Stock.market == "US",
+                    Stock.symbol.in_(sorted(required)),
+                    Price.trade_date <= analysis_date,
+                    Price.price_type.in_(("unadjusted_ohlcv", "index_level_ohlcv")),
+                )
+                .group_by(Stock.symbol)
+            ).all()
+        }
+        minimum_bars = max(
+            126,
+            min(504, int(self._settings.console_initial_history_days * 0.68)),
+        )
+        if any(int(counts.get(symbol, 0)) < minimum_bars for symbol in required):
+            return analysis_date - timedelta(days=self._settings.console_initial_history_days)
+        return analysis_date - timedelta(
+            days=max(7, self._settings.market_data_overlap_days)
         )
 
     def _run_market_engine(
@@ -206,25 +251,35 @@ class DataService:
                 MarketUniverseSnapshot.source == "console_minimum_universe",
             )
         )
-        if existing is not None:
-            return
         now = datetime.now(UTC)
-        snapshot = MarketUniverseSnapshot(
-            market="US",
-            as_of_date=as_of_date,
-            source="console_minimum_universe",
-            provider="application_config",
-            available_time=now,
-            ingested_time=now,
-        )
-        self._session.add(snapshot)
-        self._session.flush()
+        if existing is None:
+            snapshot = MarketUniverseSnapshot(
+                market="US",
+                as_of_date=as_of_date,
+                source="console_minimum_universe",
+                provider="application_config",
+                available_time=now,
+                ingested_time=now,
+            )
+            self._session.add(snapshot)
+            self._session.flush()
+        else:
+            snapshot = existing
         stocks = {
             item.symbol: item
             for item in self._session.scalars(select(Stock).where(Stock.market == "US"))
         }
+        existing_stock_ids = set(
+            self._session.scalars(
+                select(MarketUniverseMember.stock_id).where(
+                    MarketUniverseMember.snapshot_id == snapshot.id
+                )
+            )
+        )
         for asset in MINIMUM_US_RESEARCH_UNIVERSE:
             stock = stocks[asset.ticker]
+            if stock.id in existing_stock_ids:
+                continue
             self._session.add(
                 MarketUniverseMember(
                     snapshot_id=snapshot.id,
@@ -303,6 +358,11 @@ class DataService:
         accepted = sum(item.valid_count for item in report.results)
         raw = sum(item.fetched_count for item in report.results)
         rejected = max(raw - accepted, 0)
+        duplicate_count = sum(
+            issue.code == "duplicate_bar"
+            for item in report.results
+            for issue in item.quality_issues
+        )
         latest_dates: dict[str, date] = {}
         latest_rows = self._session.execute(
             select(Stock.symbol, func.max(Price.trade_date))
@@ -365,7 +425,7 @@ class DataService:
             "raw_row_count": raw,
             "accepted_row_count": accepted,
             "rejected_row_count": rejected,
-            "duplicate_count": sum(item.updated_count for item in report.results),
+            "duplicate_count": duplicate_count,
             "missingness_summary": {
                 item.symbol: {
                     "status": item.status,
@@ -421,7 +481,7 @@ class DataService:
                 raw_row_count=raw,
                 accepted_row_count=accepted,
                 rejected_row_count=rejected,
-                duplicate_count=sum(item.updated_count for item in report.results),
+                duplicate_count=duplicate_count,
                 missingness_summary={
                     item.symbol: {
                         "status": item.status,

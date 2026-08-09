@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -14,12 +15,22 @@ from personal_alpha_terminal.application.daily_result import (
     DecisionReadiness,
     StageStatus,
 )
+from personal_alpha_terminal.application.data_certification import DailyDataCertification
 from personal_alpha_terminal.application.quant_daily_service import (
     TodayRecommendation,
     TodayResult,
 )
+from personal_alpha_terminal.application.universe import MINIMUM_US_RESEARCH_UNIVERSE
 from personal_alpha_terminal.core.config import Settings
-from personal_alpha_terminal.models import Portfolio
+from personal_alpha_terminal.data.market_data.schemas import (
+    DailyUpdateReport,
+    InstrumentUpdateResult,
+)
+from personal_alpha_terminal.models import (
+    DataSnapshotManifest,
+    MarketUniverseMember,
+    Portfolio,
+)
 from personal_alpha_terminal.quant_engine.alpha import (
     AlphaDataQuality,
     AlphaSignal,
@@ -265,6 +276,56 @@ class _SafeDataService:
     def latest_manifest(self):
         return self.manifest
 
+    def daily_certification(self, **_kwargs):
+        return DailyDataCertification(
+            StageStatus.PASS,
+            "fixture-snapshot",
+            "fixture-primary",
+            "fixture-secondary",
+            SYMBOLS,
+            SYMBOLS,
+            SYMBOLS,
+            (),
+            (),
+            (),
+            504 * len(SYMBOLS),
+            504 * len(SYMBOLS),
+            504 * len(SYMBOLS),
+            1.0,
+            date(2026, 8, 7),
+            NOW - timedelta(days=1),
+            "CERTIFIED",
+            "CERTIFIED",
+            0,
+            0,
+            {"open": 0, "high": 0, "low": 0, "close": 0},
+            0,
+            0,
+            "raw_ohlcv",
+            (),
+            (),
+        )
+
+
+class _UnsafeDataService(_SafeDataService):
+    def daily_certification(self, **_kwargs):
+        return replace(
+            super().daily_certification(**_kwargs),
+            status=StageStatus.FAIL_BLOCKING,
+            provider_reconciliation="NOT_CERTIFIED",
+            blockers=("independent provider reconciliation is not certified",),
+        )
+
+
+class _DegradedDataService(_SafeDataService):
+    def daily_certification(self, **_kwargs):
+        return replace(
+            super().daily_certification(**_kwargs),
+            status=StageStatus.PASS_DEGRADED,
+            optional_missing_symbols=("OPTIONAL",),
+            warnings=("optional symbols missing: OPTIONAL",),
+        )
+
 
 def _settings(tmp_path: Path) -> Settings:
     return Settings(
@@ -309,6 +370,8 @@ def test_actual_quant_pipeline_flows_to_terminal_without_recalculation(
     rendered = capture_daily_quant_result(result, width=120)
     narrow = capture_daily_quant_result(result, width=80)
     assert "FINAL VALIDATED DECISIONS" in rendered
+    assert "DATA CERTIFICATION" in rendered
+    assert "PIT / UNIVERSE" in rendered
     assert "CANDIDATE ≠ TRADE" in rendered
     for decision in result.final_decisions:
         assert decision.symbol in rendered
@@ -316,6 +379,104 @@ def test_actual_quant_pipeline_flows_to_terminal_without_recalculation(
     assert "MANUAL EXECUTION REQUIRED" in rendered
     assert "TODAY SUMMARY" in narrow
     assert list((tmp_path / "runs").glob("*.json"))
+    assert result.certificate_path is not None
+    certificate = Path(result.certificate_path)
+    assert certificate.exists()
+    certificate_payload = json.loads(certificate.read_text(encoding="utf-8"))
+    snapshot = json.loads(
+        next((tmp_path / "runs").glob(f"*_{result.run_id}.json")).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert certificate_payload["run_id"] == snapshot["run_id"] == result.run_id
+    assert certificate_payload["classification"] == result.run_classification
+
+
+def test_blocked_data_certificate_preserves_real_certification_evidence(
+    session_factory: sessionmaker[Session], tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(
+        "personal_alpha_terminal.application.daily_orchestrator.DataService",
+        _UnsafeDataService,
+    )
+    result = DailyQuantOrchestrator(
+        session_factory,
+        _settings(tmp_path),
+        snapshot_root=tmp_path / "runs",
+    ).run(decision_time=NOW, refresh=False)
+
+    assert not result.actionable
+    certificate = json.loads(
+        Path(result.certificate_path or "").read_text(encoding="utf-8")
+    )
+    evidence = certificate["data_certification"]
+    assert evidence["requested_symbols"] == list(SYMBOLS)
+    assert evidence["received_symbols"] == list(SYMBOLS)
+    assert evidence["valid_bars"] == 504 * len(SYMBOLS)
+    assert evidence["provider_reconciliation"] == "NOT_CERTIFIED"
+    assert evidence["snapshot_id"] == "fixture-snapshot"
+
+
+def test_optional_data_degradation_does_not_block_required_quant_chain(
+    session_factory: sessionmaker[Session], tmp_path: Path, monkeypatch
+) -> None:
+    with session_factory.begin() as session:
+        session.add(Portfolio(name="Real Ledger", cash_balance=1_000_000))
+    monkeypatch.setattr(
+        "personal_alpha_terminal.application.daily_orchestrator.DataService",
+        _DegradedDataService,
+    )
+    monkeypatch.setattr(
+        "personal_alpha_terminal.application.daily_orchestrator.ProductionDailyWorkflow.run",
+        lambda _self, **_kwargs: _workflow_result(),
+    )
+    result = DailyQuantOrchestrator(
+        session_factory,
+        _settings(tmp_path),
+        snapshot_root=tmp_path / "runs",
+    ).run(decision_time=NOW, refresh=False)
+
+    data_stage = next(item for item in result.stages if item.name == "DATA")
+    assert data_stage.status is StageStatus.PASS_DEGRADED
+    assert result.actionable
+
+
+def test_data_gate_failure_does_not_rollback_sync_manifest_or_universe(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    report = DailyUpdateReport(
+        started_on=date(2026, 8, 1),
+        results=tuple(
+            InstrumentUpdateResult(
+                symbol=asset.ticker,
+                market="US",
+                source="fixture-primary",
+                provider="fixture.download",
+                status="success",
+                start_date=date(2026, 7, 1),
+                end_date=date(2026, 8, 7),
+                fetched_count=22,
+                valid_count=22,
+                inserted_count=22,
+            )
+            for asset in MINIMUM_US_RESEARCH_UNIVERSE
+        ),
+        provider_reconciled=True,
+        corporate_action_certified=True,
+    )
+    result = DailyQuantOrchestrator(
+        session_factory,
+        _settings(tmp_path),
+        snapshot_root=tmp_path / "runs",
+        sync_runner=lambda _session, _start, _end: report,
+    ).run(decision_time=NOW, refresh=True)
+
+    assert not result.actionable
+    with session_factory() as session:
+        assert session.query(DataSnapshotManifest).count() == 1
+        assert session.query(MarketUniverseMember).count() == len(
+            MINIMUM_US_RESEARCH_UNIVERSE
+        )
 
 
 def test_missing_portfolio_and_stale_data_fail_closed(
@@ -325,6 +486,33 @@ def test_missing_portfolio_and_stale_data_fail_closed(
         "personal_alpha_terminal.application.daily_orchestrator.DataService",
         _SafeDataService,
     )
+    research_only = replace(
+        _workflow_result(),
+        status="BLOCKED",
+        portfolio_status="NOT_INITIALIZED",
+        recommendations=(),
+        target=None,
+        trades=(),
+        risk=None,
+        blockers=("PORTFOLIO NOT INITIALIZED; run portfolio-init or portfolio-import",),
+        pipeline_stages=(
+            PipelineStage("Data Quality Gate", "VALID", "CERTIFIED"),
+            PipelineStage("PIT Universe", "VALID", "universe-v1"),
+            PipelineStage("Point-in-Time Inputs", "VALID", "no future observations"),
+            PipelineStage("Feature Engine", "VALID", "4 PIT feature rows"),
+            PipelineStage("Factor Engine", "VALID", "4 factor rows"),
+            PipelineStage("Alpha Signals", "VALID", "4 approved signals"),
+            PipelineStage(
+                "Portfolio Construction",
+                "BLOCKED",
+                "PORTFOLIO NOT INITIALIZED",
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        "personal_alpha_terminal.application.daily_orchestrator.ProductionDailyWorkflow.run",
+        lambda _self, **_kwargs: research_only,
+    )
     missing = DailyQuantOrchestrator(
         session_factory,
         _settings(tmp_path),
@@ -333,11 +521,24 @@ def test_missing_portfolio_and_stale_data_fail_closed(
     assert missing.decision_readiness is DecisionReadiness.NOT_ACTIONABLE
     assert not missing.final_decisions
     assert any("PORTFOLIO NOT INITIALIZED" in item for item in missing.blockers)
+    assert next(item for item in missing.stages if item.name == "FACTOR").status is StageStatus.PASS
     assert missing.execution_plan.status == "BLOCKED"
+    missing_rendered = capture_daily_quant_result(missing)
+    assert "NOT_ACTIONABLE" in missing_rendered
+    assert "NO_ACTION" not in missing_rendered
+    assert missing.run_classification == "INVALID_NON_ACTIONABLE"
 
     class _Stale(_SafeDataService):
         def get_data_readiness(self, **_kwargs):
             return SimpleNamespace(code="STALE", technical_reason="latest bar is stale")
+
+        def daily_certification(self, **_kwargs):
+            return replace(
+                super().daily_certification(),
+                status=StageStatus.FAIL_BLOCKING,
+                stale_symbols=("A",),
+                blockers=("required symbols are stale: A",),
+            )
 
     monkeypatch.setattr(
         "personal_alpha_terminal.application.daily_orchestrator.DataService", _Stale
@@ -411,3 +612,33 @@ def test_calendar_resolves_weekend_and_dst_without_llm_dependency(
     assert saturday_state.trade_date == date(2026, 8, 10)
     assert winter_state.timestamp_et.utcoffset() != summer_state.timestamp_et.utcoffset()
     assert _settings(tmp_path).llm_provider == "disabled"
+
+
+def test_no_action_requires_complete_certified_pipeline(
+    session_factory: sessionmaker[Session], tmp_path: Path, monkeypatch
+) -> None:
+    with session_factory.begin() as session:
+        session.add(Portfolio(name="Real Ledger", cash_balance=1_000_000))
+    complete = replace(
+        _workflow_result(),
+        status="NO_DECISION",
+        recommendations=(),
+        trades=(),
+        no_rebalance_reason="inside validated no-trade band",
+    )
+    monkeypatch.setattr(
+        "personal_alpha_terminal.application.daily_orchestrator.DataService",
+        _SafeDataService,
+    )
+    monkeypatch.setattr(
+        "personal_alpha_terminal.application.daily_orchestrator.ProductionDailyWorkflow.run",
+        lambda _self, **_kwargs: complete,
+    )
+    result = DailyQuantOrchestrator(
+        session_factory,
+        _settings(tmp_path),
+        snapshot_root=tmp_path / "no-action",
+    ).run(decision_time=NOW, refresh=False)
+    assert result.actionable
+    assert result.run_classification == "CERTIFIED_NO_ACTION"
+    assert "CERTIFIED NO-ACTION RUN" in capture_daily_quant_result(result)

@@ -24,6 +24,8 @@ def render_daily_quant_result(result: DailyQuantResult, console: Console) -> Non
         )
     )
     _pipeline(result, console)
+    _data_certification(result, console)
+    _pit_universe(result, console)
     _data_health(result, console)
     _market(result, console)
     _portfolio(result, console)
@@ -34,6 +36,7 @@ def render_daily_quant_result(result: DailyQuantResult, console: Console) -> Non
     _rejected(result, console)
     _execution(result, console)
     _benchmark(result, console)
+    _run_certificate(result, console)
     _summary(result, console)
 
 
@@ -45,15 +48,33 @@ def capture_daily_quant_result(result: DailyQuantResult, *, width: int = 120) ->
 
 
 def _header(result: DailyQuantResult) -> str:
-    state = "READY" if result.actionable else "NOT_ACTIONABLE"
+    classification = {
+        "CERTIFIED_ACTIONABLE": "CERTIFIED ACTIONABLE RUN",
+        "CERTIFIED_NO_ACTION": "CERTIFIED NO-ACTION RUN",
+        "INVALID_NON_ACTIONABLE": "INVALID / NON-ACTIONABLE QUANT RUN\nDO NOT USE FOR TRADING",
+    }[result.run_classification]
+    raw_latest = max(
+        (item.latest_date for item in result.data_health if item.latest_date),
+        default=None,
+    )
+    data_through = (
+        result.data_cutoff.isoformat()
+        if result.data_cutoff
+        else (
+            f"{raw_latest} (raw only; PIT cutoff unavailable)"
+            if raw_latest
+            else "UNAVAILABLE"
+        )
+    )
     return (
-        f"Version {result.version}   Run {result.run_id}\n"
+        f"{classification}\n\nVersion {result.version}   Run {result.run_id}\n"
         f"ET/Market session {result.market_session}   Analysis {result.analysis_date}   "
         f"Trade {result.trade_date}\n"
-        f"Data through {result.data_cutoff.isoformat() if result.data_cutoff else 'UNAVAILABLE'}   "
+        f"Data through {data_through}   "
         f"Duration {result.duration_seconds:.2f}s\n"
-        f"QUANT {state}   PORTFOLIO {result.portfolio.status}   "
-        f"RISK {result.risk.status}   DECISION {state}   LLM {result.llm_status}"
+        f"QUANT {'READY' if result.actionable else 'NOT READY'}   "
+        f"PORTFOLIO {result.portfolio.status}   RISK {result.risk.status}   "
+        f"DECISION {result.decision_readiness.value}   LLM {result.llm_status}"
     )
 
 
@@ -71,6 +92,70 @@ def _pipeline(result: DailyQuantResult, console: Console) -> None:
             stage.message,
         )
     console.print(table)
+
+
+def _data_certification(result: DailyQuantResult, console: Console) -> None:
+    stage = next((item for item in result.stages if item.name == "DATA"), None)
+    evidence = stage.metadata if stage is not None else {}
+    body = (
+        f"Status {stage.status.value if stage else 'NOT_RUN'}   "
+        f"Provider {evidence.get('provider', 'UNAVAILABLE')}   "
+        f"Fallback {evidence.get('fallback_provider', 'UNAVAILABLE')}\n"
+        f"Snapshot {evidence.get('snapshot_id', 'UNAVAILABLE')}   "
+        f"Requested {_item_count(evidence.get('requested_symbols'))}   "
+        f"Received {_item_count(evidence.get('received_symbols'))}   "
+        f"Certified {_item_count(evidence.get('certified_symbols'))}   "
+        f"Missing {_item_count(evidence.get('missing_symbols'))}   "
+        f"Stale {_item_count(evidence.get('stale_symbols'))}\n"
+        f"Bars expected {evidence.get('expected_bars', 0)}   "
+        f"received {evidence.get('received_bars', 0)}   "
+        f"valid {evidence.get('valid_bars', 0)}   "
+        f"coverage {_percent(_as_float(evidence.get('coverage')))}\n"
+        f"Latest {evidence.get('latest_timestamp', 'UNAVAILABLE')}   "
+        f"PIT cutoff {result.data_cutoff.isoformat() if result.data_cutoff else 'UNAVAILABLE'}\n"
+        f"Corporate actions {evidence.get('corporate_action_status', 'NOT_CERTIFIED')}   "
+        f"Cross-provider {evidence.get('provider_reconciliation', 'NOT_CERTIFIED')}   "
+        f"Duplicates {evidence.get('duplicate_rows', 0)}   "
+        f"Invalid OHLC {evidence.get('invalid_ohlc', 0)}   "
+        f"Future rows {evidence.get('future_rows', 0)}   "
+        f"Timezone violations {evidence.get('timezone_violations', 0)}"
+    )
+    console.print(
+        Panel(
+            body,
+            title="DATA CERTIFICATION",
+            border_style=(
+                "green"
+                if stage and stage.status is StageStatus.PASS
+                else "yellow"
+                if stage and stage.status is StageStatus.PASS_DEGRADED
+                else "red"
+            ),
+        )
+    )
+
+
+def _pit_universe(result: DailyQuantResult, console: Console) -> None:
+    stage = next((item for item in result.stages if item.name == "PIT"), None)
+    evidence = stage.metadata if stage is not None else {}
+    console.print(
+        Panel(
+            f"Status {stage.status.value if stage else 'NOT_RUN'}   "
+            f"Rows {evidence.get('output_row_count', 0)}   "
+            f"Universe {result.provenance.get('universe_count', 0)}\n"
+            "As-of cutoff "
+            f"{result.data_cutoff.isoformat() if result.data_cutoff else 'UNAVAILABLE'}\n"
+            f"Message: {stage.message if stage else 'PIT stage was not created'}",
+            title="PIT / UNIVERSE",
+            border_style=(
+                "green"
+                if stage and stage.status is StageStatus.PASS
+                else "yellow"
+                if stage and stage.status is StageStatus.PASS_DEGRADED
+                else "red"
+            ),
+        )
+    )
 
 
 def _data_health(result: DailyQuantResult, console: Console) -> None:
@@ -311,18 +396,24 @@ def _decisions(result: DailyQuantResult, console: Console) -> None:
     for column in columns:
         table.add_column(column, overflow="fold")
     if not result.final_decisions:
+        action = "NO_ACTION" if result.actionable else "NOT_ACTIONABLE"
+        reason = (
+            "Complete certified pipeline produced no rebalance outside the no-trade band"
+            if result.actionable
+            else "Required stages did not complete; no trading judgment was generated"
+        )
         empty = (
             (
                 "ALL",
-                "NO_ACTION",
+                action,
                 "-- → --",
                 "--",
-                "No actionable decision passed every required gate",
+                reason,
             )
             if narrow
             else (
                 "ALL",
-                "NO_ACTION",
+                action,
                 "--",
                 "--",
                 "--",
@@ -330,7 +421,7 @@ def _decisions(result: DailyQuantResult, console: Console) -> None:
                 "--",
                 "--",
                 "BLOCKED",
-                "No actionable decision passed every required gate",
+                reason,
             )
         )
         table.add_row(*empty)
@@ -414,6 +505,21 @@ def _benchmark(result: DailyQuantResult, console: Console) -> None:
     console.print(table)
 
 
+def _run_certificate(result: DailyQuantResult, console: Console) -> None:
+    console.print(
+        Panel(
+            f"Classification: {result.run_classification}\n"
+            f"Run ID: {result.run_id}\n"
+            f"Data hash: {result.provenance.get('data_hash', 'UNAVAILABLE')}\n"
+            f"Config hash: {result.config_hash}\n"
+            f"Models: {', '.join(result.model_versions) or 'UNAVAILABLE'}\n"
+            f"Certificate: {result.certificate_path or 'UNAVAILABLE'}",
+            title="RUN CERTIFICATE",
+            border_style="green" if result.actionable else "red",
+        )
+    )
+
+
 def _summary(result: DailyQuantResult, console: Console) -> None:
     buys = sum(item.action in {"BUY", "ADD", "INCREASE"} for item in result.final_decisions)
     sells = sum(item.action in {"SELL", "REDUCE"} for item in result.final_decisions)
@@ -422,9 +528,22 @@ def _summary(result: DailyQuantResult, console: Console) -> None:
         (stage.status.value for stage in result.stages if stage.name == "DATA"),
         "UNKNOWN",
     )
+    if not result.actionable:
+        console.print(
+            Panel(
+                f"Run {result.run_classification}   Pipeline {result.decision_readiness.value}   "
+                f"Data {data_status}   Portfolio {result.portfolio.status}   "
+                f"Risk {result.risk.status}\n"
+                f"Actions 0   Blockers: {blockers}\n\n"
+                "INVALID / NON-ACTIONABLE QUANT RUN - DO NOT USE FOR TRADING",
+                title="TODAY SUMMARY",
+                border_style="red",
+            )
+        )
+        return
     console.print(
         Panel(
-            f"Pipeline {result.decision_readiness.value}   "
+            f"Run {result.run_classification}   Pipeline {result.decision_readiness.value}   "
             f"Data {data_status}   "
             f"Portfolio {result.portfolio.status}   Risk {result.risk.status}\n"
             f"Actions {len(result.execution_plan.legs)}   Buy/Add {buys}   Sell/Reduce {sells}   "
@@ -440,9 +559,9 @@ def _summary(result: DailyQuantResult, console: Console) -> None:
 def _status_text(status: StageStatus) -> Text:
     style = {
         StageStatus.PASS: "green",
-        StageStatus.WARN: "yellow",
-        StageStatus.FAIL: "red bold",
-        StageStatus.SKIPPED: "dim",
+        StageStatus.PASS_DEGRADED: "yellow",
+        StageStatus.FAIL_BLOCKING: "red bold",
+        StageStatus.NOT_RUN: "dim",
     }[status]
     return Text(status.value, style=style)
 
@@ -467,3 +586,11 @@ def _money(value: float | None) -> str:
 
 def _number(value: float | None) -> str:
     return f"{value:.3f}" if value is not None else "--"
+
+
+def _as_float(value: object) -> float | None:
+    return float(value) if isinstance(value, (int, float)) else None
+
+
+def _item_count(value: object) -> int:
+    return len(value) if isinstance(value, (list, tuple, set)) else 0
