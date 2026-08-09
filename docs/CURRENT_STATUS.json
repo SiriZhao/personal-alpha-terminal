@@ -1,9 +1,9 @@
 {
   "schema_version": "current-status-v2",
   "version": "1.1.0",
-  "git_commit": "fb035499d91da8e3f234e10890dd86ae5abbd0d8+PART2_WORKTREE",
+  "git_commit": "14d959deba00df107d08010c28a2fce687a0ce40",
   "build_id": "SOURCE_RUNTIME",
-  "generated_at": "2026-08-09T16:00:00+08:00",
+  "generated_at": "2026-08-09T15:25:00+08:00",
   "evidence_level": "FIXTURE_TESTED",
   "operating_mode": "SHADOW_ONLY",
   "alembic_head": "d4a5b6c7d8e9",
@@ -59,8 +59,8 @@
   },
   "validation_checkpoint": {
     "command": "pytest -q",
-    "result": "PENDING_FINAL_PART2_REGRESSION",
-    "quant_critical": "31 passed at working-tree checkpoint",
-    "commit": "fb035499d91da8e3f234e10890dd86ae5abbd0d8+PART2_WORKTREE"
+    "result": "514 passed",
+    "quant_critical": "31 passed; 483 deselected; permanent minimum 31",
+    "commit": "14d959deba00df107d08010c28a2fce687a0ce40"
   }
 }
