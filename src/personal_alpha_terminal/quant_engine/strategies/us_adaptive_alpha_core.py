@@ -52,6 +52,7 @@ class StrategyFactorSnapshot:
     raw_values: dict[str, float] = field(default_factory=dict)
     winsorized_values: dict[str, float] = field(default_factory=dict)
     neutralized_values: dict[str, float] = field(default_factory=dict)
+    neutralization_evidence: dict[str, dict[str, object]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,6 +210,10 @@ class USAdaptiveAlphaCoreV1:
                     raw_values=raw_values,
                     winsorized_values=winsorized_values,
                     neutralized_values=components,
+                    neutralization_evidence={
+                        name: asdict(evidence)
+                        for name, evidence in processed.neutralization.items()
+                    },
                 )
             )
             signals.append(
@@ -257,6 +262,7 @@ class USAdaptiveAlphaCoreV1:
                 raw_values=item.raw_values,
                 winsorized_values=item.winsorized_values,
                 neutralized_values=item.neutralized_values,
+                neutralization_evidence=item.neutralization_evidence,
             )
             for index, item in enumerate(ranked, start=1)
         ]

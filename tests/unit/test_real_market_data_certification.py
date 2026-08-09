@@ -2,6 +2,8 @@ from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 
+import pytest
+
 from personal_alpha_terminal.data.market_data_certification import (
     CertificationStatus,
     CorporateActionEvidence,
@@ -11,6 +13,8 @@ from personal_alpha_terminal.data.market_data_certification import (
     TradingStatusEvidence,
 )
 from personal_alpha_terminal.data.market_data_quality.schemas import MarketSegment
+
+pytestmark = pytest.mark.quant_critical
 
 
 def bar(

@@ -41,6 +41,19 @@ class FactorCrossSectionResult:
     coverage: dict[str, float]
     warnings: tuple[str, ...]
     as_of: datetime
+    neutralization: dict[str, NeutralizationEvidence]
+
+
+@dataclass(frozen=True, slots=True)
+class NeutralizationEvidence:
+    method: str
+    eligible_count: int
+    coverage: float
+    group_count: int
+    minimum_group_size: int
+    insufficient_groups: tuple[str, ...]
+    degrees_of_freedom: int
+    status: FactorSignalStatus
 
 
 def process_cross_section(
@@ -71,6 +84,7 @@ def process_cross_section(
     statuses: dict[str, FactorSignalStatus] = {}
     coverage: dict[str, float] = {}
     warnings: list[str] = []
+    neutralization: dict[str, NeutralizationEvidence] = {}
     output = frame.copy()
     for spec in specs:
         raw = pd.to_numeric(frame[spec.name], errors="coerce").replace([np.inf, -np.inf], np.nan)
@@ -87,21 +101,48 @@ def process_cross_section(
         output[f"{spec.name}__winsorized"] = winsorized
         signal = _robust_zscore(winsorized) * (1.0 if spec.direction == "high" else -1.0)
         neutralized = signal.copy()
+        insufficient_groups: tuple[str, ...] = ()
+        group_count = 0
+        minimum_group_size = 2
+        methods: list[str] = []
         if spec.sector_neutral:
             if "sector" not in frame or frame["sector"].isna().all():
                 warnings.append(f"{spec.name}: sector exposure is not neutralized")
                 statuses[spec.name] = FactorSignalStatus.NOT_VALIDATED
             else:
-                neutralized = _within_group_center(neutralized, frame["sector"])
+                methods.append("within-sector median centering")
+                neutralized, insufficient_groups = _within_group_center(
+                    neutralized, frame["sector"], minimum_group_size=minimum_group_size
+                )
+                group_count = int(frame["sector"].fillna("__UNKNOWN__").nunique())
+                if insufficient_groups:
+                    warnings.append(
+                        f"{spec.name}: insufficient sector groups: {', '.join(insufficient_groups)}"
+                    )
+                    statuses[spec.name] = FactorSignalStatus.NOT_VALIDATED
         if spec.size_neutral:
             if "market_cap" not in frame or frame["market_cap"].notna().sum() < 3:
                 warnings.append(f"{spec.name}: size exposure is not neutralized")
                 statuses[spec.name] = FactorSignalStatus.NOT_VALIDATED
             else:
-                neutralized = _size_residual(neutralized, frame["market_cap"])
+                methods.append("log-market-cap residualization")
+                neutralized, size_valid = _size_residual(neutralized, frame["market_cap"])
+                if not size_valid:
+                    warnings.append(f"{spec.name}: size residualization lacks rank/DoF")
+                    statuses[spec.name] = FactorSignalStatus.NOT_VALIDATED
         neutralized = _robust_zscore(neutralized)
         output[f"{spec.name}__normalized"] = neutralized
         statuses.setdefault(spec.name, FactorSignalStatus.VALID)
+        neutralization[spec.name] = NeutralizationEvidence(
+            method=" + ".join(methods) or "none",
+            eligible_count=int(neutralized.notna().sum()),
+            coverage=float(neutralized.notna().mean()) if len(neutralized) else 0.0,
+            group_count=group_count,
+            minimum_group_size=minimum_group_size,
+            insufficient_groups=insufficient_groups,
+            degrees_of_freedom=max(0, int(neutralized.notna().sum()) - len(methods) - 1),
+            status=statuses[spec.name],
+        )
     normalized_columns = [f"{spec.name}__normalized" for spec in specs]
     output["factor_availability"] = output[normalized_columns].notna().sum(axis=1)
     output["factor_coverage"] = output["factor_availability"] / max(1, len(specs))
@@ -109,7 +150,12 @@ def process_cross_section(
     output["eligible"] = output["factor_availability"] >= minimum_required_factors
     output.loc[~output["eligible"], normalized_columns] = np.nan
     return FactorCrossSectionResult(
-        output.reset_index(drop=True), statuses, coverage, tuple(dict.fromkeys(warnings)), as_of
+        output.reset_index(drop=True),
+        statuses,
+        coverage,
+        tuple(dict.fromkeys(warnings)),
+        as_of,
+        neutralization,
     )
 
 
@@ -128,26 +174,36 @@ def _robust_zscore(values: pd.Series) -> pd.Series:
     return result.clip(-5.0, 5.0)
 
 
-def _within_group_center(values: pd.Series, groups: pd.Series) -> pd.Series:
+def _within_group_center(
+    values: pd.Series, groups: pd.Series, *, minimum_group_size: int
+) -> tuple[pd.Series, tuple[str, ...]]:
     result = values.copy()
     labels = groups.fillna("__UNKNOWN__").astype(str)
-    for _name, indexes in labels.groupby(labels).groups.items():
+    insufficient: list[str] = []
+    for name, indexes in labels.groupby(labels).groups.items():
         valid = values.loc[indexes].dropna()
-        if len(valid) >= 3:
+        if len(valid) >= minimum_group_size:
             result.loc[valid.index] = valid - valid.median()
-    return result
+        else:
+            result.loc[valid.index] = np.nan
+            insufficient.append(str(name))
+    return result, tuple(sorted(insufficient))
 
 
-def _size_residual(values: pd.Series, market_cap: pd.Series) -> pd.Series:
+def _size_residual(values: pd.Series, market_cap: pd.Series) -> tuple[pd.Series, bool]:
     size = pd.to_numeric(market_cap, errors="coerce")
     valid_mask = values.notna() & size.notna() & (size > 0)
     result = values.copy()
     if valid_mask.sum() < 3:
-        return result
+        result.loc[values.notna()] = np.nan
+        return result, False
     x = np.log(size.loc[valid_mask].astype(float).to_numpy())
     y = values.loc[valid_mask].astype(float).to_numpy()
     design = np.column_stack([np.ones(len(x)), x])
+    if np.linalg.matrix_rank(design) < design.shape[1]:
+        result.loc[valid_mask] = np.nan
+        return result, False
     coefficients, *_unused = np.linalg.lstsq(design, y, rcond=None)
     residuals = y - design @ coefficients
     result.loc[valid_mask] = residuals
-    return result
+    return result, True

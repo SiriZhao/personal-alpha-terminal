@@ -13,6 +13,7 @@ from personal_alpha_terminal.quant_engine.costs import TransactionCostModel
 from personal_alpha_terminal.quant_engine.risk.budget import RiskBudget
 from personal_alpha_terminal.quant_engine.risk.model import (
     RiskModelEstimate,
+    SizeExposureStatus,
     portfolio_volatility,
 )
 from personal_alpha_terminal.research.data_gate import (
@@ -147,6 +148,13 @@ class PortfolioConstructionEngine:
             )
         if not risk.valid_for_optimization:
             return self._blocked(decision_time, authorization, risk, ("risk model is blocked",))
+        if risk.size_exposure_status is not SizeExposureStatus.VALID:
+            return self._blocked(
+                decision_time,
+                authorization,
+                risk,
+                ("PIT market-cap size exposure is NOT_VALIDATED",),
+            )
         if set(current_weights) - set(risk.symbols):
             return self._blocked(
                 decision_time,
@@ -542,9 +550,12 @@ def _constraint_violations(
         <= constraints.maximum_beta + tolerance
     ):
         violations.append("beta band failed after no-trade processing")
-    sizes = np.array([risk.size_scores[symbol] for symbol in risk.symbols])
-    if abs(float(sizes @ weights)) > constraints.maximum_size_exposure + tolerance:
-        violations.append("size exposure limit failed after no-trade processing")
+    if risk.size_exposure_status is not SizeExposureStatus.VALID:
+        violations.append("PIT market-cap size exposure is NOT_VALIDATED")
+    else:
+        sizes = np.array([risk.size_scores[symbol] for symbol in risk.symbols])
+        if abs(float(sizes @ weights)) > constraints.maximum_size_exposure + tolerance:
+            violations.append("size exposure limit failed after no-trade processing")
     for sector, members in sector_members.items():
         if float(np.sum(weights[list(members)])) > constraints.maximum_sector_weight + tolerance:
             violations.append(f"sector limit failed: {sector}")

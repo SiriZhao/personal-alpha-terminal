@@ -34,16 +34,28 @@ The first import command is preview-only. `--commit` is required to update the r
 4. Only `FINAL VALIDATED DECISIONS` are formal outputs.
 5. Use `accept`, `reject`, or `watch` to record your review.
 6. Place any accepted order manually at Charles Schwab.
-7. After the broker fill, use `mark-executed` to record actual price, quantity, and fees.
+7. After each broker fill, use `mark-executed` with a unique fill ID. Partial fills update only
+   the quantity actually filled; restart-safe order state remains `PARTIAL` until complete.
 
 ```text
-PersonalAlphaTerminal.exe accept <recommendation_id>
-PersonalAlphaTerminal.exe mark-executed <recommendation_id> --price 100 --quantity 10 --fees 0
+PersonalAlphaTerminal.exe accept <recommendation_id> --run-id <run_id>
+PersonalAlphaTerminal.exe mark-executed <recommendation_id> --run-id <run_id> --fill-id <fill_id> --price 100 --quantity 10 --fees 0
 ```
+
+`cancel-execution` and `modify-execution` require the same run/recommendation identity and an
+audit reason. They never contact Charles Schwab. Only a user-entered fill changes cash or shares.
 
 ## Commands
 
-`daily`, `refresh`, `data`, `portfolio`, `portfolio-init`, `portfolio-import`, `factors`, `probability`, `risk`, `decisions`, `backtest`, `research`, `doctor`, `diagnostics`, `settings`, `version`, `help`.
+`daily`, `refresh`, `data`, `portfolio`, `portfolio-init`, `portfolio-import`, `factors`,
+`probability`, `risk`, `decisions`, `backtest`, `research`, `doctor`, `diagnostics`, `settings`,
+`accept`, `reject`, `watch`, `mark-executed`, `cancel-execution`, `modify-execution`, `version`,
+`help`.
+
+`NO_ACTION` means every required stage completed and no rebalance survived the no-trade rules.
+`BLOCKED`/`NOT_ACTIONABLE` means evidence is incomplete; read the blocking stage, reason, cutoff,
+run ID and configuration/model/data hashes. It is the expected safe result when validation is
+not yet sufficient.
 
 ## Data, logs, and backup
 

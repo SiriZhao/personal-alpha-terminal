@@ -14,19 +14,24 @@ class RiskModelStatus(StrEnum):
     BLOCKED = "BLOCKED"
 
 
+class SizeExposureStatus(StrEnum):
+    VALID = "VALID"
+    NOT_VALIDATED = "NOT_VALIDATED"
+
+
 @dataclass(frozen=True, slots=True)
 class AssetRiskMetadata:
     symbol: str
     sector: str
     average_daily_dollar_volume: float
-    size_score: float = 0.0
+    size_score: float | None = None
 
     def __post_init__(self) -> None:
         if not self.symbol.strip() or not self.sector.strip():
             raise ValueError("risk metadata requires symbol and sector")
         if not isfinite(self.average_daily_dollar_volume) or self.average_daily_dollar_volume <= 0:
             raise ValueError("risk metadata requires known positive ADV")
-        if not isfinite(self.size_score):
+        if self.size_score is not None and not isfinite(self.size_score):
             raise ValueError("size score must be finite")
 
 
@@ -40,6 +45,7 @@ class RiskModelEstimate:
     sectors: dict[str, str]
     average_daily_dollar_volume: dict[str, float]
     size_scores: dict[str, float]
+    size_exposure_status: SizeExposureStatus
     observations: int
     status: RiskModelStatus
     condition_number: float
@@ -152,7 +158,16 @@ class PortfolioRiskModel:
             average_daily_dollar_volume={
                 item.symbol: item.average_daily_dollar_volume for item in metadata
             },
-            size_scores={item.symbol: item.size_score for item in metadata},
+            size_scores={
+                item.symbol: float(item.size_score)
+                for item in metadata
+                if item.size_score is not None
+            },
+            size_exposure_status=(
+                SizeExposureStatus.VALID
+                if all(item.size_score is not None for item in metadata)
+                else SizeExposureStatus.NOT_VALIDATED
+            ),
             observations=len(aligned),
             status=status,
             condition_number=condition,
@@ -199,7 +214,16 @@ class PortfolioRiskModel:
             average_daily_dollar_volume={
                 item.symbol: item.average_daily_dollar_volume for item in metadata
             },
-            size_scores={item.symbol: item.size_score for item in metadata},
+            size_scores={
+                item.symbol: float(item.size_score)
+                for item in metadata
+                if item.size_score is not None
+            },
+            size_exposure_status=(
+                SizeExposureStatus.VALID
+                if metadata and all(item.size_score is not None for item in metadata)
+                else SizeExposureStatus.NOT_VALIDATED
+            ),
             observations=observations,
             status=RiskModelStatus.BLOCKED,
             condition_number=float("inf"),

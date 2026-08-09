@@ -110,7 +110,26 @@ def _record_execution(args: argparse.Namespace) -> int:
         fees=args.fees,
         executed_at=datetime.fromisoformat(args.timestamp) if args.timestamp else None,
         notes=args.notes,
+        fill_id=args.fill_id,
+        external_reference=args.external_reference,
     )
+    console.print(result)
+    return 0
+
+
+def _change_execution(args: argparse.Namespace) -> int:
+    service = _service_for_args(args)
+    if args.command == "cancel-execution":
+        result = service.cancel_candidate_execution(
+            args.recommendation_id,
+            reason=args.reason,
+        )
+    else:
+        result = service.modify_candidate_execution(
+            args.recommendation_id,
+            approved_quantity=args.quantity,
+            reason=args.reason,
+        )
     console.print(result)
     return 0
 
@@ -415,6 +434,21 @@ def build_parser() -> argparse.ArgumentParser:
     execution.add_argument("--fees", type=float, default=0.0)
     execution.add_argument("--timestamp", default=None)
     execution.add_argument("--notes", default="")
+    execution.add_argument(
+        "--fill-id",
+        default=None,
+        help="Unique Schwab/manual fill identity; required for multiple partial fills",
+    )
+    execution.add_argument("--external-reference", default=None)
+    cancel_execution = subparsers.add_parser("cancel-execution")
+    cancel_execution.add_argument("recommendation_id")
+    cancel_execution.add_argument("--run-id", required=True)
+    cancel_execution.add_argument("--reason", required=True)
+    modify_execution = subparsers.add_parser("modify-execution")
+    modify_execution.add_argument("recommendation_id")
+    modify_execution.add_argument("--run-id", required=True)
+    modify_execution.add_argument("--quantity", type=float, required=True)
+    modify_execution.add_argument("--reason", required=True)
     portfolio_init = subparsers.add_parser("portfolio-init")
     portfolio_init.add_argument("--name", default="My Portfolio")
     portfolio_init.add_argument("--cash", type=float, default=0.0)
@@ -480,6 +514,9 @@ def main(argv: list[str] | None = None) -> int:
         if command == "mark-executed":
             _verify_recommendation_run(args.config, args.run_id, args.recommendation_id)
             return _record_execution(args)
+        if command in {"cancel-execution", "modify-execution"}:
+            _verify_recommendation_run(args.config, args.run_id, args.recommendation_id)
+            return _change_execution(args)
         if command == "portfolio":
             args.command = "portfolio-list"
             return _portfolio_command(args)

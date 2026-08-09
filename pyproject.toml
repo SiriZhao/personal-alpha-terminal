@@ -70,11 +70,13 @@ addopts = "-ra --strict-markers"
 testpaths = ["tests"]
 markers = [
     "performance: deterministic local throughput smoke tests with conservative budgets",
+    "quant_critical: permanent fail-closed quantitative production invariants",
 ]
 
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+extend-exclude = ["source_audit_export"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]

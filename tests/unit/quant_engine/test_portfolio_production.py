@@ -38,6 +38,7 @@ from personal_alpha_terminal.quant_engine.risk.model import (
     RiskModelConfig,
     RiskModelStatus,
 )
+from personal_alpha_terminal.quant_engine.risk.stress import StressRiskConfig
 from personal_alpha_terminal.research.data_gate import (
     ResearchDataAuthorization,
     ResearchDataEvidence,
@@ -374,7 +375,13 @@ def test_daily_pipeline_blocks_unapproved_alpha_and_runs_without_ai() -> None:
         data_quality="VALID",
     )
     pipeline = DailyQuantPipeline(
-        construction=PortfolioConstructionEngine(_constraints())
+        construction=PortfolioConstructionEngine(_constraints()),
+        stress_config=StressRiskConfig(
+            production_validated=True,
+            validation_id="locked-oos-stress-fixture",
+            maximum_single_name_loss=0.10,
+            maximum_sector_loss=0.20,
+        ),
     )
     ready = pipeline.run(base)
     assert ready.status is ProductionPipelineStatus.READY, ready.blockers

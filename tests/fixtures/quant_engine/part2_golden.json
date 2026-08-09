@@ -1,13 +1,13 @@
 {
-  "ending_equity": 1021871.56729361,
-  "manifest_hash": "a64a7137d829ea4ff0462dde676298942cb6465d377cbd530a0cbb7ed04b6797",
-  "net_return": 0.021871567294,
-  "result_hash": "f4902a7e7728e3036ea0eb669f5a8e477affc880e94071cfc12d345fe8ecaf6c",
+  "ending_equity": 1023764.2929506495,
+  "manifest_hash": "790e94e0a3c5dbe8178fa0f8d9a5a49bcdfee93cc9b1235f9bac14b0bb80f04e",
+  "net_return": 0.023764292950649413,
+  "result_hash": "b7b3be67067daad19e2dedae7e8ad4345b2f7bdb0820c867764ce164d50986c5",
   "target_weights": {
-    "BBB": 0.069113181356,
-    "CCC": 0.163125,
-    "DDD": 0.050069793414,
-    "EEE": 0.163125
+    "BBB": 0.163125,
+    "CCC": 0.1631249999999998,
+    "DDD": 0.04426045712695008,
+    "EEE": 0.07497768377767611
   },
   "trade_count": 4
 }

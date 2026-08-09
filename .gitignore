@@ -23,7 +23,9 @@ var/
 data/raw/
 data/processed/
 logs/
-reports/
+/reports/
+/docs/reports/*
+!/docs/reports/INDEX.md
 diagnostics/
 updates/
 *.log

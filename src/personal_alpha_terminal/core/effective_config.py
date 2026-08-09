@@ -11,6 +11,7 @@ from personal_alpha_terminal.core.fingerprints import fingerprint
 from personal_alpha_terminal.quant_engine.costs import TransactionCostConfig
 from personal_alpha_terminal.quant_engine.portfolio.construction import PortfolioConstraints
 from personal_alpha_terminal.quant_engine.risk.model import RiskModelConfig
+from personal_alpha_terminal.quant_engine.risk.stress import StressRiskConfig
 from personal_alpha_terminal.quant_engine.strategies.us_adaptive_alpha_core import (
     USAdaptiveAlphaCoreV1Config,
 )
@@ -48,11 +49,13 @@ class EffectiveRuntimeConfig:
     nasdaq_23h_effective_date: date | None = None
     night_execution_enabled: bool = False
     default_execution_session: str = "REGULAR"
+    allow_calendar_fallback: bool = False
     portfolio_id: int | None = None
     required_symbols: tuple[str, ...] = DEFAULT_REQUIRED_SYMBOLS
     strategy: USAdaptiveAlphaCoreV1Config = field(default_factory=USAdaptiveAlphaCoreV1Config)
     portfolio_constraints: PortfolioConstraints = field(default_factory=PortfolioConstraints)
     risk_model: RiskModelConfig = field(default_factory=RiskModelConfig)
+    stress_risk: StressRiskConfig = field(default_factory=StressRiskConfig)
     transaction_cost: TransactionCostConfig = field(default_factory=TransactionCostConfig)
     settings: Settings = field(default_factory=Settings, repr=False, compare=False)
     source_path: Path | None = field(default=None, repr=False, compare=False)
@@ -79,7 +82,12 @@ class EffectiveRuntimeConfig:
 
     @property
     def risk_model_hash(self) -> str:
-        return fingerprint(self.risk_model)
+        stress_parameters = asdict(self.stress_risk)
+        stress_parameters.pop("production_validated")
+        stress_parameters.pop("validation_id")
+        return fingerprint(
+            {"risk_model": self.risk_model, "stress_risk": stress_parameters}
+        )
 
     @property
     def cost_model_hash(self) -> str:
@@ -128,6 +136,7 @@ class EffectiveRuntimeConfig:
             "nasdaq_23h_effective_date": self.nasdaq_23h_effective_date,
             "night_execution_enabled": self.night_execution_enabled,
             "default_execution_session": self.default_execution_session,
+            "allow_calendar_fallback": self.allow_calendar_fallback,
             "portfolio_id": self.portfolio_id,
         }
 
@@ -204,7 +213,31 @@ def resolve_effective_runtime_config(
             scalar, "night_execution_enabled", settings.night_execution_enabled
         ),
         default_execution_session=scalar.get("default_execution_session", "REGULAR").upper(),
+        allow_calendar_fallback=_boolean(scalar, "allow_calendar_fallback", False),
         portfolio_id=(int(scalar["portfolio_id"]) if "portfolio_id" in scalar else None),
+        stress_risk=StressRiskConfig(
+            maximum_cvar_loss=_number(scalar, "stress_maximum_cvar_loss", 0.06),
+            maximum_liquidation_days=_number(
+                scalar, "stress_maximum_liquidation_days", 5.0
+            ),
+            maximum_correlation_spike_loss=_number(
+                scalar, "stress_maximum_correlation_spike_loss", 0.08
+            ),
+            maximum_gap_loss=_number(scalar, "stress_maximum_gap_loss", 0.08),
+            maximum_stressed_volatility=_number(
+                scalar, "stress_maximum_stressed_volatility", 0.30
+            ),
+            maximum_benchmark_crash_loss=_number(
+                scalar, "stress_maximum_benchmark_crash_loss", 0.25
+            ),
+            maximum_single_name_loss=_number(
+                scalar, "stress_maximum_single_name_loss", 0.05
+            ),
+            maximum_sector_loss=_number(
+                scalar, "stress_maximum_sector_loss", 0.10
+            ),
+            warning_ratio=_number(scalar, "stress_warning_ratio", 0.80),
+        ),
         settings=settings,
         source_path=path.resolve(),
     )
@@ -413,6 +446,16 @@ reconciliation_maximum_blocking_ratio: 0.01
 nasdaq_23h_enabled: false
 night_execution_enabled: false
 default_execution_session: REGULAR
+allow_calendar_fallback: false
+stress_maximum_cvar_loss: 0.06
+stress_maximum_liquidation_days: 5.0
+stress_maximum_correlation_spike_loss: 0.08
+stress_maximum_gap_loss: 0.08
+stress_maximum_stressed_volatility: 0.30
+stress_maximum_benchmark_crash_loss: 0.25
+stress_maximum_single_name_loss: 0.05
+stress_maximum_sector_loss: 0.10
+stress_warning_ratio: 0.80
 """
 
 

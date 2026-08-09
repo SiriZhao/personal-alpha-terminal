@@ -14,7 +14,10 @@ from personal_alpha_terminal.models import Portfolio, PortfolioPosition, Price, 
 from personal_alpha_terminal.quant_engine.alpha import AlphaSignal
 from personal_alpha_terminal.quant_engine.model_registry import ModelRegistryService
 from personal_alpha_terminal.quant_engine.production_pipeline import DailyQuantInput
-from personal_alpha_terminal.quant_engine.risk.budget import PortfolioRiskState
+from personal_alpha_terminal.quant_engine.risk.budget import (
+    CorrelationRiskStatus,
+    PortfolioRiskState,
+)
 from personal_alpha_terminal.quant_engine.risk.model import AssetRiskMetadata
 from personal_alpha_terminal.quant_engine.strategies.us_adaptive_alpha_core import (
     StrategyFactorSnapshot,
@@ -207,12 +210,24 @@ class ProductionDailyQuantInputAssembler:
                 f"certified benchmark is missing from PIT universe: {benchmark_symbol}"
             )
         benchmark_returns = returns[benchmark_symbol].dropna()
+        market_caps = pd.to_numeric(metadata["market_cap"], errors="coerce")
+        valid_caps = market_caps.notna() & (market_caps > 0)
+        size_scores: dict[str, float] = {}
+        if bool(valid_caps.all()) and len(metadata) >= 3:
+            log_caps = np.log(market_caps.astype(float))
+            deviation = float(log_caps.std(ddof=1))
+            if np.isfinite(deviation) and deviation > 1e-12:
+                centered = (log_caps - float(log_caps.mean())) / deviation
+                size_scores = {
+                    str(row.ticker): float(centered.iloc[index])
+                    for index, row in enumerate(metadata.itertuples(index=False))
+                }
         risk_metadata = tuple(
             AssetRiskMetadata(
                 symbol=str(row.ticker),
                 sector=str(row.sector),
                 average_daily_dollar_volume=float(row.average_daily_dollar_volume),
-                size_score=0.0,
+                size_score=size_scores.get(str(row.ticker)),
             )
             for row in metadata.itertuples(index=False)
         )
@@ -260,7 +275,10 @@ class ProductionDailyQuantInputAssembler:
             portfolio_id=portfolio_id, decision_time=research.decision_time
         )
         risk_state = self._risk_state(
-            research.returns, research.benchmark_returns, current_weights
+            research.returns,
+            research.benchmark_returns,
+            current_weights,
+            decision_cutoff=research.decision_time,
         )
         return AssembledDailyInput(
             DailyQuantInput(
@@ -368,9 +386,31 @@ class ProductionDailyQuantInputAssembler:
         returns: pd.DataFrame,
         benchmark_returns: pd.Series,
         current_weights: dict[str, float],
+        *,
+        decision_cutoff: datetime,
     ) -> PortfolioRiskState:
+        if decision_cutoff.tzinfo is None:
+            raise ValueError("portfolio risk cutoff must be timezone-aware")
+        cutoff = pd.Timestamp(decision_cutoff)
+        for name, history in (("asset", returns), ("benchmark", benchmark_returns)):
+            if not isinstance(history.index, pd.DatetimeIndex) or history.empty:
+                raise ValueError(f"{name} risk history requires a non-empty DatetimeIndex")
+            latest = history.index.max()
+            if latest.tzinfo is None:
+                if latest.date() > decision_cutoff.date():
+                    raise ValueError(f"{name} risk history contains future observations")
+            elif latest > cutoff:
+                raise ValueError(f"{name} risk history contains future observations")
         if not current_weights:
-            return PortfolioRiskState(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+            return PortfolioRiskState(
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                None,
+                None,
+                CorrelationRiskStatus.NOT_APPLICABLE,
+            )
         symbols = [symbol for symbol in current_weights if symbol in returns]
         if not symbols:
             raise ValueError("portfolio risk history does not cover current holdings")
@@ -382,9 +422,29 @@ class ProductionDailyQuantInputAssembler:
         rolling_volatility = float(np.std(portfolio_returns[-63:], ddof=1) * np.sqrt(252))
         wealth = np.cumprod(1 + portfolio_returns)
         drawdown = float(wealth[-1] / np.maximum.accumulate(wealth)[-1] - 1) if len(wealth) else 0.0
-        correlation = aligned.corr().to_numpy()
-        off_diagonal = correlation[np.triu_indices(len(symbols), 1)]
-        average_correlation = float(np.nanmean(off_diagonal)) if len(off_diagonal) else 0.0
+        recent_window = 63
+        baseline_window = 252
+        minimum_baseline = 126
+        if len(symbols) < 2:
+            correlation_status = CorrelationRiskStatus.NOT_APPLICABLE
+            recent_correlation = None
+            baseline_correlation = None
+            recent_samples = 0
+            baseline_samples = 0
+        else:
+            recent = aligned.iloc[-recent_window:]
+            baseline_end = max(0, len(aligned) - recent_window)
+            baseline = aligned.iloc[max(0, baseline_end - baseline_window):baseline_end]
+            recent_samples = len(recent)
+            baseline_samples = len(baseline)
+            if recent_samples < recent_window or baseline_samples < minimum_baseline:
+                correlation_status = CorrelationRiskStatus.NOT_VALIDATED
+                recent_correlation = None
+                baseline_correlation = None
+            else:
+                recent_correlation = _average_off_diagonal_correlation(recent)
+                baseline_correlation = _average_off_diagonal_correlation(baseline)
+                correlation_status = CorrelationRiskStatus.VALID
         common = pd.concat(
             [
                 pd.Series(portfolio_returns, index=aligned.index, name="portfolio"),
@@ -404,6 +464,19 @@ class ProductionDailyQuantInputAssembler:
             rolling_volatility=rolling_volatility,
             portfolio_beta=portfolio_beta,
             concentration_hhi=sum(weight * weight for weight in current_weights.values()),
-            average_correlation=average_correlation,
-            baseline_average_correlation=average_correlation,
+            average_correlation=recent_correlation,
+            baseline_average_correlation=baseline_correlation,
+            correlation_status=correlation_status,
+            correlation_recent_window=recent_window,
+            correlation_baseline_window=baseline_window,
+            correlation_recent_samples=recent_samples,
+            correlation_baseline_samples=baseline_samples,
         )
+
+
+def _average_off_diagonal_correlation(values: pd.DataFrame) -> float:
+    correlation = values.corr().to_numpy(dtype=float)
+    off_diagonal = correlation[np.triu_indices(len(values.columns), 1)]
+    if not len(off_diagonal) or np.any(~np.isfinite(off_diagonal)):
+        raise ValueError("correlation window is not finite")
+    return float(np.mean(off_diagonal))

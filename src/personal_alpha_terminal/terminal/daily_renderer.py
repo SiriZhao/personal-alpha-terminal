@@ -397,6 +397,24 @@ def _probability(result: DailyQuantResult, console: Console) -> None:
 
 def _risk(result: DailyQuantResult, console: Console) -> None:
     risk = result.risk
+    stress_notes = (*risk.stress_failures, *risk.stress_warnings)
+    console.print(
+        Panel(
+            f"Correlation {risk.correlation_status}: "
+            f"recent {_number(risk.recent_average_correlation)} / "
+            f"baseline {_number(risk.baseline_average_correlation)} / "
+            f"jump {_number(risk.correlation_jump)} "
+            f"(N={risk.correlation_sample_count})\n"
+            f"Size exposure {risk.size_exposure_status}   Stress {risk.stress_status}\n"
+            + (
+                "Stress evidence: " + "; ".join(stress_notes)
+                if stress_notes
+                else "Stress evidence: no veto or warning"
+            ),
+            title="RISK EVIDENCE - CAUSAL CORRELATION / SIZE / STRESS",
+            border_style="yellow" if risk.stress_status != "PASS" else "green",
+        )
+    )
     console.print(
         Panel(
             f"Gate {risk.status}   Expected vol {_percent(risk.expected_volatility)}   "

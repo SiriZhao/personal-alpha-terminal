@@ -14,6 +14,10 @@ analysis = Analysis(
         *collect_data_files("exchange_calendars"),
         (str(project_root / "migrations"), "migrations"),
         (str(project_root / "alembic.ini"), "."),
+        (
+            str(project_root / "packaging" / "build_metadata.json"),
+            "personal_alpha_terminal/core",
+        ),
     ],
     hiddenimports=[
         *yfinance_hidden,

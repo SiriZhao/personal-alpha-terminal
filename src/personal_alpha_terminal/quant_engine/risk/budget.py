@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 from math import isfinite
 
 
@@ -27,14 +28,25 @@ class RegimeRiskInput:
             raise ValueError("regime confidence must be in [0, 1]")
 
 
+class CorrelationRiskStatus(StrEnum):
+    VALID = "VALID"
+    NOT_APPLICABLE = "NOT_APPLICABLE"
+    NOT_VALIDATED = "NOT_VALIDATED"
+
+
 @dataclass(frozen=True, slots=True)
 class PortfolioRiskState:
     current_drawdown: float
     rolling_volatility: float
     portfolio_beta: float
     concentration_hhi: float
-    average_correlation: float
-    baseline_average_correlation: float
+    average_correlation: float | None
+    baseline_average_correlation: float | None
+    correlation_status: CorrelationRiskStatus = CorrelationRiskStatus.VALID
+    correlation_recent_window: int = 0
+    correlation_baseline_window: int = 0
+    correlation_recent_samples: int = 0
+    correlation_baseline_samples: int = 0
 
     def __post_init__(self) -> None:
         values = (
@@ -42,13 +54,28 @@ class PortfolioRiskState:
             self.rolling_volatility,
             self.portfolio_beta,
             self.concentration_hhi,
-            self.average_correlation,
-            self.baseline_average_correlation,
         )
         if any(not isfinite(value) for value in values):
             raise ValueError("portfolio risk state must be finite")
+        correlations = (self.average_correlation, self.baseline_average_correlation)
+        if any(value is not None and not isfinite(value) for value in correlations):
+            raise ValueError("portfolio correlation state must be finite when captured")
         if self.current_drawdown > 0:
             raise ValueError("drawdown must be zero or negative")
+        if self.correlation_status is CorrelationRiskStatus.VALID and any(
+            value is None for value in correlations
+        ):
+            raise ValueError("validated correlation risk requires both causal windows")
+
+    @property
+    def correlation_jump(self) -> float | None:
+        if (
+            self.correlation_status is not CorrelationRiskStatus.VALID
+            or self.average_correlation is None
+            or self.baseline_average_correlation is None
+        ):
+            return None
+        return self.average_correlation - self.baseline_average_correlation
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,17 +122,23 @@ class DynamicRiskBudget:
             volatility *= max(0.55, min(1.0, ratio))
             gross *= max(0.65, min(1.0, ratio**0.5))
             reasons.append("realized volatility exceeded the configured target")
-        correlation_jump = state.average_correlation - state.baseline_average_correlation
-        if correlation_jump > 0.15:
+        correlation_jump = state.correlation_jump
+        if correlation_jump is not None and correlation_jump > 0.15:
             scale = max(0.65, 1 - min(0.35, correlation_jump))
             gross *= scale
             position *= scale
             reasons.append("correlation spike reduced diversification capacity")
+        elif state.correlation_status is CorrelationRiskStatus.NOT_VALIDATED:
+            reasons.append("causal correlation baseline is not validated")
         if state.concentration_hhi > 0.20:
             gross *= 0.9
             position *= 0.85
             reasons.append("portfolio HHI is elevated")
-        allow_new_risk = state.current_drawdown > -0.25 and state.rolling_volatility < 0.60
+        allow_new_risk = (
+            state.current_drawdown > -0.25
+            and state.rolling_volatility < 0.60
+            and state.correlation_status is not CorrelationRiskStatus.NOT_VALIDATED
+        )
         if not allow_new_risk:
             reasons.append("severe observed risk blocks new exposure")
         return RiskBudget(

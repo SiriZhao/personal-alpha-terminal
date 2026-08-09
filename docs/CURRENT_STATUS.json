@@ -1,0 +1,66 @@
+{
+  "schema_version": "current-status-v2",
+  "version": "1.1.0",
+  "git_commit": "fb035499d91da8e3f234e10890dd86ae5abbd0d8+PART2_WORKTREE",
+  "build_id": "SOURCE_RUNTIME",
+  "generated_at": "2026-08-09T16:00:00+08:00",
+  "evidence_level": "FIXTURE_TESTED",
+  "operating_mode": "SHADOW_ONLY",
+  "alembic_head": "d4a5b6c7d8e9",
+  "capabilities": {
+    "DATA": {
+      "state": "REAL_DATA_TESTED",
+      "evidence": "Primary live retrieval and certification producers ran; the required independent secondary evidence remains unavailable for most symbols."
+    },
+    "PIT": {
+      "state": "BLOCKED_BY_DATA",
+      "evidence": "Contracts and leakage tests exist; survivorship-safe universe, delistings, and historical corporate-action availability are not fully certified."
+    },
+    "Alpha": {
+      "state": "FIXTURE_TESTED",
+      "evidence": "USAdaptiveAlphaCoreV1 runs deterministically through the production adapter; this is not real Locked-OOS validation."
+    },
+    "Probability": {
+      "state": "BLOCKED_BY_VALIDATION",
+      "evidence": "Calibration artifact contract is implemented; no real Locked-OOS calibration artifact is approved."
+    },
+    "Portfolio": {
+      "state": "BLOCKED_BY_VALIDATION",
+      "evidence": "Exact-fingerprint approval injection works; no real portfolio Locked-OOS approval artifact exists."
+    },
+    "Risk": {
+      "state": "FIXTURE_TESTED",
+      "evidence": "Causal correlation baseline, size validation, covariance, concentration, liquidity and fail-closed rules pass deterministic contracts."
+    },
+    "Stress": {
+      "state": "FIXTURE_TESTED",
+      "evidence": "Governed stress is in the daily risk chain; production veto authority requires an exact approved risk artifact."
+    },
+    "Backtest": {
+      "state": "BLOCKED_BY_DATA",
+      "evidence": "One PIT-gated engine exists, but certified survivorship-safe historical evidence remains unavailable."
+    },
+    "Locked OOS": {
+      "state": "BLOCKED_BY_DATA",
+      "evidence": "No real locked test was opened or promoted in this closure."
+    },
+    "Terminal": {
+      "state": "FIXTURE_TESTED",
+      "evidence": "Renderer identity is checked against the persisted DailyQuantResult from the vertical production path."
+    },
+    "Manual Execution": {
+      "state": "FIXTURE_TESTED",
+      "evidence": "Accepted recommendations support persisted multi-fill PENDING/PARTIAL/FILLED/CANCELLED/MODIFIED state; only actual fills mutate holdings."
+    },
+    "Live Capital": {
+      "state": "DISABLED",
+      "evidence": "LIVE_CAPITAL_NOT_APPROVED; real PIT, Locked-OOS, approval and shadow-forward evidence are incomplete."
+    }
+  },
+  "validation_checkpoint": {
+    "command": "pytest -q",
+    "result": "PENDING_FINAL_PART2_REGRESSION",
+    "quant_critical": "31 passed at working-tree checkpoint",
+    "commit": "fb035499d91da8e3f234e10890dd86ae5abbd0d8+PART2_WORKTREE"
+  }
+}

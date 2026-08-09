@@ -7,6 +7,10 @@ from sqlalchemy import func, select
 from personal_alpha_terminal.application.decision_service import (
     DecisionService as ApplicationDecisionService,
 )
+from personal_alpha_terminal.application.manual_execution_service import (
+    ManualExecutionOrderService,
+    ManualExecutionStatus,
+)
 from personal_alpha_terminal.core.config import Settings
 from personal_alpha_terminal.data.database import configure_database, init_database
 from personal_alpha_terminal.decision_engine import (
@@ -19,6 +23,7 @@ from personal_alpha_terminal.decision_engine import (
 )
 from personal_alpha_terminal.decision_engine.schemas import DecisionAction
 from personal_alpha_terminal.models import (
+    ManualExecutionOrder,
     Portfolio,
     PortfolioPosition,
     PortfolioTransaction,
@@ -27,6 +32,8 @@ from personal_alpha_terminal.models import (
 from personal_alpha_terminal.portfolio.management_repository import (
     PortfolioManagementRepository,
 )
+
+pytestmark = pytest.mark.quant_critical
 
 
 def test_accepting_quant_decision_records_manual_review_without_execution() -> None:
@@ -104,7 +111,7 @@ def test_accepting_quant_decision_records_manual_review_without_execution() -> N
             )
 
 
-def test_accepted_candidate_can_record_manual_schwab_fill_once() -> None:
+def test_accepted_candidate_supports_idempotent_partial_schwab_fills() -> None:
     settings = Settings(_env_file=None, database_url="sqlite://")
     engine, session_factory = configure_database(settings)
     init_database(engine)
@@ -185,8 +192,8 @@ def test_accepted_candidate_can_record_manual_schwab_fill_once() -> None:
         assert transaction is not None
         assert position is not None
         assert portfolio is not None
-        assert transaction.source == "manual_charles_schwab"
-        assert transaction.external_id == "decision:QD-manual-fill"
+        assert transaction.source == "manual_charles_schwab_fill"
+        assert transaction.external_id == "fill:legacy:QD-manual-fill"
         assert transaction.quantity == Decimal("10.00000000")
         assert transaction.unit_price == Decimal("201.250000")
         assert position.quantity == Decimal("10.00000000")
@@ -208,6 +215,60 @@ def test_accepted_candidate_can_record_manual_schwab_fill_once() -> None:
         portfolio = session.scalar(select(Portfolio))
         assert portfolio is not None
         assert portfolio.cash_balance == Decimal("47987.0000")
+
+    with session_factory.begin() as session:
+        order_service = ManualExecutionOrderService(session)
+        modified = order_service.modify_quantity(
+            "QD-manual-fill",
+            approved_quantity=20,
+            reason="manual size reduction recorded after partial fill",
+        )
+        assert modified.status is ManualExecutionStatus.MODIFIED
+        assert modified.approved_quantity == 20
+        restored = order_service.modify_quantity(
+            "QD-manual-fill",
+            approved_quantity=25,
+            reason="user restored the original approved quantity before remaining fill",
+        )
+        assert restored.status is ManualExecutionStatus.MODIFIED
+
+    with pytest.raises(ValueError, match="exceeds approved recommendation"):
+        with session_factory.begin() as session:
+            ApplicationDecisionService(session).mark_executed(
+                "QD-manual-fill",
+                actual_price=202,
+                quantity=16,
+                executed_at=now + timedelta(hours=15),
+                fill_id="schwab-fill-over-approved",
+            )
+
+    with session_factory.begin() as session:
+        message = ApplicationDecisionService(session).mark_executed(
+            "QD-manual-fill",
+            actual_price=202,
+            quantity=15,
+            fees=1,
+            executed_at=now + timedelta(hours=15),
+            fill_id="schwab-fill-remaining",
+            external_reference="schwab-order-123",
+        )
+        assert "status=FILLED" in message
+
+    with session_factory() as session:
+        order = session.scalar(select(ManualExecutionOrder))
+        position = session.scalar(select(PortfolioPosition))
+        portfolio = session.scalar(select(Portfolio))
+        assert order is not None
+        assert position is not None
+        assert portfolio is not None
+        metrics = ManualExecutionOrderService(session).metrics(order.id)
+        assert metrics.status is ManualExecutionStatus.FILLED
+        assert metrics.fill_ratio == pytest.approx(1)
+        assert metrics.weighted_average_fill_price == pytest.approx(201.7)
+        assert metrics.total_fees == pytest.approx(1.5)
+        assert position.quantity == Decimal("25.00000000")
+        assert portfolio.cash_balance == Decimal("44956.0000")
+        assert session.scalar(select(func.count()).select_from(PortfolioTransaction)) == 2
 
 
 def test_manual_fill_outside_us_session_is_rejected() -> None:

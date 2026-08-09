@@ -47,6 +47,7 @@ from personal_alpha_terminal.quant_engine.production_pipeline import (
 )
 from personal_alpha_terminal.quant_engine.risk.budget import PortfolioRiskState
 from personal_alpha_terminal.quant_engine.risk.model import AssetRiskMetadata
+from personal_alpha_terminal.quant_engine.risk.stress import StressRiskConfig
 from personal_alpha_terminal.quant_engine.strategies.us_adaptive_alpha_core import (
     StrategyFactorSnapshot,
 )
@@ -164,7 +165,13 @@ def _actual_quant_output():
         model_validation_id="locked-oos-fixture",
     )
     pipeline = DailyQuantPipeline(
-        construction=PortfolioConstructionEngine(constraints)
+        construction=PortfolioConstructionEngine(constraints),
+        stress_config=StressRiskConfig(
+            production_validated=True,
+            validation_id="locked-oos-stress-fixture",
+            maximum_single_name_loss=0.10,
+            maximum_sector_loss=0.20,
+        ),
     )
     return pipeline.run(
         DailyQuantInput(
@@ -455,7 +462,9 @@ def test_optional_data_degradation_does_not_block_required_quant_chain(
 
     data_stage = next(item for item in result.stages if item.name == "DATA")
     assert data_stage.status is StageStatus.PASS_DEGRADED
-    assert result.actionable
+    assert result.actionable, tuple(
+        (item.name, item.status.value, item.message) for item in result.stages
+    )
 
 
 def test_data_gate_failure_does_not_rollback_sync_manifest_or_universe(
@@ -656,6 +665,8 @@ def test_no_action_requires_complete_certified_pipeline(
         _settings(tmp_path),
         snapshot_root=tmp_path / "no-action",
     ).run(decision_time=NOW, refresh=False)
-    assert result.actionable
+    assert result.actionable, tuple(
+        (item.name, item.status.value, item.message) for item in result.stages
+    )
     assert result.run_classification == "CERTIFIED_NO_ACTION"
     assert "CERTIFIED NO-ACTION RUN" in capture_daily_quant_result(result)

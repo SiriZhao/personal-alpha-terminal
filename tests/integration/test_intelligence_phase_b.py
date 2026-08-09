@@ -54,6 +54,7 @@ from personal_alpha_terminal.quant_engine.risk.budget import (
     RegimeRiskInput,
 )
 from personal_alpha_terminal.quant_engine.risk.model import AssetRiskMetadata
+from personal_alpha_terminal.quant_engine.risk.stress import StressRiskConfig
 from personal_alpha_terminal.research.data_gate import GateStatus, ResearchPurpose
 from tests.unit.intelligence.helpers import make_event
 from tests.unit.intelligence.test_scanner_storage import (
@@ -255,7 +256,11 @@ def test_application_integration_runs_quant_portfolio_risk_before_scanner() -> N
         pipeline = IntegratedIntelligencePipeline(
             service,
             DailyQuantPipeline(
-                construction=PortfolioConstructionEngine(_constraints())
+                construction=PortfolioConstructionEngine(_constraints()),
+                stress_config=StressRiskConfig(
+                    production_validated=True,
+                    validation_id="integration-stress-validation-v1",
+                ),
             ),
         )
         output = pipeline.run(

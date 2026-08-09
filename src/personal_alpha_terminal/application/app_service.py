@@ -21,6 +21,9 @@ from personal_alpha_terminal.application.diagnostic_service import DiagnosticSer
 from personal_alpha_terminal.application.intelligence_service import (
     IntelligenceApplicationService,
 )
+from personal_alpha_terminal.application.manual_execution_service import (
+    ManualExecutionOrderService,
+)
 from personal_alpha_terminal.application.pipeline_service import PipelineService
 from personal_alpha_terminal.application.quant_daily_service import (
     ProductionDailyWorkflow,
@@ -59,8 +62,8 @@ from personal_alpha_terminal.terminal.market_sessions import MarketSessionCalend
 class ApplicationService:
     """Headless facade for research, backtests, diagnostics, and manual review.
 
-    Paper trading was deliberately removed. Accepting a candidate records an
-    immutable human decision; it never creates an order or changes a portfolio.
+    Paper trading was deliberately removed. Accepting a candidate creates only
+    a pending manual-execution record; it never contacts a broker or changes holdings.
     """
 
     def __init__(
@@ -132,9 +135,10 @@ class ApplicationService:
     def get_market_session_status(self) -> str:
         now = datetime.now(UTC)
         state = MarketSessionCalendar(
-            nasdaq_23h_enabled=self._settings.nasdaq_23h_enabled,
-            nasdaq_23h_effective_date=self._settings.nasdaq_23h_effective_date,
+            nasdaq_23h_enabled=self._effective_config.nasdaq_23h_enabled,
+            nasdaq_23h_effective_date=self._effective_config.nasdaq_23h_effective_date,
             night_execution_enabled=False,
+            allow_deterministic_fallback=self._effective_config.allow_calendar_fallback,
         ).classify(now)
         return (
             f"ET {state.timestamp_et:%Y-%m-%d %H:%M %Z} | "
@@ -364,6 +368,8 @@ class ApplicationService:
         fees: float = 0.0,
         executed_at: datetime | None = None,
         notes: str = "",
+        fill_id: str | None = None,
+        external_reference: str | None = None,
     ) -> str:
         with self._factory.begin() as session:
             return DecisionService(session).mark_executed(
@@ -373,6 +379,34 @@ class ApplicationService:
                 fees=fees,
                 executed_at=executed_at,
                 notes=notes,
+                fill_id=fill_id,
+                external_reference=external_reference,
+            )
+
+    def cancel_candidate_execution(self, recommendation_id: str, *, reason: str) -> str:
+        with self._factory.begin() as session:
+            metrics = ManualExecutionOrderService(session).cancel(
+                recommendation_id,
+                reason=reason,
+            )
+            return f"Manual execution {metrics.order_id}: {metrics.status.value}"
+
+    def modify_candidate_execution(
+        self,
+        recommendation_id: str,
+        *,
+        approved_quantity: float,
+        reason: str,
+    ) -> str:
+        with self._factory.begin() as session:
+            metrics = ManualExecutionOrderService(session).modify_quantity(
+                recommendation_id,
+                approved_quantity=approved_quantity,
+                reason=reason,
+            )
+            return (
+                f"Manual execution {metrics.order_id}: {metrics.status.value}; "
+                f"approved quantity={metrics.approved_quantity:g}"
             )
 
     def run_backtest(self, **parameters: object) -> object:

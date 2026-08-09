@@ -6,16 +6,12 @@ from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
+from personal_alpha_terminal.application.manual_execution_service import (
+    ManualExecutionOrderService,
+    ManualFillSubmission,
+)
 from personal_alpha_terminal.decision_engine.repository import DecisionRepository
 from personal_alpha_terminal.decision_engine.schemas import UserDecision
-from personal_alpha_terminal.portfolio.management_repository import (
-    PortfolioManagementRepository,
-)
-from personal_alpha_terminal.portfolio.management_schemas import TransactionDraft
-from personal_alpha_terminal.terminal.market_sessions import (
-    MarketSession,
-    MarketSessionCalendar,
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,6 +69,13 @@ class DecisionService:
             decided_at=datetime.now(UTC),
             reason=reason,
         )
+        if decision is UserDecision.ACCEPTED:
+            recommendation = self._repository.get_recommendation(recommendation_id)
+            if (
+                recommendation is not None
+                and recommendation.action.upper() in {"BUY", "ADD", "SELL", "REDUCE"}
+            ):
+                ManualExecutionOrderService(self._session).ensure_order(recommendation)
         return history.decision
 
     def mark_executed(
@@ -84,6 +87,8 @@ class DecisionService:
         fees: float = 0.0,
         executed_at: datetime | None = None,
         notes: str = "",
+        fill_id: str | None = None,
+        external_reference: str | None = None,
     ) -> str:
         """Record a fill entered manually at Charles Schwab in the real ledger."""
 
@@ -104,56 +109,24 @@ class DecisionService:
             earliest = earliest.replace(tzinfo=UTC)
         if timestamp.astimezone(UTC) < earliest.astimezone(UTC):
             raise ValueError("manual fill precedes the earliest permitted execution time")
-        action = recommendation.action.upper()
-        if action not in {"BUY", "ADD", "SELL", "REDUCE"}:
-            raise ValueError(f"{action} has no executable fill")
-        transaction_type = "buy" if action in {"BUY", "ADD"} else "sell"
-        calendar = MarketSessionCalendar()
-        market_state = calendar.classify(timestamp)
-        if market_state.session in {MarketSession.CLOSED, MarketSession.MAINTENANCE}:
-            raise ValueError("manual fill timestamp is outside an eligible US trading session")
-        trade_date = market_state.trade_date
-        settlement_date = calendar.next_trading_day(trade_date)
-        draft = TransactionDraft(
-            transaction_type=transaction_type,
-            trade_date=trade_date,
-            settlement_date=settlement_date,
-            currency=recommendation.stock.currency,
-            fx_rate_to_base=1.0,
-            event_time=timestamp,
-            available_time=timestamp,
-            stock_id=recommendation.stock_id,
-            quantity=quantity,
-            unit_price=actual_price,
-            fee_amount=fees,
-            source="manual_charles_schwab",
-            external_id=f"decision:{recommendation_id}",
-            notes=(
-                f"Manual Charles Schwab fill; recommendation={recommendation_id}. "
-                f"{notes.strip()}"
-            ).strip(),
+        metrics = ManualExecutionOrderService(self._session).record_fill(
+            ManualFillSubmission(
+                fill_id=fill_id or f"legacy:{recommendation_id}",
+                recommendation_id=recommendation_id,
+                quantity=quantity,
+                price=actual_price,
+                fee=fees,
+                executed_at=timestamp,
+                external_reference=external_reference,
+                notes=notes,
+            )
         )
-        repository = PortfolioManagementRepository(self._session)
-        external_id = f"decision:{recommendation_id}"
-        existing = repository.transaction_by_external_id(
-            portfolio_id=recommendation.run.portfolio_id,
-            source="manual_charles_schwab",
-            external_id=external_id,
+        if metrics.idempotent_replay:
+            return (
+                f"manual fill already recorded status={metrics.status.value} "
+                f"fill_ratio={metrics.fill_ratio:.6f} order_id={metrics.order_id}"
+            )
+        return (
+            f"EXECUTED_MANUALLY status={metrics.status.value} "
+            f"fill_ratio={metrics.fill_ratio:.6f} order_id={metrics.order_id}"
         )
-        if existing is not None:
-            return f"EXECUTED_MANUALLY transaction_id={existing.id} (already recorded)"
-        transaction = repository.add_transaction(
-            portfolio_id=recommendation.run.portfolio_id,
-            draft=draft,
-        )
-        repository.apply_trade_to_current_snapshot(
-            portfolio_id=recommendation.run.portfolio_id,
-            stock_id=recommendation.stock_id,
-            as_of_date=trade_date,
-            transaction_type=transaction_type,
-            quantity=Decimal(str(quantity)),
-            unit_price=Decimal(str(actual_price)),
-            fee_amount=Decimal(str(fees)),
-            currency=recommendation.stock.currency,
-        )
-        return f"EXECUTED_MANUALLY transaction_id={transaction.id}"

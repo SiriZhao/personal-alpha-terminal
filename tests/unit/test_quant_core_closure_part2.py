@@ -17,7 +17,11 @@ from personal_alpha_terminal.quant_engine.event_study_production import EventObs
 from personal_alpha_terminal.quant_engine.factors.contracts import FactorObservation
 from personal_alpha_terminal.quant_engine.factors.cross_sectional import FactorSignalStatus
 from personal_alpha_terminal.quant_engine.governance import ExperimentDefinition, ExperimentRegistry, deflated_sharpe_risk, purged_walk_forward_splits
-from personal_alpha_terminal.quant_engine.risk.model import RiskModelEstimate, RiskModelStatus
+from personal_alpha_terminal.quant_engine.risk.model import (
+    RiskModelEstimate,
+    RiskModelStatus,
+    SizeExposureStatus,
+)
 from personal_alpha_terminal.quant_engine.risk.stress import evaluate_portfolio_stress
 
 UTC = timezone.utc
@@ -103,7 +107,23 @@ def test_cost_model_includes_configured_minimum_and_regulatory_fee() -> None:
 
 def test_portfolio_stress_reports_cvar_liquidity_and_concentration() -> None:
     covariance = np.array([[0.04, 0.01], [0.01, 0.09]])
-    risk = RiskModelEstimate(("A", "B"), covariance, np.array([[1, 0.2], [0.2, 1]]), {"A": 0.2, "B": 0.3}, {"A": 1.0, "B": 1.2}, {"A": "TECH", "B": "FIN"}, {"A": 1_000_000, "B": 500_000}, {"A": 1, "B": 0}, 100, RiskModelStatus.VALID, 2, 0.2, "risk-v1", ())
+    risk = RiskModelEstimate(
+        symbols=("A", "B"),
+        annualized_covariance=covariance,
+        correlation=np.array([[1, 0.2], [0.2, 1]]),
+        annualized_volatility={"A": 0.2, "B": 0.3},
+        beta={"A": 1.0, "B": 1.2},
+        sectors={"A": "TECH", "B": "FIN"},
+        average_daily_dollar_volume={"A": 1_000_000, "B": 500_000},
+        size_scores={"A": 1, "B": 0},
+        size_exposure_status=SizeExposureStatus.VALID,
+        observations=100,
+        status=RiskModelStatus.VALID,
+        condition_number=2,
+        shrinkage=0.2,
+        model_version="risk-v1",
+        limitations=(),
+    )
     report = evaluate_portfolio_stress(weights={"A": 0.4, "B": 0.3}, portfolio_returns=tuple(-0.02 if i % 20 == 0 else 0.001 for i in range(100)), risk=risk, portfolio_value=100_000, maximum_adv_participation=0.02)
     assert report.historical_cvar_95 < 0
     assert report.liquidity_liquidation_days > 0

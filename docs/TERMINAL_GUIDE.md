@@ -36,7 +36,8 @@ The no-argument executable and `daily` command run the same application orchestr
 - **PORTFOLIO** — cash, positions, weights, target deltas, exposure and valuation completeness.
 - **FACTOR / ALPHA** — inputs actually used by the registered strategy. `CANDIDATE != TRADE`.
 - **CONDITIONAL PROBABILITY** — conditional/base rates, lift, sample size, interval and OOS/calibration status. Small samples show `INSUFFICIENT EVIDENCE`.
-- **RISK** — raw target versus risk-adjusted target, limits, concentration, turnover and reasons.
+- **RISK / STRESS** — raw target versus risk-adjusted target, causal recent-versus-baseline
+  correlation, size-validation state, concentration, turnover, stress vetoes and warnings.
 - **REJECTED SIGNALS** — which gate rejected an intermediate proposal and why.
 - **FINAL VALIDATED DECISIONS** — the only formal decision output; copied directly from the persisted `DailyQuantResult`.
 - **EXECUTION PLAN** — sells/reductions before buys/increases, estimated costs and cash; manual execution only.
@@ -60,10 +61,22 @@ PersonalAlphaTerminal.exe watch <recommendation_id> --run-id <run_id>
 ACCEPT produces `PENDING MANUAL EXECUTION`; it does not change holdings. After a real Schwab fill:
 
 ```text
-PersonalAlphaTerminal.exe mark-executed <recommendation_id> --run-id <run_id> --price 187.25 --quantity 10 --fees 0
+PersonalAlphaTerminal.exe mark-executed <recommendation_id> --run-id <run_id> --fill-id schwab-fill-001 --price 187.25 --quantity 4 --fees 0
+PersonalAlphaTerminal.exe mark-executed <recommendation_id> --run-id <run_id> --fill-id schwab-fill-002 --price 187.40 --quantity 6 --fees 0
 ```
 
-The timestamp must be eligible, data/model gates must still match, and price/quantity/fees must be valid.
+The first fill above leaves a ten-share recommendation `PARTIAL`; the second makes it `FILLED`.
+Duplicate fill IDs are idempotent only when the complete payload is identical. Cumulative fills
+cannot exceed the approved quantity, buys cannot exceed cash, and sells cannot exceed holdings.
+The timestamp must be eligible and price/quantity/fees must be valid.
+
+```text
+PersonalAlphaTerminal.exe modify-execution <recommendation_id> --run-id <run_id> --quantity 8 --reason "manual size reduction"
+PersonalAlphaTerminal.exe cancel-execution <recommendation_id> --run-id <run_id> --reason "order cancelled at Schwab"
+```
+
+Modification cannot increase the original approved quantity or go below already filled quantity.
+Neither modification nor cancellation reverses fills that already changed the real ledger.
 
 ## Other commands
 
@@ -78,4 +91,7 @@ Decision Trace uses `NOT_CAPTURED` when a real intermediate (for example winsori
 
 ## Safety behavior
 
-Stale data, failed PIT validation, missing portfolio, invalid covariance/risk results, or unapproved models result in `NOT_ACTIONABLE`. Diagnostic factor tables may still appear, but no BUY/SELL may enter the execution plan.
+Stale data, failed PIT validation, missing portfolio, invalid covariance/risk/stress results, an
+unavailable production calendar, or unapproved models result in `NOT_ACTIONABLE`. Diagnostic
+factor tables may still appear, but no BUY/SELL may enter the execution plan. `NO_ACTION` is
+reserved for a fully completed chain that computes no rebalance.

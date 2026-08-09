@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timedelta
 from decimal import Decimal
 from hashlib import sha256
@@ -36,7 +36,12 @@ from personal_alpha_terminal.quant_engine.production_pipeline import (
     PipelineStage,
     ProductionPipelineStatus,
 )
+from personal_alpha_terminal.quant_engine.risk.budget import PortfolioRiskState
 from personal_alpha_terminal.quant_engine.risk.model import PortfolioRiskModel, RiskModelEstimate
+from personal_alpha_terminal.quant_engine.risk.stress import (
+    PortfolioStressReport,
+    StressRiskConfig,
+)
 from personal_alpha_terminal.quant_engine.strategies.us_adaptive_alpha_core import (
     StrategyFactorSnapshot,
 )
@@ -110,6 +115,8 @@ class TodayResult:
     identity_hashes: dict[str, str] | None = None
     model_approval_hash: str = "UNAVAILABLE"
     probability_calibration_status: str = "PROBABILITY_NOT_CALIBRATED"
+    stress: PortfolioStressReport | None = None
+    risk_state: PortfolioRiskState | None = None
 
 
 class ProductionDailyWorkflow:
@@ -138,10 +145,18 @@ class ProductionDailyWorkflow:
             ),
             cost_model=costs,
         )
+        stress_config = StressRiskConfig(
+            **{
+                **asdict(self.effective_config.stress_risk),
+                "production_validated": validation_id is not None,
+                "validation_id": validation_id,
+            }
+        )
         return DailyQuantPipeline(
             risk_model=PortfolioRiskModel(self.effective_config.risk_model),
             construction=construction,
             cost_model=costs,
+            stress_config=stress_config,
         )
 
     def run(self, *, portfolio_id: int | None, decision_time: datetime) -> TodayResult:
@@ -621,6 +636,8 @@ class ProductionDailyWorkflow:
                 if any(item.confidence_calibrated for item in assembled.inputs.alpha_signals)
                 else "PROBABILITY_NOT_CALIBRATED"
             ) if assembled is not None else "PROBABILITY_NOT_CALIBRATED",
+            stress=output.stress if output is not None else None,
+            risk_state=(assembled.inputs.portfolio_risk_state if assembled is not None else None),
         )
 
     def _identity_hashes(self, data_version: str) -> dict[str, str]:

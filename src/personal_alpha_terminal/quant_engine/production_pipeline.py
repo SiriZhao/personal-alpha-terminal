@@ -32,6 +32,12 @@ from personal_alpha_terminal.quant_engine.risk.model import (
     PortfolioRiskModel,
     RiskModelEstimate,
 )
+from personal_alpha_terminal.quant_engine.risk.stress import (
+    PortfolioStressReport,
+    StressRiskConfig,
+    StressStatus,
+    evaluate_portfolio_stress,
+)
 from personal_alpha_terminal.research.data_gate import (
     ResearchDataAuthorization,
     ResearchPurpose,
@@ -76,6 +82,7 @@ class DailyQuantOutput:
     trades: tuple[TradeProposal, ...]
     decision: ProductionDecision | None
     blockers: tuple[str, ...]
+    stress: PortfolioStressReport | None = None
 
 
 class DailyQuantPipeline:
@@ -88,6 +95,7 @@ class DailyQuantPipeline:
         construction: PortfolioConstructionEngine | None = None,
         risk_budget: DynamicRiskBudget | None = None,
         cost_model: TransactionCostModel | None = None,
+        stress_config: StressRiskConfig | None = None,
     ) -> None:
         self.cost_model = cost_model or TransactionCostModel()
         self.risk_model = risk_model or PortfolioRiskModel()
@@ -97,6 +105,7 @@ class DailyQuantPipeline:
         self.risk_budget = risk_budget or DynamicRiskBudget()
         self.trade_generator = TradeGenerator(self.cost_model)
         self.decision_engine = ProductionDecisionEngine()
+        self.stress_config = stress_config or StressRiskConfig()
 
     def run(self, inputs: DailyQuantInput) -> DailyQuantOutput:
         stages: list[PipelineStage] = []
@@ -252,6 +261,56 @@ class DailyQuantPipeline:
         stages.append(
             PipelineStage("Portfolio Construction", "PRODUCTION_APPROVED", target.model_version)
         )
+        target_vector = np.asarray(
+            [target.target_weights.get(symbol, 0.0) for symbol in risk.symbols], dtype=float
+        )
+        aligned_target_returns = inputs.returns.loc[:, list(risk.symbols)].dropna(how="any")
+        stress_returns = tuple((aligned_target_returns.to_numpy() @ target_vector).tolist())
+        try:
+            stress = evaluate_portfolio_stress(
+                weights=target.target_weights,
+                portfolio_returns=stress_returns,
+                risk=risk,
+                portfolio_value=inputs.portfolio_value,
+                maximum_adv_participation=self.cost_model.config.maximum_adv_participation,
+                config=self.stress_config,
+            )
+        except (ArithmeticError, ValueError) as error:
+            blockers.append(f"stress evaluation failed safely: {error}")
+            stages.append(PipelineStage("Stress Risk", "BLOCKED", blockers[-1]))
+            return DailyQuantOutput(
+                ProductionPipelineStatus.BLOCKED,
+                tuple(stages),
+                risk,
+                target,
+                (),
+                None,
+                tuple(blockers),
+            )
+        stages.append(
+            PipelineStage(
+                "Stress Risk",
+                stress.status.value,
+                "; ".join((*stress.hard_failures, *stress.warnings)) or stress.model_version,
+            )
+        )
+        if stress.status in {StressStatus.BLOCKED, StressStatus.NOT_VALIDATED}:
+            reason = (
+                "STRESS_NOT_PRODUCTION_VALIDATED"
+                if stress.status is StressStatus.NOT_VALIDATED
+                else f"stress veto: {', '.join(stress.hard_failures)}"
+            )
+            blockers.append(reason)
+            return DailyQuantOutput(
+                ProductionPipelineStatus.BLOCKED,
+                tuple(stages),
+                risk,
+                target,
+                (),
+                None,
+                tuple(blockers),
+                stress,
+            )
         evidence = _trade_evidence(approved_alpha)
         risk_contribution = _risk_contributions(target, risk)
         try:
@@ -299,6 +358,7 @@ class DailyQuantPipeline:
             trades,
             decision,
             (),
+            stress,
         )
 
 

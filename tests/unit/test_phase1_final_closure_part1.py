@@ -35,6 +35,8 @@ from personal_alpha_terminal.quant_engine.validation_artifacts import (
 )
 from personal_alpha_terminal.terminal import cli
 
+pytestmark = pytest.mark.quant_critical
+
 
 def _config_file(tmp_path: Path) -> Path:
     path = tmp_path / "config.yaml"

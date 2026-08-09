@@ -4,9 +4,20 @@ import importlib
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from enum import StrEnum
+from typing import Protocol, cast
 from zoneinfo import ZoneInfo
 
 NEW_YORK = ZoneInfo("America/New_York")
+
+
+class _TimestampLike(Protocol):
+    def to_pydatetime(self) -> datetime: ...
+
+
+class _ExchangeCalendar(Protocol):
+    def is_session(self, session_label: str) -> bool: ...
+
+    def session_close(self, session_label: str) -> _TimestampLike: ...
 
 
 class MarketSession(StrEnum):
@@ -47,10 +58,12 @@ class MarketSessionCalendar:
         nasdaq_23h_enabled: bool = False,
         nasdaq_23h_effective_date: date | None = None,
         night_execution_enabled: bool = False,
+        allow_deterministic_fallback: bool = False,
     ) -> None:
         self.nasdaq_23h_enabled = nasdaq_23h_enabled
         self.nasdaq_23h_effective_date = nasdaq_23h_effective_date
         self.night_execution_enabled = night_execution_enabled
+        self.allow_deterministic_fallback = allow_deterministic_fallback
 
     def classify(self, value: datetime) -> MarketSessionState:
         if value.tzinfo is None:
@@ -95,12 +108,14 @@ class MarketSessionCalendar:
 
     def is_trading_day(self, value: date) -> bool:
         try:
-            xcals = importlib.import_module("exchange_calendars")
-
-            calendar = xcals.get_calendar("XNYS")
+            calendar = self._calendar()
             return bool(calendar.is_session(value.isoformat()))
-        except (ImportError, ValueError, TypeError):
-            return value.weekday() < 5
+        except (ImportError, ValueError, TypeError, AttributeError) as error:
+            if self.allow_deterministic_fallback:
+                return value.weekday() < 5
+            raise CalendarUnavailableError(
+                f"certified XNYS calendar unavailable: {type(error).__name__}: {error}"
+            ) from error
 
     def next_trading_day(self, value: date) -> date:
         candidate = value + timedelta(days=1)
@@ -119,9 +134,7 @@ class MarketSessionCalendar:
 
     def _regular_close(self, value: date) -> time:
         try:
-            xcals = importlib.import_module("exchange_calendars")
-
-            calendar = xcals.get_calendar("XNYS")
+            calendar = self._calendar()
             label = value.isoformat()
             if calendar.is_session(label):
                 close = (
@@ -130,9 +143,18 @@ class MarketSessionCalendar:
                     .astimezone(NEW_YORK)
                 )
                 return time(close.hour, close.minute, close.second)
-        except (ImportError, ValueError, TypeError):
-            pass
-        return time(16, 0)
+            return time(16, 0)
+        except (ImportError, ValueError, TypeError, AttributeError) as error:
+            if self.allow_deterministic_fallback:
+                return time(16, 0)
+            raise CalendarUnavailableError(
+                f"certified XNYS session close unavailable: {type(error).__name__}: {error}"
+            ) from error
+
+    @staticmethod
+    def _calendar() -> _ExchangeCalendar:
+        xcals = importlib.import_module("exchange_calendars")
+        return cast(_ExchangeCalendar, xcals.get_calendar("XNYS"))
 
     @staticmethod
     def _classify_legacy(value: time, regular_close: time) -> MarketSession:
@@ -185,3 +207,7 @@ class MarketSessionCalendar:
         if self.is_trading_day(local.date()):
             return local.date()
         return self.next_trading_day(local.date())
+
+
+class CalendarUnavailableError(RuntimeError):
+    pass

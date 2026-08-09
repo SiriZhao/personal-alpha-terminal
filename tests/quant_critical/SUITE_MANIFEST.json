@@ -1,0 +1,18 @@
+{
+  "schema_version": "quant-critical-suite-v1",
+  "minimum_test_count": 31,
+  "invariants": [
+    "pit_cutoff_and_no_lookahead",
+    "survivorship_and_universe_gate",
+    "corporate_action_and_total_return_provenance",
+    "provider_reconciliation_and_canonical_series",
+    "feature_factor_cutoff_and_neutralization",
+    "model_fingerprint_and_portfolio_approval",
+    "next_session_execution_and_transaction_cost",
+    "cash_accounting_and_manual_partial_fills",
+    "causal_correlation_size_and_stress_fail_closed",
+    "benchmark_and_locked_oos_gate",
+    "renderer_persisted_backend_identity",
+    "effective_config_and_stage_hash_chain"
+  ]
+}

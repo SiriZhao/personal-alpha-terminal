@@ -59,6 +59,10 @@ from personal_alpha_terminal.models.lead_lag import (
     LeadLagMetric,
     LeadLagPairResult,
 )
+from personal_alpha_terminal.models.manual_execution import (
+    ManualExecutionFill,
+    ManualExecutionOrder,
+)
 from personal_alpha_terminal.models.market import (
     Financial,
     Industry,
@@ -197,6 +201,8 @@ __all__ = [
     "MarketUniverseSnapshot",
     "ManualRebalanceFillRecord",
     "ManualExecutionRecord",
+    "ManualExecutionFill",
+    "ManualExecutionOrder",
     "ManualRebalanceTicketRecord",
     "ModelRegistryRecord",
     "ModelApprovalRecord",

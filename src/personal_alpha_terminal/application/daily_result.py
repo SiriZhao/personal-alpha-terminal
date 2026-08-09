@@ -65,6 +65,7 @@ class FactorRow:
     raw_values: dict[str, float] = field(default_factory=dict)
     winsorized_values: dict[str, float] = field(default_factory=dict)
     neutralized_values: dict[str, float] = field(default_factory=dict)
+    neutralization_evidence: dict[str, dict[str, object]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,6 +119,17 @@ class RiskSummary:
     exposure_multiplier: float | None
     largest_target_weight: float | None
     reasons: tuple[str, ...]
+    recent_average_correlation: float | None = None
+    baseline_average_correlation: float | None = None
+    correlation_jump: float | None = None
+    correlation_status: str = "NOT_CAPTURED"
+    correlation_recent_window: int = 0
+    correlation_baseline_window: int = 0
+    correlation_sample_count: int = 0
+    size_exposure_status: str = "NOT_CAPTURED"
+    stress_status: str = "NOT_CAPTURED"
+    stress_failures: tuple[str, ...] = ()
+    stress_warnings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

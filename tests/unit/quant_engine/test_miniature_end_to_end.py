@@ -47,12 +47,15 @@ from personal_alpha_terminal.quant_engine.risk.budget import (
     RegimeRiskInput,
 )
 from personal_alpha_terminal.quant_engine.risk.model import AssetRiskMetadata
+from personal_alpha_terminal.quant_engine.risk.stress import StressRiskConfig
 from personal_alpha_terminal.research.data_gate import (
     ResearchDataEvidence,
     ResearchDataGate,
     ResearchDataRequest,
     ResearchPurpose,
 )
+
+pytestmark = pytest.mark.quant_critical
 
 SYMBOLS = ("AAA", "BBB", "CCC", "DDD", "EEE")
 ASSET_IDS = {symbol: index + 1 for index, symbol in enumerate(SYMBOLS)}
@@ -232,7 +235,11 @@ def _run_daily():
         for index, symbol in enumerate(SYMBOLS)
     )
     return DailyQuantPipeline(
-        construction=PortfolioConstructionEngine(_constraints())
+        construction=PortfolioConstructionEngine(_constraints()),
+        stress_config=StressRiskConfig(
+            production_validated=True,
+            validation_id="mini-locked-stress-v1",
+        ),
     ).run(
         DailyQuantInput(
             authorization=_authorization(),

@@ -92,6 +92,7 @@ class DailyQuantOrchestrator:
             nasdaq_23h_enabled=effective_config.nasdaq_23h_enabled,
             nasdaq_23h_effective_date=effective_config.nasdaq_23h_effective_date,
             night_execution_enabled=False,
+            allow_deterministic_fallback=effective_config.allow_calendar_fallback,
         )
 
     def run(
@@ -464,6 +465,7 @@ class DailyQuantOrchestrator:
                 item.raw_values,
                 item.winsorized_values,
                 item.neutralized_values,
+                item.neutralization_evidence,
             )
             for item in workflow.factors
         )
@@ -534,6 +536,48 @@ class DailyQuantOrchestrator:
             None,
             max(target.target_weights.values(), default=0.0) if target else None,
             target.risk_reductions if target else tuple(blockers),
+            (
+                workflow.risk_state.average_correlation
+                if workflow.risk_state is not None
+                else None
+            ),
+            (
+                workflow.risk_state.baseline_average_correlation
+                if workflow.risk_state is not None
+                else None
+            ),
+            workflow.risk_state.correlation_jump if workflow.risk_state is not None else None,
+            (
+                workflow.risk_state.correlation_status.value
+                if workflow.risk_state is not None
+                else "NOT_CAPTURED"
+            ),
+            (
+                workflow.risk_state.correlation_recent_window
+                if workflow.risk_state is not None
+                else 0
+            ),
+            (
+                workflow.risk_state.correlation_baseline_window
+                if workflow.risk_state is not None
+                else 0
+            ),
+            (
+                min(
+                    workflow.risk_state.correlation_recent_samples,
+                    workflow.risk_state.correlation_baseline_samples,
+                )
+                if workflow.risk_state is not None
+                else 0
+            ),
+            (
+                workflow.risk.size_exposure_status.value
+                if workflow.risk is not None
+                else "NOT_CAPTURED"
+            ),
+            workflow.stress.status.value if workflow.stress is not None else "NOT_CAPTURED",
+            workflow.stress.hard_failures if workflow.stress is not None else (),
+            workflow.stress.warnings if workflow.stress is not None else (),
         )
         decisions = tuple(
             DecisionRow(

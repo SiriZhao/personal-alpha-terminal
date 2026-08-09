@@ -21,4 +21,14 @@ reconciliation_maximum_blocking_ratio: 0.01
 nasdaq_23h_enabled: false
 night_execution_enabled: false
 default_execution_session: REGULAR
+allow_calendar_fallback: false
+stress_maximum_cvar_loss: 0.06
+stress_maximum_liquidation_days: 5.0
+stress_maximum_correlation_spike_loss: 0.08
+stress_maximum_gap_loss: 0.08
+stress_maximum_stressed_volatility: 0.30
+stress_maximum_benchmark_crash_loss: 0.25
+stress_maximum_single_name_loss: 0.05
+stress_maximum_sector_loss: 0.10
+stress_warning_ratio: 0.80
 # Holdings and cash belong only in the real portfolio ledger.
