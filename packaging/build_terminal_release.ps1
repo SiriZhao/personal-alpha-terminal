@@ -80,8 +80,12 @@ foreach ($name in $Forbidden) {
 
 $ReleaseFiles = @(
     Get-ChildItem -LiteralPath $ProductRoot -Recurse -File | Sort-Object FullName | ForEach-Object {
+        if (-not $_.FullName.StartsWith($ProductRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Release file escaped product root: $($_.FullName)"
+        }
+        $relative = $_.FullName.Substring($ProductRoot.Length).TrimStart('\').Replace('\', '/')
         [ordered]@{
-            path = [IO.Path]::GetRelativePath($ProductRoot, $_.FullName).Replace('\', '/')
+            path = $relative
             size = $_.Length
             sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
         }
@@ -100,7 +104,10 @@ $Manifest = [ordered]@{
 )
 $Checksums = @(
     Get-ChildItem -LiteralPath $ProductRoot -Recurse -File | Sort-Object FullName | ForEach-Object {
-        $relative = [IO.Path]::GetRelativePath($ProductRoot, $_.FullName).Replace('\', '/')
+        if (-not $_.FullName.StartsWith($ProductRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Release file escaped product root: $($_.FullName)"
+        }
+        $relative = $_.FullName.Substring($ProductRoot.Length).TrimStart('\').Replace('\', '/')
         $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
         "$hash  $relative"
     }
