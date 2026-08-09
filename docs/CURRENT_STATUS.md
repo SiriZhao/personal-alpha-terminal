@@ -1,11 +1,11 @@
 # Current Status
 
-Generated from `docs/CURRENT_STATUS.json` at `2026-08-09T15:25:00+08:00`.
+Generated from `docs/CURRENT_STATUS.json` at `2026-08-09T15:49:00+08:00`.
 This file supersedes historical release/readiness claims under `docs/reports/`.
 
 - Version: `1.1.0`
-- Git commit: `14d959deba00df107d08010c28a2fce687a0ce40`
-- Build ID: `SOURCE_RUNTIME`
+- Git commit: `c95b2b668f4365fe2d57f131b5732951342f3322`
+- Build ID: `pat-1.1.0-c95b2b668f43-20260809074254`
 - Evidence level: `FIXTURE_TESTED`
 - Operating mode: `SHADOW_ONLY`
 - Alembic head: `d4a5b6c7d8e9`
@@ -28,9 +28,9 @@ This file supersedes historical release/readiness claims under `docs/reports/`.
 ## Validation checkpoint
 
 - Command: `pytest -q`
-- Result: `514 passed`
-- Quant critical: `31 passed; 483 deselected; permanent minimum 31`
-- Commit under test: `14d959deba00df107d08010c28a2fce687a0ce40`
+- Result: `516 passed`
+- Quant critical: `31 passed; 485 deselected; permanent minimum 31`
+- Commit under test: `c95b2b668f4365fe2d57f131b5732951342f3322`
 
 `FIXTURE_TESTED` proves a deterministic code path only. It does not mean real-data
 PIT certification, Locked-OOS validation, production approval, or live-capital
