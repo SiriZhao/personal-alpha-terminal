@@ -98,6 +98,7 @@ class DailyQuantOrchestrator:
         started_at = datetime.now(UTC)
         run_id = f"daily-{uuid4().hex}"
         now = decision_time or started_at
+        effective_decision_time = now
         if now.tzinfo is None:
             raise ValueError("decision_time must be timezone-aware")
         stages: dict[str, StageResult] = {}
@@ -164,11 +165,15 @@ class DailyQuantOrchestrator:
                         )
                     if sync.status != "CERTIFIED":
                         warnings.append(f"market refresh completed as {sync.status}")
-                readiness = data_service.get_data_readiness(as_of=now)
+                    if decision_time is None:
+                        # A live decision can only occur after the newly retrieved evidence
+                        # exists.  Calendar/trade-date resolution remains anchored to run start.
+                        effective_decision_time = datetime.now(UTC)
+                readiness = data_service.get_data_readiness(as_of=effective_decision_time)
                 manifest = data_service.latest_manifest()
                 certification = data_service.daily_certification(
                     analysis_date=analysis_date,
-                    decision_time=now,
+                    decision_time=effective_decision_time,
                 )
                 data_health = (
                     DataHealthItem(
@@ -214,6 +219,13 @@ class DailyQuantOrchestrator:
             blockers.append(str(error))
             if portfolio_issue is not None:
                 blockers.append(portfolio_issue)
+                stages["PORTFOLIO"] = StageResult(
+                    "PORTFOLIO",
+                    StageStatus.FAIL_BLOCKING,
+                    0.0,
+                    portfolio_issue,
+                    {"blocker_category": "USER_STATE", "output_row_count": 0},
+                )
             evidence = certification.metadata() if certification is not None else {}
             stages["DATA"] = StageResult(
                 "DATA",
@@ -231,7 +243,7 @@ class DailyQuantOrchestrator:
             return self._finalize_blocked(
                 run_id,
                 started_at,
-                now,
+                effective_decision_time,
                 analysis_date,
                 market.trade_date,
                 market.session.value,
@@ -246,7 +258,7 @@ class DailyQuantOrchestrator:
         with self._factory.begin() as session:
             workflow_result = ProductionDailyWorkflow(session).run(
                 portfolio_id=resolved_portfolio,
-                decision_time=now,
+                decision_time=effective_decision_time,
             )
         quant_duration = perf_counter() - stage_started
         self._merge_quant_stages(stages, workflow_result, quant_duration)
@@ -264,7 +276,7 @@ class DailyQuantOrchestrator:
         result = self._build_result(
             run_id=run_id,
             started_at=started_at,
-            now=now,
+            now=effective_decision_time,
             analysis_date=analysis_date,
             trade_date=market.trade_date,
             market_session=market.session.value,
@@ -782,6 +794,9 @@ class DailyQuantOrchestrator:
         blockers: list[str],
         warnings: list[str],
     ) -> DailyQuantResult:
+        data_metadata = stages.get(
+            "DATA", StageResult("DATA", StageStatus.NOT_RUN, 0.0, "", {})
+        ).metadata
         for name in _STAGE_ORDER:
             if name != "PERSISTENCE" and name not in stages:
                 stages[name] = StageResult(
@@ -800,7 +815,7 @@ class DailyQuantOrchestrator:
             trade_date,
             market_session,
             market_structure,
-            None,
+            self._blocked_data_cutoff(stages),
             DecisionReadiness.NOT_ACTIONABLE,
             "OPTIONAL/OFFLINE" if self._settings.llm_provider == "disabled" else "OPTIONAL",
             self._ordered_stages(stages),
@@ -840,7 +855,18 @@ class DailyQuantOrchestrator:
                 tuple(blockers),
             ),
             (),
-            tuple(RejectedSignalRow("ALL", self._failed_stage(stages), item) for item in blockers),
+            tuple(
+                RejectedSignalRow(
+                    "ALL",
+                    (
+                        "PORTFOLIO"
+                        if item.startswith("PORTFOLIO ")
+                        else self._failed_stage(stages)
+                    ),
+                    item,
+                )
+                for item in blockers
+            ),
             ExecutionPlan(
                 "BLOCKED",
                 True,
@@ -862,11 +888,26 @@ class DailyQuantOrchestrator:
                 "build_identifier": __build_version__,
                 "git_commit": "UNAVAILABLE",
                 "random_seed": None,
+                "data_snapshot_id": data_metadata.get("snapshot_id"),
+                "data_hash": data_metadata.get("data_hash", "UNAVAILABLE"),
+                "data_evidence_paths": data_metadata.get("evidence_paths", {}),
+                "pit_cutoff": data_metadata.get("pit_cutoff"),
             },
             self._config_fingerprint(),
             (),
         )
         return self._persist_result(result)
+
+    @staticmethod
+    def _blocked_data_cutoff(stages: dict[str, StageResult]) -> datetime | None:
+        fallback = StageResult("DATA", StageStatus.NOT_RUN, 0, "", {})
+        value = stages.get("DATA", fallback).metadata.get("pit_cutoff")
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, str) and value:
+            parsed = datetime.fromisoformat(value)
+            return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+        return None
 
     def _blocked_result(
         self,

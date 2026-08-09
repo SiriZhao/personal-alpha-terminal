@@ -57,6 +57,22 @@ class _StooqAssetAdapter:
         try:
             with urlopen(request_object, timeout=self.timeout_seconds) as response:  # noqa: S310
                 payload = response.read()
+                headers = getattr(response, "headers", None)
+                content_type = (
+                    str(headers.get("Content-Type", "")).lower()
+                    if headers is not None
+                    else ""
+                )
+            prefix = payload.lstrip()[:256].lower()
+            if (
+                b"<html" in prefix
+                or b"<!doctype" in prefix
+                or b"requires javascript" in payload[:4096].lower()
+                or "text/html" in content_type
+            ):
+                raise ProviderRequestError(
+                    "Stooq is unavailable: HTML/JavaScript browser challenge returned"
+                )
             frame = pd.read_csv(io.BytesIO(payload))
             rows = frame_to_raw_bars(
                 frame,
@@ -64,6 +80,8 @@ class _StooqAssetAdapter:
                 capability=capability,
                 columns=STOOQ_COLUMNS,
             )
+        except ProviderRequestError:
+            raise
         except (HTTPError, URLError, TimeoutError, OSError, ValueError) as exc:
             raise ProviderRequestError(
                 f"Stooq request failed for {request.symbol}: {exc}"

@@ -80,6 +80,9 @@ def test_initial_migration_builds_versioned_schema() -> None:
         graph_edge_columns = {
             item["name"] for item in inspect(engine).get_columns("market_graph_edges")
         }
+        corporate_action_columns = {
+            item["name"]: item for item in inspect(engine).get_columns("corporate_actions")
+        }
         regime_run_columns = {
             item["name"] for item in inspect(engine).get_columns("market_regime_runs")
         }
@@ -153,6 +156,7 @@ def test_initial_migration_builds_versioned_schema() -> None:
         "average_return_upper",
     } <= event_statistic_columns
     assert "raw_probability" in conditional_columns
+    assert corporate_action_columns["announcement_date"]["nullable"] is True
     assert {"p_value", "fdr_q_value", "bonferroni_p_value"} <= graph_edge_columns
     assert {
         "calibration_status",
@@ -169,11 +173,11 @@ def test_initial_migration_builds_versioned_schema() -> None:
     assert "ix_portfolio_positions_stock_id" in portfolio_position_indexes
     assert "ix_market_graph_edges_source_stock_id" in graph_edge_indexes
     assert "ix_market_graph_edges_target_stock_id" in graph_edge_indexes
-    assert revision == "b2e3f4a5c6d7"
+    assert revision == "c3f4a5b6d7e8"
     assert not any(table.startswith("paper_") for table in tables)
     assert not health.ready
     assert health.dialect == "sqlite"
-    assert health.current_revision == "b2e3f4a5c6d7"
+    assert health.current_revision == "c3f4a5b6d7e8"
 
 
 def test_production_index_migration_round_trip() -> None:
@@ -210,5 +214,5 @@ def test_production_index_migration_round_trip() -> None:
 
     assert downgraded_revision == "e19f7b3c4a62"
     assert "ix_market_graph_edges_source_stock_id" not in downgraded_indexes
-    assert upgraded_revision == "b2e3f4a5c6d7"
+    assert upgraded_revision == "c3f4a5b6d7e8"
     assert "ix_market_graph_edges_source_stock_id" in upgraded_indexes

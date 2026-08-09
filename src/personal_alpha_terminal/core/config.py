@@ -137,6 +137,21 @@ class Settings(BaseSettings):
     market_data_retry_backoff_seconds: float = Field(default=1.0, ge=0, le=60)
     market_data_timeout_seconds: int = Field(default=20, ge=1, le=120)
     market_data_provider_cache_dir: Path = Path("var/cache/providers")
+    # Engineering safety defaults, not optimized strategy parameters.  Reconciliation
+    # compares normalized daily returns because free providers do not share one price-
+    # adjustment convention.
+    market_data_reconciliation_minimum_coverage: float = Field(
+        default=0.95, ge=0.50, le=1.0
+    )
+    market_data_reconciliation_warning_return_tolerance: float = Field(
+        default=0.01, ge=0.0, le=0.25
+    )
+    market_data_reconciliation_blocking_return_tolerance: float = Field(
+        default=0.05, ge=0.001, le=1.0
+    )
+    market_data_reconciliation_maximum_blocking_ratio: float = Field(
+        default=0.01, ge=0.0, le=0.25
+    )
     nasdaq_23h_enabled: bool = Field(
         default=False,
         validation_alias="NASDAQ_23H_ENABLED",

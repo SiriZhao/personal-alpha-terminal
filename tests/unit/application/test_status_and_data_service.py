@@ -2,6 +2,15 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 
 from personal_alpha_terminal.application.app_service import ApplicationService
+from personal_alpha_terminal.application.data_lineage_certification import (
+    BarCoverageEvidence,
+    CorporateActionCertificate,
+    CorporateActionSymbolEvidence,
+    EvidenceStatus,
+    LineageEvidenceBundle,
+    ProviderReconciliationCertificate,
+    ReconciliationSymbolEvidence,
+)
 from personal_alpha_terminal.application.data_service import DataService
 from personal_alpha_terminal.application.universe import MINIMUM_US_RESEARCH_UNIVERSE
 from personal_alpha_terminal.core.config import Settings
@@ -39,6 +48,63 @@ def _successful_report() -> DailyUpdateReport:
     )
 
 
+def _fixture_lineage(_session, _settings, start_date, end_date, decision_time):
+    action_results = tuple(
+        CorporateActionSymbolEvidence(asset.ticker, EvidenceStatus.PASS, 0, ())
+        for asset in MINIMUM_US_RESEARCH_UNIVERSE
+    )
+    reconciliation_results = tuple(
+        ReconciliationSymbolEvidence(
+            asset.ticker,
+            EvidenceStatus.PASS,
+            "fixture-secondary",
+            22,
+            22,
+            22,
+            1.0,
+            0,
+            0,
+            "fixture paths match",
+        )
+        for asset in MINIMUM_US_RESEARCH_UNIVERSE
+    )
+    return LineageEvidenceBundle(
+        CorporateActionCertificate(
+            EvidenceStatus.PASS,
+            "fixture-actions",
+            "fixture-only",
+            datetime(2026, 1, 9, 22, tzinfo=UTC),
+            tuple(asset.ticker for asset in MINIMUM_US_RESEARCH_UNIVERSE),
+            0,
+            "fixture",
+            "fixture",
+            (),
+            action_results,
+            (),
+            "a" * 64,
+        ),
+        ProviderReconciliationCertificate(
+            EvidenceStatus.PASS,
+            "fixture-primary",
+            ("fixture-secondary",),
+            1.0,
+            0.01,
+            0.05,
+            reconciliation_results,
+            "b" * 64,
+        ),
+        tuple(
+            BarCoverageEvidence(
+                asset.ticker, asset.required, 22, 22, 0, 0, 0, 0, 22, end_date
+            )
+            for asset in MINIMUM_US_RESEARCH_UNIVERSE
+        ),
+        decision_time,
+        end_date,
+        "fixture-only",
+    )
+
+
 def test_empty_database_is_not_program_error(session_factory, tmp_path: Path) -> None:
     settings = Settings(database_url="sqlite://")
     service = ApplicationService(session_factory, settings, snapshot_root=tmp_path)
@@ -62,6 +128,7 @@ def test_real_snapshot_manifest_is_immutable_and_traceable(
             settings,
             snapshot_root=tmp_path,
             sync_runner=lambda _session, _start, _end: _successful_report(),
+            lineage_runner=_fixture_lineage,
         )
         outcome = service.sync_market_data(
             start_date=date(2026, 7, 1), end_date=date(2026, 8, 1)
@@ -97,6 +164,7 @@ def test_required_provider_failure_blocks_snapshot(session_factory, tmp_path: Pa
             Settings(database_url="sqlite://"),
             snapshot_root=tmp_path,
             sync_runner=lambda _session, _start, _end: partial,
+            lineage_runner=_fixture_lineage,
         )
         outcome = service.sync_market_data(
             start_date=date(2026, 7, 1), end_date=date(2026, 8, 1)
@@ -125,6 +193,7 @@ def test_minimum_universe_uses_machine_segments_not_human_roles(
             Settings(database_url="sqlite://"),
             snapshot_root=tmp_path,
             sync_runner=lambda _session, _start, _end: _successful_report(),
+            lineage_runner=_fixture_lineage,
         )
         service.initialize_research_database(
             start_date=date(2026, 7, 1), end_date=date(2026, 8, 1)
@@ -157,6 +226,7 @@ def test_sync_repairs_an_existing_empty_current_universe_snapshot(
             Settings(database_url="sqlite://"),
             snapshot_root=tmp_path,
             sync_runner=lambda _session, _start, _end: _successful_report(),
+            lineage_runner=_fixture_lineage,
         )
         service.sync_market_data(
             start_date=date(2026, 7, 1), end_date=date(2026, 8, 1)

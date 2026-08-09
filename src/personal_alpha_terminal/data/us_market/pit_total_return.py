@@ -31,7 +31,7 @@ class PITCorporateAction:
     permanent_security_id: str
     action_type: str
     effective_date: date
-    announcement_at: datetime
+    announcement_at: datetime | None
     available_at: datetime
     source_id: str
     split_ratio: float | None = None
@@ -39,9 +39,11 @@ class PITCorporateAction:
     currency: str | None = None
 
     def __post_init__(self) -> None:
-        if self.announcement_at.tzinfo is None or self.available_at.tzinfo is None:
+        if self.available_at.tzinfo is None:
             raise ValueError("corporate-action timestamps must be timezone-aware")
-        if self.announcement_at > self.available_at:
+        if self.announcement_at is not None and self.announcement_at.tzinfo is None:
+            raise ValueError("corporate-action announcement timestamp must be timezone-aware")
+        if self.announcement_at is not None and self.announcement_at > self.available_at:
             raise ValueError("corporate action cannot be available before announcement")
         if not all(
             item.strip()

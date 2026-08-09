@@ -278,32 +278,44 @@ class _SafeDataService:
 
     def daily_certification(self, **_kwargs):
         return DailyDataCertification(
-            StageStatus.PASS,
-            "fixture-snapshot",
-            "fixture-primary",
-            "fixture-secondary",
-            SYMBOLS,
-            SYMBOLS,
-            SYMBOLS,
-            (),
-            (),
-            (),
-            504 * len(SYMBOLS),
-            504 * len(SYMBOLS),
-            504 * len(SYMBOLS),
-            1.0,
-            date(2026, 8, 7),
-            NOW - timedelta(days=1),
-            "CERTIFIED",
-            "CERTIFIED",
-            0,
-            0,
-            {"open": 0, "high": 0, "low": 0, "close": 0},
-            0,
-            0,
-            "raw_ohlcv",
-            (),
-            (),
+            status=StageStatus.PASS,
+            snapshot_id="fixture-snapshot",
+            data_hash="d" * 64,
+            provider="fixture-primary",
+            fallback_provider="fixture-secondary",
+            requested_symbols=SYMBOLS,
+            received_symbols=SYMBOLS,
+            primary_valid_symbols=SYMBOLS,
+            secondary_checked_symbols=SYMBOLS,
+            certified_symbols=SYMBOLS,
+            rejected_symbols=(),
+            missing_symbols=(),
+            optional_missing_symbols=(),
+            stale_symbols=(),
+            expected_bars=504 * len(SYMBOLS),
+            matched_bars=504 * len(SYMBOLS),
+            unexpected_bars=0,
+            missing_bars=0,
+            received_bars=504 * len(SYMBOLS),
+            valid_bars=504 * len(SYMBOLS),
+            coverage=1.0,
+            latest_date=date(2026, 8, 7),
+            latest_timestamp=NOW - timedelta(days=1),
+            pit_cutoff=NOW - timedelta(days=1),
+            latest_completed_session=date(2026, 8, 7),
+            decision_timestamp_convention="fixture next-session",
+            corporate_action_status="PASS",
+            provider_reconciliation="PASS",
+            duplicate_rows=0,
+            invalid_ohlc=0,
+            nan_counts={"open": 0, "high": 0, "low": 0, "close": 0},
+            future_rows=0,
+            timezone_violations=0,
+            adjustment_status="raw_ohlcv",
+            symbol_matrix=(),
+            evidence_paths={},
+            blockers=(),
+            warnings=(),
         )
 
 
@@ -411,6 +423,11 @@ def test_blocked_data_certificate_preserves_real_certification_evidence(
     )
     evidence = certificate["data_certification"]
     assert evidence["requested_symbols"] == list(SYMBOLS)
+    assert certificate["provenance"]["data_hash"] == "d" * 64
+    assert next(item for item in result.stages if item.name == "PORTFOLIO").status is (
+        StageStatus.FAIL_BLOCKING
+    )
+    assert any(item.rejected_by == "PORTFOLIO" for item in result.rejected_signals)
     assert evidence["received_symbols"] == list(SYMBOLS)
     assert evidence["valid_bars"] == 504 * len(SYMBOLS)
     assert evidence["provider_reconciliation"] == "NOT_CERTIFIED"

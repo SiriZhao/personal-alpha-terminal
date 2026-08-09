@@ -139,7 +139,7 @@ class CorporateAction(Base):
             name="valid_corporate_action_type",
         ),
         CheckConstraint(
-            "announcement_date <= available_date",
+            "announcement_date IS NULL OR announcement_date <= available_date",
             name="valid_corporate_action_availability",
         ),
         UniqueConstraint(
@@ -172,7 +172,7 @@ class CorporateAction(Base):
     revision_id: Mapped[str] = mapped_column(String(128), nullable=False)
     action_type: Mapped[str] = mapped_column(String(32), nullable=False)
     effective_date: Mapped[date] = mapped_column(Date, nullable=False)
-    announcement_date: Mapped[date] = mapped_column(Date, nullable=False)
+    announcement_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     available_date: Mapped[date] = mapped_column(Date, nullable=False)
     event_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     available_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

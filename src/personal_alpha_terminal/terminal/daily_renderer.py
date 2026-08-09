@@ -104,10 +104,16 @@ def _data_certification(result: DailyQuantResult, console: Console) -> None:
         f"Snapshot {evidence.get('snapshot_id', 'UNAVAILABLE')}   "
         f"Requested {_item_count(evidence.get('requested_symbols'))}   "
         f"Received {_item_count(evidence.get('received_symbols'))}   "
+        f"Primary valid {_item_count(evidence.get('primary_valid_symbols'))}   "
+        f"Secondary checked {_item_count(evidence.get('secondary_checked_symbols'))}\n"
         f"Certified {_item_count(evidence.get('certified_symbols'))}   "
+        f"Rejected {_item_count(evidence.get('rejected_symbols'))}   "
         f"Missing {_item_count(evidence.get('missing_symbols'))}   "
         f"Stale {_item_count(evidence.get('stale_symbols'))}\n"
         f"Bars expected {evidence.get('expected_bars', 0)}   "
+        f"matched {evidence.get('matched_bars', 0)}   "
+        f"unexpected {evidence.get('unexpected_bars', 0)}   "
+        f"missing {evidence.get('missing_bars', 0)}   "
         f"received {evidence.get('received_bars', 0)}   "
         f"valid {evidence.get('valid_bars', 0)}   "
         f"coverage {_percent(_as_float(evidence.get('coverage')))}\n"
@@ -133,11 +139,38 @@ def _data_certification(result: DailyQuantResult, console: Console) -> None:
             ),
         )
     )
+    matrix = evidence.get("symbol_matrix", ())
+    rejected = [
+        item
+        for item in matrix
+        if isinstance(item, dict) and item.get("final") != "CERTIFIED"
+    ] if isinstance(matrix, (list, tuple)) else []
+    if rejected:
+        table = Table(title="FAILED / REJECTED SYMBOLS")
+        table.add_column("Ticker")
+        table.add_column("Required")
+        table.add_column("Gate")
+        table.add_column("Reason", overflow="fold")
+        for item in rejected:
+            gate = "CROSS_PROVIDER"
+            if item.get("primary") != "PASS":
+                gate = "PRIMARY/CALENDAR"
+            elif item.get("corporate_action") not in {"PASS", "PASS_WITH_WARNING"}:
+                gate = "CORPORATE_ACTION"
+            table.add_row(
+                str(item.get("symbol", "--")),
+                "YES" if item.get("required") else "NO",
+                gate,
+                str(item.get("reason", "unavailable")),
+            )
+        console.print(table)
 
 
 def _pit_universe(result: DailyQuantResult, console: Console) -> None:
     stage = next((item for item in result.stages if item.name == "PIT"), None)
     evidence = stage.metadata if stage is not None else {}
+    data_stage = next((item for item in result.stages if item.name == "DATA"), None)
+    data_evidence = data_stage.metadata if data_stage is not None else {}
     console.print(
         Panel(
             f"Status {stage.status.value if stage else 'NOT_RUN'}   "
@@ -145,6 +178,10 @@ def _pit_universe(result: DailyQuantResult, console: Console) -> None:
             f"Universe {result.provenance.get('universe_count', 0)}\n"
             "As-of cutoff "
             f"{result.data_cutoff.isoformat() if result.data_cutoff else 'UNAVAILABLE'}\n"
+            "Latest completed session "
+            f"{data_evidence.get('latest_completed_session', result.analysis_date)}\n"
+            "Decision convention "
+            f"{data_evidence.get('decision_timestamp_convention', 'UNAVAILABLE')}\n"
             f"Message: {stage.message if stage else 'PIT stage was not created'}",
             title="PIT / UNIVERSE",
             border_style=(

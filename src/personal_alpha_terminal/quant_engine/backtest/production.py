@@ -25,7 +25,7 @@ class CorporateAction:
     asset_id: int
     action_type: CorporateActionType
     effective_date: date
-    announcement_date: date
+    announcement_date: date | None
     available_at: datetime
     ratio: float | None = None
     cash_amount: float | None = None
@@ -35,7 +35,7 @@ class CorporateAction:
     def __post_init__(self) -> None:
         if self.asset_id <= 0 or self.available_at.tzinfo is None or not self.source.strip():
             raise ValueError("corporate action requires identity, timestamp and source")
-        if self.announcement_date > self.effective_date:
+        if self.announcement_date is not None and self.announcement_date > self.effective_date:
             raise ValueError("corporate action announcement cannot follow effective date")
         if self.available_at.date() > self.effective_date:
             raise ValueError("corporate action was not available by its effective date")

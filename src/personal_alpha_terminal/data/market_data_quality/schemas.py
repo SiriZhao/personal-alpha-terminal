@@ -121,7 +121,7 @@ class CorporateActionRecord:
     stock_id: int
     action_type: CorporateActionType
     effective_date: date
-    announcement_date: date
+    announcement_date: date | None
     available_date: date
     event_time: datetime
     available_time: datetime

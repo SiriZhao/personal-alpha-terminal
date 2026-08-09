@@ -97,8 +97,64 @@ def _seed(
             )
     identity = uuid4().hex
     target = tmp_path / f"manifest-{identity}.json"
+    action_status = "PASS" if corporate_actions else "UNAVAILABLE"
+    reconciliation_status = "PASS" if reconciled else "UNAVAILABLE"
+    coverage_rows = []
+    action_rows = []
+    reconciliation_rows = []
+    for asset in assets:
+        selected_count = 0 if asset.ticker in omit else (20 if asset.ticker in short else 126)
+        coverage_rows.append(
+            {
+                "symbol": asset.ticker,
+                "required": asset.required,
+                "expected": 126,
+                "matched": selected_count,
+                "missing": 126 - selected_count,
+                "unexpected": 0,
+                "duplicate": 0,
+                "rejected": 0,
+                "valid": selected_count,
+                "latest": ANALYSIS_DATE.isoformat(),
+            }
+        )
+        action_rows.append(
+            {
+                "symbol": asset.ticker,
+                "status": action_status,
+                "events_found": 0,
+                "errors": [],
+            }
+        )
+        reconciliation_rows.append(
+            {
+                "symbol": asset.ticker,
+                "status": reconciliation_status,
+                "secondary_provider": "fixture-secondary",
+                "primary_rows": selected_count,
+                "secondary_rows": selected_count if reconciled else 0,
+                "matched_rows": selected_count if reconciled else 0,
+                "coverage": 1.0 if selected_count and reconciled else 0.0,
+                "warning_divergences": 0,
+                "blocking_divergences": 0,
+                "reason": "fixture evidence" if reconciled else "fixture unavailable",
+            }
+        )
     target.write_text(
-        json.dumps({"provider_reconciled": reconciled}),
+        json.dumps(
+            {
+                "provider_reconciled": reconciled,
+                "provider_reconciliation_status": reconciliation_status,
+                "corporate_action_status": action_status,
+                "bar_coverage": coverage_rows,
+                "corporate_action_symbol_results": action_rows,
+                "provider_reconciliation_symbol_results": reconciliation_rows,
+                "pit_data_cutoff": DECISION_TIME.isoformat(),
+                "latest_completed_session": ANALYSIS_DATE.isoformat(),
+                "decision_timestamp_convention": "fixture next-session execution",
+                "evidence": {},
+            }
+        ),
         encoding="utf-8",
     )
     required = sorted(item.ticker for item in assets if item.required)
@@ -270,8 +326,8 @@ def test_uncertified_lineage_and_corporate_actions_are_blocking(
             manifest=manifest,
         )
     assert result.status is StageStatus.FAIL_BLOCKING
-    assert result.provider_reconciliation == "NOT_CERTIFIED"
-    assert result.corporate_action_status == "NOT_CERTIFIED"
+    assert result.provider_reconciliation == "UNAVAILABLE"
+    assert result.corporate_action_status == "UNAVAILABLE"
 
 
 def test_cold_database_requests_full_history(

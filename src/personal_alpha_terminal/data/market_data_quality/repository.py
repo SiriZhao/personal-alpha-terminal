@@ -165,7 +165,10 @@ class MarketDataQualityRepository:
             ingested_time = normalize_utc(item.ingested_time)
             if not item.source.strip() or not item.provider.strip():
                 raise ValueError("Corporate action source and provider are required.")
-            if item.announcement_date > item.available_date:
+            if (
+                item.announcement_date is not None
+                and item.announcement_date > item.available_date
+            ):
                 raise ValueError("Corporate action cannot be available before announcement.")
             if ingested_time < available_time:
                 raise ValueError("Corporate action was ingested before availability.")

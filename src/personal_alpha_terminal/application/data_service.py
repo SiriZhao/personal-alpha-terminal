@@ -16,6 +16,12 @@ from personal_alpha_terminal.application.data_certification import (
     DailyDataCertification,
     DailyDataCertifier,
 )
+from personal_alpha_terminal.application.data_lineage_certification import (
+    DataLineageCertifier,
+    EvidenceStatus,
+    LineageEvidenceBundle,
+    write_evidence,
+)
 from personal_alpha_terminal.application.status import DataStatus, StatusDetail
 from personal_alpha_terminal.application.universe import (
     MINIMUM_US_RESEARCH_UNIVERSE,
@@ -38,6 +44,17 @@ from personal_alpha_terminal.models import (
 
 class SyncRunner(Protocol):
     def __call__(self, session: Session, start_date: date, end_date: date) -> DailyUpdateReport: ...
+
+
+class LineageRunner(Protocol):
+    def __call__(
+        self,
+        session: Session,
+        settings: Settings,
+        start_date: date,
+        end_date: date,
+        decision_time: datetime,
+    ) -> LineageEvidenceBundle: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,11 +86,13 @@ class DataService:
         *,
         snapshot_root: Path | None = None,
         sync_runner: SyncRunner | None = None,
+        lineage_runner: LineageRunner | None = None,
     ) -> None:
         self._session = session
         self._settings = settings
         self._snapshot_root = snapshot_root or application_data_dir() / "data" / "snapshots"
         self._sync_runner = sync_runner or self._run_market_engine
+        self._lineage_runner = lineage_runner
 
     def get_data_readiness(self, *, as_of: datetime | None = None) -> StatusDetail:
         now = as_of or datetime.now(UTC)
@@ -353,6 +372,22 @@ class DataService:
         end_date: date,
     ) -> SyncOutcome:
         required = {item.ticker for item in MINIMUM_US_RESEARCH_UNIVERSE if item.required}
+        lineage = (
+            self._lineage_runner(
+                self._session,
+                self._settings,
+                start_date,
+                end_date,
+                completed_at,
+            )
+            if self._lineage_runner is not None
+            else DataLineageCertifier(self._session, self._settings).certify(
+                assets=MINIMUM_US_RESEARCH_UNIVERSE,
+                start_date=start_date,
+                analysis_date=end_date,
+                decision_time=completed_at,
+            )
+        )
         failures = {item.symbol for item in report.results if item.status == "failed"}
         required_failures = failures & required
         accepted = sum(item.valid_count for item in report.results)
@@ -390,9 +425,15 @@ class DataService:
                 ).days > self._settings.console_data_stale_days
             )
         }
-        lineage_certified = (
-            report.provider_reconciled and report.corporate_action_certified
-        )
+        corporate_action_certified = lineage.corporate_actions.status in {
+            EvidenceStatus.PASS,
+            EvidenceStatus.PASS_WITH_WARNING,
+        }
+        provider_reconciled = lineage.reconciliation.status in {
+            EvidenceStatus.PASS,
+            EvidenceStatus.PASS_WITH_WARNING,
+        }
+        lineage_certified = corporate_action_certified and provider_reconciled
         if required_failures or stale_required:
             certification, quality = "BLOCKED", "blocked"
         elif failures or not lineage_certified:
@@ -418,10 +459,62 @@ class DataService:
             "price_adjustment_policy": "raw_ohlcv; adjusted_close_research_only",
             "corporate_action_policy": (
                 "certified_pit_ledger"
-                if report.corporate_action_certified
+                if corporate_action_certified
                 else "not_certified_for_pit_portfolio_decisions"
             ),
-            "provider_reconciled": report.provider_reconciled,
+            "corporate_action_status": lineage.corporate_actions.status.value,
+            "provider_reconciled": provider_reconciled,
+            "provider_reconciliation_status": lineage.reconciliation.status.value,
+            "corporate_action_certificate_hash": lineage.corporate_actions.content_hash,
+            "provider_reconciliation_hash": lineage.reconciliation.content_hash,
+            "corporate_action_symbol_results": [
+                {
+                    "symbol": item.symbol,
+                    "status": item.status.value,
+                    "events_found": item.events_found,
+                    "errors": list(item.errors),
+                }
+                for item in lineage.corporate_actions.symbol_results
+            ],
+            "provider_reconciliation_symbol_results": [
+                {
+                    "symbol": item.symbol,
+                    "status": item.status.value,
+                    "secondary_provider": item.secondary_provider,
+                    "primary_rows": item.primary_rows,
+                    "secondary_rows": item.secondary_rows,
+                    "matched_rows": item.matched_rows,
+                    "coverage": item.coverage,
+                    "warning_divergences": item.warning_divergences,
+                    "blocking_divergences": item.blocking_divergences,
+                    "reason": item.reason,
+                }
+                for item in lineage.reconciliation.symbol_results
+            ],
+            "pit_data_cutoff": (
+                lineage.data_cutoff.isoformat() if lineage.data_cutoff is not None else None
+            ),
+            "latest_completed_session": lineage.latest_completed_session.isoformat(),
+            "decision_timestamp_convention": lineage.decision_timestamp_convention,
+            "bar_coverage": [
+                {
+                    "symbol": item.symbol,
+                    "required": item.required,
+                    "expected": item.expected,
+                    "matched": item.matched,
+                    "missing": item.missing,
+                    "unexpected": item.unexpected,
+                    "duplicate": item.duplicate,
+                    "rejected": item.rejected,
+                    "valid": item.valid,
+                    "latest": item.latest.isoformat() if item.latest else None,
+                    "missing_dates": [value.isoformat() for value in item.missing_dates],
+                    "unexpected_dates": [
+                        value.isoformat() for value in item.unexpected_dates
+                    ],
+                }
+                for item in lineage.coverage
+            ],
             "raw_row_count": raw,
             "accepted_row_count": accepted,
             "rejected_row_count": rejected,
@@ -443,6 +536,11 @@ class DataService:
             "quality_status": quality,
             "certification_result": certification,
             "is_demo": False,
+            "evidence": {
+                "corporate_actions": "corporate_action_certificate.json",
+                "provider_reconciliation": "provider_reconciliation_report.json",
+                "certification_matrix": "data_certification_matrix.json",
+            },
         }
         content_hash = sha256(
             json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
@@ -451,6 +549,30 @@ class DataService:
         target_dir = self._snapshot_root / snapshot_id
         target_dir.mkdir(parents=True, exist_ok=False)
         target = target_dir / "manifest.json"
+        corporate_action_path = target_dir / "corporate_action_certificate.json"
+        reconciliation_path = target_dir / "provider_reconciliation_report.json"
+        coverage_path = target_dir / "data_certification_matrix.json"
+        write_evidence(
+            corporate_action_path,
+            {
+                "snapshot_id": snapshot_id,
+                **lineage.document()["corporate_actions"],
+            },
+        )
+        write_evidence(
+            reconciliation_path,
+            {
+                "snapshot_id": snapshot_id,
+                **lineage.document()["reconciliation"],
+            },
+        )
+        write_evidence(
+            coverage_path,
+            {
+                "snapshot_id": snapshot_id,
+                "coverage": lineage.document()["coverage"],
+            },
+        )
         document = {"snapshot_id": snapshot_id, "content_hash": content_hash, **payload}
         temporary = target.with_suffix(".tmp")
         temporary.write_text(
