@@ -50,11 +50,22 @@ foreach ($required in @("config.env", "config.yaml", "data\personal_alpha.db", "
     }
 }
 $AfterNewProcesses = @(
-    Get-Process -ErrorAction SilentlyContinue |
-        Where-Object { $_.ProcessName -in $ForbiddenProcesses -and $_.Id -notin $BeforeProcessIds }
+    Get-CimInstance Win32_Process -ErrorAction Stop |
+        Where-Object {
+            [IO.Path]::GetFileNameWithoutExtension($_.Name) -in $ForbiddenProcesses -and
+            $_.ProcessId -notin $BeforeProcessIds
+        }
 )
-if ($AfterNewProcesses) {
-    throw "Release started a forbidden browser/Node process: $($AfterNewProcesses.ProcessName -join ', ')"
+$NewForbiddenIds = @($AfterNewProcesses | ForEach-Object ProcessId)
+$UnexpectedProcesses = @(
+    $AfterNewProcesses | Where-Object {
+        $_.ParentProcessId -notin $BeforeProcessIds -and
+        $_.ParentProcessId -notin $NewForbiddenIds
+    }
+)
+if ($UnexpectedProcesses) {
+    $details = $UnexpectedProcesses | ForEach-Object { "$($_.Name):$($_.ProcessId) parent=$($_.ParentProcessId)" }
+    throw "Release started a forbidden browser/Node process lineage: $($details -join ', ')"
 }
 foreach ($required in @("BUILD_MANIFEST.json", "SHA256SUMS.txt", "VERSION")) {
     if (-not (Test-Path -LiteralPath (Join-Path $CleanRelease $required) -PathType Leaf)) {

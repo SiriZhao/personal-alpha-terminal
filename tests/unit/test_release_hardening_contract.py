@@ -19,4 +19,6 @@ def test_release_build_embeds_provenance_and_excludes_private_runtime_data() -> 
     assert "build_metadata.json" in spec
     assert '"streamlit"' in spec and '"textual"' in spec
     assert "ForbiddenProcesses" in smoke
+    assert "ParentProcessId" in smoke
+    assert "UnexpectedProcesses" in smoke
     assert "PersonalAlphaTerminal.exe" in smoke
