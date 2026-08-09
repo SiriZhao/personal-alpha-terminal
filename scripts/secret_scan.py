@@ -6,7 +6,8 @@ import subprocess
 from pathlib import Path
 
 _TOKEN_PATTERNS = (
-    re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"),
+    re.compile(r"\bsk-(?:proj|svcacct)-[A-Za-z0-9_-]{20,}\b"),
+    re.compile(r"\bsk-[A-Za-z0-9]{20,}\b"),
     re.compile(r"\bgh[opusr]_[A-Za-z0-9]{20,}\b"),
     re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{20,}\b"),
     re.compile(r"\bAKIA[A-Z0-9]{16}\b"),
