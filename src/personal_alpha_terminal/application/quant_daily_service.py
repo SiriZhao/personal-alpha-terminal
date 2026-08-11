@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta
 from decimal import Decimal
 from hashlib import sha256
@@ -37,6 +37,7 @@ from personal_alpha_terminal.quant_engine.portfolio.construction import (
     PortfolioTarget,
 )
 from personal_alpha_terminal.quant_engine.portfolio.trades import TradeAction, TradeProposal
+from personal_alpha_terminal.quant_engine.probability_overlay import ProbabilityOverlayEffect
 from personal_alpha_terminal.quant_engine.production_pipeline import (
     DailyQuantOutput,
     DailyQuantPipeline,
@@ -132,6 +133,11 @@ class TodayResult:
     probability_artifact_id: str = 'OPTIONAL_UNAVAILABLE'
     universe_snapshot_id: str = 'UNAVAILABLE'
     portfolio_snapshot_id: str = 'NOT_INITIALIZED'
+    universe_evidence: dict[str, object] = field(default_factory=dict)
+    probability_overlay_active: bool = False
+    probability_overlay_state: str = "RESEARCH_ONLY"
+    probability_overlay_reason: str = "PROBABILITY_ARTIFACT_MISSING"
+    probability_overlay_effects: tuple[ProbabilityOverlayEffect, ...] = ()
 
 
 class ProductionDailyWorkflow:
@@ -289,6 +295,11 @@ class ProductionDailyWorkflow:
                 benchmark_annualized_volatility=research.benchmark_annualized_volatility,
                 risk_regime_detail=regime_link.detail,
                 benchmark_evidences=research.benchmark_evidences,
+                universe_evidence=research.universe_evidence,
+                probability_overlay_active=research.probability_overlay_active,
+                probability_overlay_state=research.probability_overlay_state,
+                probability_overlay_reason=research.probability_overlay_reason,
+                probability_overlay_effects=research.probability_overlay_effects,
             )
 
         inputs = assembled.inputs
@@ -438,6 +449,21 @@ class ProductionDailyWorkflow:
         return (
             PipelineStage("Data Quality Gate", "VALID", "CERTIFIED"),
             PipelineStage("PIT Universe", "VALID", research.universe_snapshot_id),
+            PipelineStage(
+                "Broad Equity Universe",
+                (
+                    "VALID"
+                    if research.universe_evidence.get("factor_eligible", 0)
+                    else "DEGRADED"
+                ),
+                (
+                    "listed="
+                    f"{research.universe_evidence.get('raw_listed_equities', 'UNAVAILABLE')}; "
+                    f"factor_eligible={research.universe_evidence.get('factor_eligible', 0)}; "
+                    "survivorship="
+                    f"{research.universe_evidence.get('survivorship_status', 'UNVERIFIED')}"
+                ),
+            ),
             PipelineStage("Point-in-Time Inputs", "VALID", "no future observations"),
             PipelineStage(
                 "Feature Engine",
@@ -453,6 +479,15 @@ class ProductionDailyWorkflow:
                 "Alpha Signals",
                 alpha_status,
                 alpha_detail,
+            ),
+            PipelineStage(
+                "Probability Overlay",
+                "VALID" if research.probability_overlay_active else "DEGRADED",
+                (
+                    f"{research.probability_overlay_state}; "
+                    f"active={research.probability_overlay_active}; "
+                    f"reason={research.probability_overlay_reason}"
+                ),
             ),
         )
 
@@ -524,8 +559,8 @@ class ProductionDailyWorkflow:
             identity_hashes=self._identity_hashes(research.data_version),
             model_approval_hash=research.model_approval_hash,
             probability_calibration_status=(
-                "CALIBRATED_LOCKED_OOS"
-                if research.probability_artifact_id != "OPTIONAL_UNAVAILABLE"
+                "CALIBRATED_LOCKED_OOS_PRODUCTION_APPROVED"
+                if research.probability_overlay_active
                 else "PROBABILITY_NOT_CALIBRATED"
             ),
             risk_regime_detail=link.detail,
@@ -534,6 +569,11 @@ class ProductionDailyWorkflow:
             production_approval_artifact_id=research.model_approval_hash,
             probability_artifact_id=research.probability_artifact_id,
             universe_snapshot_id=research.universe_snapshot_id,
+            universe_evidence=research.universe_evidence,
+            probability_overlay_active=research.probability_overlay_active,
+            probability_overlay_state=research.probability_overlay_state,
+            probability_overlay_reason=research.probability_overlay_reason,
+            probability_overlay_effects=research.probability_overlay_effects,
         )
 
     def _persist_blocked(
@@ -722,8 +762,8 @@ class ProductionDailyWorkflow:
                 else "NOT_APPROVED"
             ),
             probability_calibration_status=(
-                "CALIBRATED_LOCKED_OOS"
-                if any(item.confidence_calibrated for item in assembled.inputs.alpha_signals)
+                "CALIBRATED_LOCKED_OOS_PRODUCTION_APPROVED"
+                if assembled.probability_overlay_active
                 else "PROBABILITY_NOT_CALIBRATED"
             ) if assembled is not None else "PROBABILITY_NOT_CALIBRATED",
             stress=output.stress if output is not None else None,
@@ -757,6 +797,25 @@ class ProductionDailyWorkflow:
                 _portfolio_snapshot_id(assembled)
                 if assembled is not None
                 else "NOT_INITIALIZED"
+            ),
+            universe_evidence=(
+                assembled.universe_evidence if assembled is not None else {}
+            ),
+            probability_overlay_active=(
+                assembled.probability_overlay_active if assembled is not None else False
+            ),
+            probability_overlay_state=(
+                assembled.probability_overlay_state
+                if assembled is not None
+                else "RESEARCH_ONLY"
+            ),
+            probability_overlay_reason=(
+                assembled.probability_overlay_reason
+                if assembled is not None
+                else "PROBABILITY_ARTIFACT_MISSING"
+            ),
+            probability_overlay_effects=(
+                assembled.probability_overlay_effects if assembled is not None else ()
             ),
         )
 

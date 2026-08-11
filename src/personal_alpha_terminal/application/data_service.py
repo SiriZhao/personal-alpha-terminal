@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -12,6 +13,9 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from personal_alpha_terminal import __build_version__
+from personal_alpha_terminal.application.broad_universe_service import (
+    BroadUSUniverseService,
+)
 from personal_alpha_terminal.application.data_certification import (
     DailyDataCertification,
     DailyDataCertifier,
@@ -53,6 +57,8 @@ from personal_alpha_terminal.models import (
     Stock,
     TradingStatus,
 )
+
+LOGGER = logging.getLogger(__name__)
 
 
 class SyncRunner(Protocol):
@@ -104,6 +110,7 @@ class DataService:
         self._session = session
         self._settings = settings
         self._snapshot_root = snapshot_root or application_data_dir() / "data" / "snapshots"
+        self._uses_default_sync_runner = sync_runner is None
         self._sync_runner = sync_runner or self._run_market_engine
         self._lineage_runner = lineage_runner
 
@@ -190,12 +197,35 @@ class DataService:
         return outcome
 
     def sync_market_data(self, *, start_date: date, end_date: date) -> SyncOutcome:
+        if self._uses_default_sync_runner:
+            self._refresh_broad_current_directory()
         self._register_minimum_universe()
         self._create_universe_snapshot(end_date)
         requested_at = datetime.now(UTC)
         report = self._sync_runner(self._session, start_date, end_date)
         completed_at = datetime.now(UTC)
         return self._persist_manifest(report, requested_at, completed_at, start_date, end_date)
+
+    def _refresh_broad_current_directory(self) -> None:
+        """Refresh current listings once per UTC day without blocking price sync."""
+
+        cache_root = self._settings.market_data_provider_cache_dir / "us-current-directory"
+        latest = cache_root / "latest.json"
+        if latest.exists():
+            modified = datetime.fromtimestamp(latest.stat().st_mtime, tz=UTC)
+            if modified.date() == datetime.now(UTC).date():
+                return
+        try:
+            BroadUSUniverseService(
+                self._session,
+                cache_root=cache_root,
+            ).refresh_directory()
+        except TimeoutError:
+            LOGGER.warning("broad-universe metadata provider temporarily unavailable: timeout")
+        except OSError as exc:
+            LOGGER.warning("broad-universe metadata provider unavailable: %s", exc)
+        except ValueError as exc:
+            LOGGER.warning("broad-universe metadata response rejected: %s", exc)
 
     def latest_manifest(self) -> DataSnapshotManifest | None:
         return self._session.scalar(

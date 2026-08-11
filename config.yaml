@@ -18,6 +18,14 @@ independent_provider_priority:
 timeout_seconds: 20
 max_retries: 2
 retry_backoff_seconds: 0.5
+universe_minimum_price: 5.0
+universe_minimum_trading_sessions: 252
+universe_minimum_average_dollar_volume: 10000000
+universe_minimum_median_dollar_volume: 10000000
+universe_minimum_valid_bar_coverage: 0.98
+universe_maximum_missing_ratio: 0.02
+universe_include_adr: false
+universe_include_reit: false
 data_safe_threshold: 80
 data_watch_threshold: 65
 reconciliation_minimum_coverage: 0.95

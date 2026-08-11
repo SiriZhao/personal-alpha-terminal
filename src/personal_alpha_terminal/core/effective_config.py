@@ -40,6 +40,31 @@ DEFAULT_REQUIRED_SYMBOLS = DEFAULT_SYMBOLS
 
 
 @dataclass(frozen=True, slots=True)
+class BroadUniverseConfig:
+    minimum_price: float = 5.0
+    minimum_trading_sessions: int = 252
+    minimum_average_dollar_volume: float = 10_000_000.0
+    minimum_median_dollar_volume: float = 10_000_000.0
+    minimum_valid_bar_coverage: float = 0.98
+    maximum_missing_ratio: float = 0.02
+    include_adr: bool = False
+    include_reit: bool = False
+
+    def __post_init__(self) -> None:
+        if self.minimum_price <= 0 or self.minimum_trading_sessions < 1:
+            raise ValueError("broad universe price/history thresholds are invalid")
+        if min(
+            self.minimum_average_dollar_volume,
+            self.minimum_median_dollar_volume,
+        ) <= 0:
+            raise ValueError("broad universe liquidity thresholds are invalid")
+        if not 0 <= self.minimum_valid_bar_coverage <= 1:
+            raise ValueError("broad universe coverage threshold is invalid")
+        if not 0 <= self.maximum_missing_ratio <= 1:
+            raise ValueError("broad universe missing-data threshold is invalid")
+
+
+@dataclass(frozen=True, slots=True)
 class EffectiveRuntimeConfig:
     """The single resolved, immutable configuration used by production code."""
 
@@ -80,6 +105,7 @@ class EffectiveRuntimeConfig:
     # operators select the unique ledger name (normally ``main``).
     portfolio_id: int | str | None = None
     required_symbols: tuple[str, ...] = DEFAULT_REQUIRED_SYMBOLS
+    broad_universe: BroadUniverseConfig = field(default_factory=BroadUniverseConfig)
     strategy: USAdaptiveAlphaCoreV1Config = field(default_factory=USAdaptiveAlphaCoreV1Config)
     portfolio_constraints: PortfolioConstraints = field(default_factory=PortfolioConstraints)
     risk_model: RiskModelConfig = field(default_factory=RiskModelConfig)
@@ -181,6 +207,7 @@ class EffectiveRuntimeConfig:
             "default_execution_session": self.default_execution_session,
             "allow_calendar_fallback": self.allow_calendar_fallback,
             "portfolio_id": self.portfolio_id,
+            "broad_universe": asdict(self.broad_universe),
         }
 
 
@@ -271,6 +298,26 @@ def resolve_effective_runtime_config(
         default_execution_session=scalar.get("default_execution_session", "REGULAR").upper(),
         allow_calendar_fallback=_boolean(scalar, "allow_calendar_fallback", False),
         portfolio_id=_portfolio_key(scalar.get("portfolio_id")),
+        broad_universe=BroadUniverseConfig(
+            minimum_price=_number(scalar, "universe_minimum_price", 5.0),
+            minimum_trading_sessions=_integer(
+                scalar, "universe_minimum_trading_sessions", 252
+            ),
+            minimum_average_dollar_volume=_number(
+                scalar, "universe_minimum_average_dollar_volume", 10_000_000.0
+            ),
+            minimum_median_dollar_volume=_number(
+                scalar, "universe_minimum_median_dollar_volume", 10_000_000.0
+            ),
+            minimum_valid_bar_coverage=_number(
+                scalar, "universe_minimum_valid_bar_coverage", 0.98
+            ),
+            maximum_missing_ratio=_number(
+                scalar, "universe_maximum_missing_ratio", 0.02
+            ),
+            include_adr=_boolean(scalar, "universe_include_adr", False),
+            include_reit=_boolean(scalar, "universe_include_reit", False),
+        ),
         stress_risk=StressRiskConfig(
             maximum_cvar_loss=_number(scalar, "stress_maximum_cvar_loss", 0.06),
             maximum_liquidation_days=_number(scalar, "stress_maximum_liquidation_days", 5.0),
@@ -519,6 +566,14 @@ independent_provider_priority:
 timeout_seconds: 20
 max_retries: 2
 retry_backoff_seconds: 0.5
+universe_minimum_price: 5.0
+universe_minimum_trading_sessions: 252
+universe_minimum_average_dollar_volume: 10000000
+universe_minimum_median_dollar_volume: 10000000
+universe_minimum_valid_bar_coverage: 0.98
+universe_maximum_missing_ratio: 0.02
+universe_include_adr: false
+universe_include_reit: false
 reconciliation_minimum_coverage: 0.95
 reconciliation_warning_tolerance: 0.01
 maximum_provider_difference: 0.05

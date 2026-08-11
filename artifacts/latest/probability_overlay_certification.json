@@ -1,0 +1,61 @@
+{
+  "active_in_latest_daily_run": false,
+  "approval_policy": {
+    "maximum_absolute_calibration_intercept": 0.1,
+    "maximum_calibration_slope": 1.2,
+    "maximum_drawdown_deterioration": 0.02,
+    "maximum_ece": 0.05,
+    "minimum_calibration_slope": 0.8,
+    "minimum_locked_oos_sessions": 252,
+    "minimum_net_alpha_improvement": 0.0,
+    "minimum_net_sharpe_improvement": 0.0,
+    "minimum_walk_forward_folds": 4
+  },
+  "artifact_hash": "a456ace1d86dcb920071b8e179996a34b7873eb98986ed744e06fa6a384c3c03",
+  "artifact_id": "probability-overlay-2026-08-10-02e15f97f29a",
+  "blockers": [
+    "PROBABILITY_ARTIFACT_MISSING",
+    "RESEARCH_DATA_NOT_CERTIFIED",
+    "LOCKED_OOS_EVIDENCE_UNAVAILABLE",
+    "BASE_OVERLAY_AFTER_COST_COMPARISON_UNAVAILABLE",
+    "CALIBRATION_EVIDENCE_UNAVAILABLE"
+  ],
+  "calibration": {
+    "baseline_brier_score": null,
+    "brier_score": null,
+    "calibration_intercept": null,
+    "calibration_slope": null,
+    "ece": null,
+    "log_loss": null,
+    "sample_size": 0,
+    "status": "PROBABILITY_NOT_CALIBRATED"
+  },
+  "fallback_reason": "PROBABILITY_ARTIFACT_MISSING",
+  "fallback_strategy": "BASE_FACTOR_ALPHA",
+  "generated_at": "2026-08-11T17:30:42.435966+00:00",
+  "mechanism_if_approved": "OOS_NET_RESIDUAL_SHRINKAGE",
+  "production_approved": false,
+  "production_effects": {
+    "effect_count": 0,
+    "expected_return_changed": false,
+    "ranking_changed": false,
+    "recommendation_may_change": false,
+    "target_weight_may_change": false
+  },
+  "research_data_version": "5401d022821c598582ae1834f256b1aacbd5690b9d0e11403fc7c94d8943c81c",
+  "schema_version": "probability-overlay-certification-v1",
+  "source_run_certificate": "reports/daily-runs/daily-1354936235354e9fb22570952d71379b/run_certificate.json",
+  "source_run_id": "daily-1354936235354e9fb22570952d71379b",
+  "state": "RESEARCH_ONLY",
+  "strategy_parameter_hash": "427671e52a5391d97cd01fd855aec3bbafa7c762c072aeee253406fa993416b6",
+  "strategy_version": "USAdaptiveAlphaCoreV1:1.0.0:427671e52a53",
+  "universe_version": "2",
+  "walk_forward": {
+    "base_metrics": null,
+    "benchmark": "SPY",
+    "locked_oos_sessions": 0,
+    "overlay_metrics": null,
+    "status": "NOT_EXECUTED",
+    "transaction_costs_included": false
+  }
+}

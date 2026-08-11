@@ -1,14 +1,18 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, replace
-from datetime import datetime, timedelta
+from dataclasses import asdict, dataclass, field, replace
+from datetime import date, datetime, timedelta
 
 import numpy as np
 import pandas as pd
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from personal_alpha_terminal.application.broad_universe_service import (
+    BroadUSUniverseService,
+)
 from personal_alpha_terminal.core.effective_config import EffectiveRuntimeConfig
+from personal_alpha_terminal.data.us_market.broad_universe import EligibilityRules
 from personal_alpha_terminal.data.us_market.repository import USPointInTimeRepository
 from personal_alpha_terminal.models import Portfolio, PortfolioPosition, Price, SecurityMaster
 from personal_alpha_terminal.quant_engine.alpha import AlphaSignal
@@ -17,6 +21,13 @@ from personal_alpha_terminal.quant_engine.benchmark import (
     benchmark_evidence_from_returns,
 )
 from personal_alpha_terminal.quant_engine.model_registry import ModelRegistryService
+from personal_alpha_terminal.quant_engine.probability_overlay import (
+    ConditionalProbabilityEvidence,
+    ProbabilityOverlayEffect,
+    ProbabilityOverlayIdentity,
+    ProbabilityOverlayRegistry,
+    apply_probability_overlay,
+)
 from personal_alpha_terminal.quant_engine.production_pipeline import DailyQuantInput
 from personal_alpha_terminal.quant_engine.risk.budget import (
     CorrelationRiskStatus,
@@ -70,6 +81,12 @@ class AssembledDailyInput:
     model_approval_hash: str = 'NOT_APPROVED'
     model_approval_data_version: str = 'NOT_APPROVED'
     probability_artifact_id: str = 'OPTIONAL_UNAVAILABLE'
+    alpha_symbols: tuple[str, ...] = ()
+    universe_evidence: dict[str, object] = field(default_factory=dict)
+    probability_overlay_active: bool = False
+    probability_overlay_state: str = "RESEARCH_ONLY"
+    probability_overlay_reason: str = "PROBABILITY_ARTIFACT_MISSING"
+    probability_overlay_effects: tuple[ProbabilityOverlayEffect, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,6 +114,12 @@ class AssembledResearchInput:
     model_approval_hash: str = 'NOT_APPROVED'
     model_approval_data_version: str = 'NOT_APPROVED'
     probability_artifact_id: str = 'OPTIONAL_UNAVAILABLE'
+    alpha_symbols: tuple[str, ...] = ()
+    universe_evidence: dict[str, object] = field(default_factory=dict)
+    probability_overlay_active: bool = False
+    probability_overlay_state: str = "RESEARCH_ONLY"
+    probability_overlay_reason: str = "PROBABILITY_ARTIFACT_MISSING"
+    probability_overlay_effects: tuple[ProbabilityOverlayEffect, ...] = ()
 
 
 class ProductionDailyQuantInputAssembler:
@@ -118,6 +141,9 @@ class ProductionDailyQuantInputAssembler:
         self.effective_config = effective_config or EffectiveRuntimeConfig()
         self.strategy = strategy or USAdaptiveAlphaCoreV1(self.effective_config.strategy)
         self.validation_registry = ValidationArtifactRegistry(
+            self.effective_config.validation_artifact_dir
+        )
+        self.probability_overlay_registry = ProbabilityOverlayRegistry(
             self.effective_config.validation_artifact_dir
         )
 
@@ -159,16 +185,35 @@ class ProductionDailyQuantInputAssembler:
             universe_snapshot_id=universe.snapshot_id,
         )
         authorization = ResearchDataGateService(self.session).authorize(request)
-        research_securities = tuple(
-            item for item in universe.securities if item.asset_type in {"stock", "etf"}
+        (
+            alpha_securities,
+            reference_securities,
+            universe_evidence,
+            broad_universe_production_eligible,
+        ) = self._select_alpha_universe(
+            universe.securities,
+            universe_date=decision_time.date(),
+            decision_time=decision_time,
+            reference_symbols=(benchmark_symbol, self.effective_config.nasdaq_benchmark),
         )
-        if not research_securities:
-            raise ValueError("certified live universe contains no research securities")
+        if not alpha_securities:
+            raise ValueError("broad US equity universe contains no diagnostic equities")
+        price_securities = tuple(
+            {
+                item.canonical_code: item
+                for item in (*alpha_securities, *reference_securities)
+            }.values()
+        )
         start_time = decision_time - timedelta(days=history_days)
         price_frame, _versions = self.repository.total_return_frame(
-            research_securities, as_of=decision_time, start_date=start_time
+            price_securities, as_of=decision_time, start_date=start_time
         )
-        metadata = self.repository.metadata_frame(research_securities, as_of=decision_time)
+        alpha_symbols = tuple(item.symbol for item in alpha_securities)
+        alpha_price_frame = price_frame[price_frame["ticker"].isin(alpha_symbols)].copy()
+        metadata = self.repository.metadata_frame(alpha_securities, as_of=decision_time)
+        risk_metadata_frame = self.repository.metadata_frame(
+            price_securities, as_of=decision_time
+        )
         registry = ModelRegistryService(self.session)
         record = registry.ensure_registered(
             model_id=self.strategy.model_id,
@@ -198,6 +243,10 @@ class ProductionDailyQuantInputAssembler:
             parameter_fingerprint=self.strategy.config.parameter_fingerprint,
             decision_time=decision_time,
         )
+        if not broad_universe_production_eligible:
+            # Current-directory provenance is a production prerequisite. Legacy
+            # local rows may still produce diagnostics but can never reach a trade.
+            approval = None
         approval_data_version = (
             approval.data_version if approval is not None else 'NOT_APPROVED'
         )
@@ -209,10 +258,10 @@ class ProductionDailyQuantInputAssembler:
             )
         )
         fundamentals = self.repository.fundamental_snapshot(
-            research_securities, as_of=decision_time
+            alpha_securities, as_of=decision_time
         )
         strategy_result = self.strategy.generate(
-            prices=price_frame,
+            prices=alpha_price_frame,
             metadata=metadata,
             decision_time=decision_time,
             data_version=universe.data_version,
@@ -220,16 +269,69 @@ class ProductionDailyQuantInputAssembler:
             calibration=calibration,
             fundamentals=fundamentals,
         )
+        strategy_version = (
+            f"{self.strategy.model_id}:{self.strategy.version}:"
+            f"{strategy_result.parameter_fingerprint[:12]}"
+        )
+        overlay_universe_version = str(
+            universe_evidence.get("eligibility_hash", universe.data_version)
+        )
+        overlay_identity = ProbabilityOverlayIdentity(
+            strategy_version=strategy_version,
+            strategy_parameter_hash=strategy_result.parameter_fingerprint,
+            research_data_version=universe.data_version,
+            research_data_hash=universe.data_version,
+            universe_version=overlay_universe_version,
+            probability_model_version="NOT_AVAILABLE",
+            calibration_version="NOT_AVAILABLE",
+        )
+        overlay_artifact = None
+        overlay_evidence: tuple[ConditionalProbabilityEvidence, ...] = ()
+        if approval is not None and broad_universe_production_eligible:
+            try:
+                overlay_artifact = self.probability_overlay_registry.matching_inputs(
+                    strategy_version=strategy_version,
+                    strategy_parameter_hash=strategy_result.parameter_fingerprint,
+                    research_data_version=universe.data_version,
+                    research_data_hash=universe.data_version,
+                    universe_version=overlay_universe_version,
+                    decision_time=decision_time,
+                )
+                if overlay_artifact is not None:
+                    overlay_identity = overlay_artifact.identity
+                    overlay_evidence = self.probability_overlay_registry.evidence(
+                        overlay_artifact,
+                        decision_time=decision_time,
+                    )
+            except (KeyError, OSError, TypeError, ValueError):
+                overlay_artifact = None
+                overlay_evidence = ()
+        overlay_application = apply_probability_overlay(
+            tuple(strategy_result.signals),
+            overlay_evidence,
+            artifact=overlay_artifact,
+            expected_identity=overlay_identity,
+            decision_time=decision_time,
+        )
+        factors = _overlay_adjusted_factors(
+            strategy_result.factors,
+            overlay_application.effects,
+        )
         levels = price_frame.pivot(
             index="trade_date", columns="ticker", values="close"
         ).sort_index()
         levels.index = pd.DatetimeIndex(pd.to_datetime(levels.index, utc=True))
-        returns = levels.pct_change(fill_method=None).dropna(how="all")
-        if benchmark_symbol not in returns:
+        all_returns = levels.pct_change(fill_method=None).dropna(how="all")
+        if benchmark_symbol not in all_returns:
             raise ValueError(
                 f"certified benchmark is missing from PIT universe: {benchmark_symbol}"
             )
-        benchmark_returns = returns[benchmark_symbol].dropna()
+        benchmark_returns = all_returns[benchmark_symbol].dropna()
+        # Risk history includes distinct benchmark/risk-reference ETFs and current
+        # portfolio cash proxies, while factors and alpha remain restricted to
+        # ``alpha_price_frame`` above.  This prevents ETF cross-sectional leakage
+        # without making an existing non-alpha holding unmeasurable by risk.
+        returns = all_returns.dropna(how="all")
         market_caps = pd.to_numeric(metadata["market_cap"], errors="coerce")
         valid_caps = market_caps.notna() & (market_caps > 0)
         size_scores: dict[str, float] = {}
@@ -242,27 +344,39 @@ class ProductionDailyQuantInputAssembler:
                     str(row.ticker): float(centered.iloc[index])
                     for index, row in enumerate(metadata.itertuples(index=False))
                 }
+        alpha_symbol_set = set(alpha_symbols)
         risk_metadata = tuple(
             AssetRiskMetadata(
                 symbol=str(row.ticker),
-                sector=str(row.sector),
+                sector=(
+                    str(row.sector)
+                    if str(row.ticker) in alpha_symbol_set
+                    else f"REFERENCE:{row.sector}"
+                ),
                 average_daily_dollar_volume=float(row.average_daily_dollar_volume),
-                size_score=size_scores.get(str(row.ticker)),
+                # Non-alpha references receive a neutral size exposure. They are
+                # present solely so existing holdings can be risk-measured and
+                # reduced; they are never ranked as equity alpha candidates.
+                size_score=(
+                    size_scores.get(str(row.ticker))
+                    if str(row.ticker) in alpha_symbol_set
+                    else 0.0
+                ),
             )
-            for row in metadata.itertuples(index=False)
+            for row in risk_metadata_frame.itertuples(index=False)
         )
         return AssembledResearchInput(
             authorization,
             decision_time,
-            tuple(strategy_result.signals),
+            overlay_application.signals,
             returns,
             benchmark_returns,
             risk_metadata,
             strategy_result.disabled_components,
             strategy_result.parameter_fingerprint,
-            strategy_result.factors,
-            len(research_securities),
-            returns.index.max().to_pydatetime(),
+            factors,
+            len(alpha_securities),
+            all_returns.index.max().to_pydatetime(),
             tuple(authorization.evidence.source_ids) if authorization.evidence else (),
             benchmark_symbol,
             len(benchmark_returns),
@@ -281,25 +395,27 @@ class ProductionDailyQuantInputAssembler:
             tuple(
                 evidence
                 for evidence in (
-                    benchmark_evidence_from_returns(returns, benchmark_symbol),
+                    benchmark_evidence_from_returns(all_returns, benchmark_symbol),
                     benchmark_evidence_from_returns(
-                        returns, self.effective_config.nasdaq_benchmark
+                        all_returns, self.effective_config.nasdaq_benchmark
                     ),
                 )
                 if evidence is not None
             ),
-            f'{self.strategy.model_id}:{self.strategy.version}:{strategy_result.parameter_fingerprint[:12]}',
+            strategy_version,
             (
                 approval.validation_manifest_hash
                 if approval is not None
                 else 'NOT_APPROVED'
             ),
             approval_data_version,
-            (
-                calibration.artifact_hash
-                if calibration is not None
-                else 'OPTIONAL_UNAVAILABLE'
-            ),
+            overlay_application.artifact_id,
+            alpha_symbols,
+            universe_evidence,
+            overlay_application.active,
+            overlay_application.state.value,
+            overlay_application.reason,
+            overlay_application.effects,
         )
 
     def complete_with_portfolio(
@@ -313,10 +429,11 @@ class ProductionDailyQuantInputAssembler:
             as_of=research.decision_time,
             snapshot_id=int(research.universe_snapshot_id),
         )
+        alpha_symbol_set = set(research.alpha_symbols)
         if any(
             self.repository.tradability(item.id, as_of=research.decision_time) != "TRADABLE"
             for item in universe.securities
-            if item.asset_type in {"stock", "etf"}
+            if item.symbol in alpha_symbol_set
         ):
             raise ValueError(
                 "formal portfolio construction requires certified TRADABLE status"
@@ -332,8 +449,19 @@ class ProductionDailyQuantInputAssembler:
         ) = self._portfolio_state(
             portfolio_id=portfolio_id, decision_time=research.decision_time
         )
+        decision_symbols = set(research.alpha_symbols) | set(current_weights)
+        decision_returns = research.returns.loc[
+            :, [symbol for symbol in research.returns.columns if symbol in decision_symbols]
+        ]
+        decision_risk_metadata = tuple(
+            item for item in research.risk_metadata if item.symbol in decision_symbols
+        )
+        if set(current_weights) - set(decision_returns.columns):
+            raise ValueError("portfolio risk history does not cover current holdings")
+        if set(current_weights) - {item.symbol for item in decision_risk_metadata}:
+            raise ValueError("current holdings are missing from the risk universe")
         risk_state = self._risk_state(
-            research.returns,
+            decision_returns,
             research.benchmark_returns,
             current_weights,
             decision_cutoff=research.decision_time,
@@ -343,9 +471,9 @@ class ProductionDailyQuantInputAssembler:
                 authorization=decision_authorization,
                 decision_time=research.decision_time,
                 alpha_signals=research.alpha_signals,
-                returns=research.returns,
+                returns=decision_returns,
                 benchmark_returns=research.benchmark_returns,
-                risk_metadata=research.risk_metadata,
+                risk_metadata=decision_risk_metadata,
                 current_weights=current_weights,
                 portfolio_value=portfolio_value,
                 portfolio_risk_state=risk_state,
@@ -373,7 +501,77 @@ class ProductionDailyQuantInputAssembler:
             research.model_approval_hash,
             research.model_approval_data_version,
             research.probability_artifact_id,
+            research.alpha_symbols,
+            research.universe_evidence,
+            research.probability_overlay_active,
+            research.probability_overlay_state,
+            research.probability_overlay_reason,
+            research.probability_overlay_effects,
         )
+
+    def _select_alpha_universe(
+        self,
+        securities: tuple[SecurityMaster, ...],
+        *,
+        universe_date: date,
+        decision_time: datetime,
+        reference_symbols: tuple[str, ...],
+    ) -> tuple[
+        tuple[SecurityMaster, ...],
+        tuple[SecurityMaster, ...],
+        dict[str, object],
+        bool,
+    ]:
+        service = BroadUSUniverseService(
+            self.session,
+            cache_root=self.effective_config.cache_dir / "us-current-directory",
+            rules=EligibilityRules(**asdict(self.effective_config.broad_universe)),
+        )
+        selection = service.select(
+            universe_date=universe_date,
+            decision_time=decision_time,
+            reference_symbols=reference_symbols,
+        )
+        official = (
+            selection.directory.provider
+            == "nasdaq_trader_symbol_directory"
+        )
+        if official:
+            if not selection.alpha_securities:
+                raise ValueError("official broad universe has no factor eligible equities")
+            return (
+                selection.alpha_securities,
+                selection.reference_securities,
+                selection.evidence(),
+                True,
+            )
+
+        # Preserve historical diagnostics when current metadata is temporarily
+        # unavailable, but report zero formal eligibility and disable approval.
+        alpha = tuple(item for item in securities if item.asset_type == "stock")
+        references = tuple(
+            item
+            for item in securities
+            if item.symbol in set(reference_symbols)
+            and item.asset_type in {"etf", "index"}
+        )
+        evidence: dict[str, object] = {
+            "listed_equities": "UNAVAILABLE",
+            "security_type_eligible": 0,
+            "data_eligible": 0,
+            "liquidity_eligible": 0,
+            "factor_eligible": 0,
+            "signal_eligible": 0,
+            "diagnostic_input_count": len(alpha),
+            "universe_date": universe_date.isoformat(),
+            "directory_provider": selection.directory.provider,
+            "directory_version": selection.directory.dataset_version,
+            "pit_status": "CURRENT_DIRECTORY_NOT_CERTIFIED",
+            "survivorship_status": "UNVERIFIED",
+            "historical_use_allowed": False,
+            "warnings": list(selection.warnings),
+        }
+        return alpha, references, evidence, False
 
     def _portfolio_state(
         self, *, portfolio_id: int, decision_time: datetime
@@ -545,3 +743,25 @@ def _average_off_diagonal_correlation(values: pd.DataFrame) -> float:
     if not len(off_diagonal) or np.any(~np.isfinite(off_diagonal)):
         raise ValueError("correlation window is not finite")
     return float(np.mean(off_diagonal))
+
+
+def _overlay_adjusted_factors(
+    factors: tuple[StrategyFactorSnapshot, ...],
+    effects: tuple[ProbabilityOverlayEffect, ...],
+) -> tuple[StrategyFactorSnapshot, ...]:
+    """Reflect an active overlay in expected-return ranks without changing factors."""
+
+    if not effects:
+        return factors
+    adjusted_returns = {
+        item.symbol: item.adjusted_expected_excess_return for item in effects
+    }
+    adjusted = tuple(
+        replace(
+            factor,
+            expected_alpha=adjusted_returns.get(factor.symbol, factor.expected_alpha),
+        )
+        for factor in factors
+    )
+    ordered = sorted(adjusted, key=lambda item: (-item.expected_alpha, item.symbol))
+    return tuple(replace(item, rank=index) for index, item in enumerate(ordered, start=1))

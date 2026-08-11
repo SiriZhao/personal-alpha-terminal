@@ -15,7 +15,8 @@ class ResearchAsset:
         return f"US:{self.exchange}:{self.ticker}"
 
 
-# This is the sole minimum-universe definition. Services and UI must not duplicate tickers.
+# Compatibility bootstrap/reference assets for incremental daily data only.
+# BroadUSUniverseService, not this tuple, defines the production alpha cross-section.
 MINIMUM_US_RESEARCH_UNIVERSE = (
     ResearchAsset("SPY", "SPDR S&P 500 ETF", "ARCX", "etf", "市场基准"),
     ResearchAsset("QQQ", "Invesco QQQ ETF", "XNAS", "etf", "大盘成长"),

@@ -32,6 +32,8 @@ class ProbabilityCalibration:
     reason: str | None
     expected_calibration_error: float | None = None
     reliability_buckets: tuple[ReliabilityBucket, ...] = ()
+    calibration_slope: float | None = None
+    calibration_intercept: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,6 +196,7 @@ def evaluate_probability_calibration(
             )
         )
     passed = brier < baseline_brier
+    calibration_intercept, calibration_slope = _logistic_calibration(clipped, actual)
     return ProbabilityCalibration(
         brier,
         log_loss,
@@ -203,7 +206,40 @@ def evaluate_probability_calibration(
         None if passed else "probabilities do not improve Brier score over the OOS base rate",
         ece,
         tuple(buckets),
+        calibration_slope,
+        calibration_intercept,
     )
+
+
+def _logistic_calibration(
+    probabilities: np.ndarray[tuple[int], np.dtype[np.float64]],
+    outcomes: np.ndarray[tuple[int], np.dtype[np.float64]],
+) -> tuple[float | None, float | None]:
+    """Fit outcome ~ intercept + slope * logit(p) by deterministic Newton steps."""
+
+    if len(probabilities) < 3 or len(np.unique(outcomes)) < 2:
+        return None, None
+    logits = np.log(probabilities / (1.0 - probabilities))
+    design = np.column_stack((np.ones(len(logits)), logits))
+    coefficients = np.array([0.0, 1.0], dtype=float)
+    ridge = np.eye(2, dtype=float) * 1e-9
+    for _ in range(50):
+        linear = np.clip(design @ coefficients, -35.0, 35.0)
+        fitted = 1.0 / (1.0 + np.exp(-linear))
+        weights = np.maximum(fitted * (1.0 - fitted), 1e-9)
+        hessian = design.T @ (design * weights[:, None]) + ridge
+        gradient = design.T @ (outcomes - fitted)
+        try:
+            step = np.linalg.solve(hessian, gradient)
+        except np.linalg.LinAlgError:
+            return None, None
+        coefficients += step
+        if float(np.max(np.abs(step))) < 1e-10:
+            break
+    intercept, slope = (float(coefficients[0]), float(coefficients[1]))
+    if not np.isfinite(intercept) or not np.isfinite(slope):
+        return None, None
+    return intercept, slope
 
 
 def estimate_conditional_probability_2(

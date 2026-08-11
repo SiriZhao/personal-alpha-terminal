@@ -311,17 +311,26 @@ def _pit_universe(result: DailyQuantResult, console: Console) -> None:
     evidence = stage.metadata if stage is not None else {}
     data_stage = next((item for item in result.stages if item.name == "DATA"), None)
     data_evidence = data_stage.metadata if data_stage is not None else {}
+    universe = result.provenance.get("universe_evidence", {})
+    universe = universe if isinstance(universe, dict) else {}
     console.print(
         Panel(
             f"Status {stage.status.value if stage else 'NOT_RUN'}   "
-            f"Rows {evidence.get('output_row_count', 0)}   "
-            f"Universe {result.provenance.get('universe_count', 0)}\n"
+            f"Rows {evidence.get('output_row_count', 0)}\n"
+            f"US listed securities {universe.get('raw_listed_securities', 'UNAVAILABLE')}   "
+            f"Listed equities {universe.get('raw_listed_equities', 'UNAVAILABLE')}\n"
+            f"Security type eligible {universe.get('security_type_eligible', 0)}   "
+            f"Data eligible {universe.get('data_eligible', 0)}   "
+            f"Liquidity eligible {universe.get('liquidity_eligible', 0)}   "
+            f"Factor eligible {universe.get('factor_eligible', 0)}\n"
             "As-of cutoff "
             f"{result.data_cutoff.isoformat() if result.data_cutoff else 'UNAVAILABLE'}\n"
             "Latest completed session "
             f"{data_evidence.get('latest_completed_session', result.analysis_date)}\n"
             "Decision convention "
             f"{data_evidence.get('decision_timestamp_convention', 'UNAVAILABLE')}\n"
+            f"PIT status {universe.get('pit_status', 'UNAVAILABLE')}   "
+            f"Survivorship {universe.get('survivorship_status', 'UNVERIFIED')}\n"
             f"Message: {stage.message if stage else 'PIT stage was not created'}",
             title=_t("PIT / 股票池", "PIT / UNIVERSE"),
             border_style=(
@@ -493,6 +502,13 @@ def _factors(result: DailyQuantResult, console: Console) -> None:
 
 
 def _probability(result: DailyQuantResult, console: Console) -> None:
+    overlay = result.provenance.get("probability_overlay", {})
+    overlay = overlay if isinstance(overlay, dict) else {}
+    console.print(
+        f"Overlay {overlay.get('state', 'RESEARCH_ONLY')}   "
+        f"Active {bool(overlay.get('active', False))}   "
+        f"Reason {overlay.get('reason', 'UNAVAILABLE')}"
+    )
     table = Table(
         title=_t(
             "条件概率 · 仅作支持证据 · 未校准时不可调整仓位",

@@ -1,0 +1,78 @@
+{
+  "adv_cutoff_convention": "STRICTLY_BEFORE_UNIVERSE_DATE",
+  "analysis_date": "2026-08-10",
+  "artifact_hash": "6391b31a40ea583b1e6cc4ce9a17fea3f0504f8b30bf5f1d9e62b4e018b2d5bd",
+  "artifact_id": "broad-us-current-2026-08-10-50106330e837",
+  "blockers": [
+    "HISTORICAL_MEMBERSHIP_INCOMPLETE",
+    "DELISTING_HISTORY_INCOMPLETE",
+    "SECURITY_IDENTIFIER_HISTORY_INCOMPLETE",
+    "CORPORATE_ACTION_PIT_HISTORY_INCOMPLETE",
+    "PIT_TOTAL_RETURN_HISTORY_INCOMPLETE"
+  ],
+  "certified_universe_snapshot_id": "2",
+  "configured_filters": {
+    "include_adr": false,
+    "include_reit": false,
+    "maximum_missing_ratio": 0.02,
+    "minimum_average_dollar_volume": 10000000.0,
+    "minimum_median_dollar_volume": 10000000.0,
+    "minimum_price": 5.0,
+    "minimum_trading_sessions": 252,
+    "minimum_valid_bar_coverage": 0.98
+  },
+  "counts": {
+    "data_eligible": 9,
+    "factor_eligible": 9,
+    "liquidity_eligible": 9,
+    "raw_listed_equities": 7475,
+    "raw_listed_securities": 8833,
+    "security_type_eligible": 4957,
+    "signal_eligible": 9
+  },
+  "current_daily_selection_status": "PASS",
+  "daily_data_hash": "a31b42e3ca6d340602801a55ba71b067124756d7111365f5a125eab3d7931dd5",
+  "daily_data_snapshot_id": "US-20260811T155901Z-a31b42e3ca6d",
+  "decision_cutoff": "2026-08-10T20:30:00+00:00",
+  "directory_content_hash": "4af011716456c1a37851b7c43a3002db5f77049592331fce3ace16a0701bc57e",
+  "directory_manifest_hash": "7dd0d911d9c2338c29f018c30600dae5941cac15807e2a172da8111aa8161048",
+  "eligibility_content_hash": "50106330e837e47b4fd6afbb2bb0d8d33bcbe7acf4f08cd5cb6a49a88ace476b",
+  "eligible_for_strategy_production_approval": false,
+  "fixed_bootstrap_list_is_alpha_universe": false,
+  "generated_at": "2026-08-11T17:30:42.435966+00:00",
+  "historical_research_status": "NOT_CERTIFIABLE",
+  "historical_use_allowed": false,
+  "pit_status": "CURRENT_PIT_ONLY",
+  "pit_total_return_version": "5401d022821c598582ae1834f256b1aacbd5690b9d0e11403fc7c94d8943c81c",
+  "provider": "nasdaq_trader_symbol_directory",
+  "provider_capabilities": {
+    "common_stock_classification": "CONSERVATIVE_NAME_RULES",
+    "corporate_actions": false,
+    "current_listings": true,
+    "delistings": false,
+    "etf_classification": true,
+    "exchange_classification": true,
+    "historical_membership": false,
+    "identifier_history": false,
+    "prices": false,
+    "total_return_vintages": false
+  },
+  "provider_retrieved_at": "2026-08-11T16:59:53.836827+00:00",
+  "provider_scope": "CURRENT_LISTINGS_ONLY",
+  "provider_source_timestamp": "FILE CREATION TIME: 0811202612:11;FILE CREATION TIME: 0811202612:11",
+  "rules_fingerprint": "184f3c38efec25ff755ec304b32c67e42814a8a2eaaaf6d692f8763f1dd3a00a",
+  "schema_version": "broad-universe-certification-v1",
+  "scope_classification": "CURRENT_DAILY_PIT_PARTIAL",
+  "segregation": {
+    "benchmark": [
+      "SPY",
+      "QQQ"
+    ],
+    "equity_alpha": "COMMON_STOCK_ONLY",
+    "macro_regime": "OPTIONAL_UNAVAILABLE",
+    "risk_reference": "ETF_OR_CURRENT_HOLDING_NOT_ALPHA_RANKED"
+  },
+  "source_run_certificate": "reports/daily-runs/daily-1354936235354e9fb22570952d71379b/run_certificate.json",
+  "source_run_id": "daily-1354936235354e9fb22570952d71379b",
+  "survivorship_status": "UNVERIFIED"
+}

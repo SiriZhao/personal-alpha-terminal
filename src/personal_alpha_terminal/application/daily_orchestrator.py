@@ -347,10 +347,12 @@ class DailyQuantOrchestrator:
         mapping = {
             "Data Quality Gate": "DATA",
             "PIT Universe": "PIT",
+            "Broad Equity Universe": "PIT",
             "Point-in-Time Inputs": "PIT",
             "Feature Engine": "FEATURE",
             "Factor Engine": "FACTOR",
             "Alpha Signals": "SIGNAL",
+            "Probability Overlay": "PROBABILITY",
             "Risk Model": "RISK",
             "Risk Budget": "RISK",
             "Portfolio Construction": "PORTFOLIO",
@@ -361,11 +363,10 @@ class DailyQuantOrchestrator:
             name = mapping.get(item.name)
             if name is None:
                 continue
-            status = (
-                StageStatus.FAIL_BLOCKING
-                if item.status == "BLOCKED"
-                else StageStatus.PASS
-            )
+            status = {
+                "BLOCKED": StageStatus.FAIL_BLOCKING,
+                "DEGRADED": StageStatus.PASS_DEGRADED,
+            }.get(item.status, StageStatus.PASS)
             previous = stages.get(name)
             if previous is not None and previous.status is StageStatus.FAIL:
                 continue
@@ -427,10 +428,29 @@ class DailyQuantOrchestrator:
             "PROBABILITY",
             StageResult(
                 "PROBABILITY",
-                StageStatus.PASS_DEGRADED,
+                (
+                    StageStatus.PASS
+                    if workflow.probability_overlay_active
+                    else StageStatus.PASS_DEGRADED
+                ),
                 0.0,
-                "no calibrated PIT conditional overlay; deterministic base alpha is unchanged",
-                {"position_influence": 0.0, "output_row_count": 1},
+                (
+                    "approved calibrated residual overlay active"
+                    if workflow.probability_overlay_active
+                    else (
+                        "deterministic base alpha unchanged; "
+                        f"{workflow.probability_overlay_reason}"
+                    )
+                ),
+                {
+                    "overlay_active": workflow.probability_overlay_active,
+                    "overlay_state": workflow.probability_overlay_state,
+                    "fallback_reason": workflow.probability_overlay_reason,
+                    "position_influence": (
+                        1.0 if workflow.probability_overlay_active else 0.0
+                    ),
+                    "output_row_count": len(workflow.probability_overlay_effects),
+                },
             ),
         )
         first_quant = next(
@@ -487,10 +507,28 @@ class DailyQuantOrchestrator:
             )
             for item in workflow.factors
         )
-        probability = (
+        probability = tuple(
             ProbabilityRow(
-                "Validated conditional overlay",
-                "base alpha confidence / position cap",
+                item.condition_id,
+                "benchmark-relative residual return > approved threshold",
+                item.sample_size,
+                None,
+                item.posterior_probability,
+                None,
+                None,
+                item.probability_adjustment,
+                None,
+                None,
+                None,
+                "CALIBRATED LOCKED OOS",
+                workflow.probability_calibration_status,
+                "PASS",
+            )
+            for item in workflow.probability_overlay_effects
+        ) or (
+            ProbabilityRow(
+                "Validated conditional residual overlay",
+                "benchmark-relative return; advisory fallback",
                 0,
                 None,
                 None,
@@ -501,7 +539,7 @@ class DailyQuantOrchestrator:
                 None,
                 None,
                 "INSUFFICIENT EVIDENCE",
-                workflow.probability_calibration_status,
+                workflow.probability_overlay_reason,
                 "PASS_DEGRADED",
             ),
         )
@@ -759,6 +797,28 @@ class DailyQuantOrchestrator:
                 "randomness": "NOT_USED",
                 "source_ids": workflow.source_ids,
                 "universe_count": workflow.universe_count,
+                "universe_evidence": workflow.universe_evidence,
+                "probability_overlay": {
+                    "active": workflow.probability_overlay_active,
+                    "state": workflow.probability_overlay_state,
+                    "reason": workflow.probability_overlay_reason,
+                    "effects": [
+                        {
+                            "symbol": item.symbol,
+                            "condition_id": item.condition_id,
+                            "base_expected_excess_return": (
+                                item.base_expected_excess_return
+                            ),
+                            "probability_adjustment": item.probability_adjustment,
+                            "adjusted_expected_excess_return": (
+                                item.adjusted_expected_excess_return
+                            ),
+                            "posterior_probability": item.posterior_probability,
+                            "sample_size": item.sample_size,
+                        }
+                        for item in workflow.probability_overlay_effects
+                    ],
+                },
                 "manual_broker": "Charles Schwab",
                 "automatic_execution": False,
                 "transaction_cost_assumption": (
