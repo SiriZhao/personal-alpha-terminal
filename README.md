@@ -47,19 +47,45 @@ Read the top-level `ACTIONABLE` / `NON_ACTIONABLE` classification and primary bl
 
 Strategy production approval requires chronological train/validation/locked-OOS or walk-forward evidence, identical PIT convention for SPY and QQQ, survivorship and corporate-action controls, commissions/spread/slippage/impact, and acceptable turnover, drawdown, concentration, benchmark alpha, and stability. `quant_engine.strategy_certification` evaluates and hashes that evidence; insufficient data produces `NOT_CERTIFIABLE`, failed alpha/risk gates produce `REJECTED`, and neither can create an approval artifact.
 
-Historical research uses a separate provider-neutral contract in
-`quant_engine.research_data`; `LIVE_DAILY_DATA` is never silently reclassified as
-`RESEARCH_CERTIFIED_DATA`. Audit local capability without downloading data or
-changing portfolio state:
+Historical research uses provider-neutral contracts in `quant_engine.research_data`
+and `quant_engine.research_dataset`. The domains are explicit:
+
+- `LIVE_DAILY_DATA`: today's analysis inputs; never historical backtest evidence.
+- `RESEARCH_RAW_DATA`: imported rows that are normalized and audited but not approved.
+- `RESEARCH_CERTIFIED_DATA`: rows whose membership, identity, lifecycle, corporate-action,
+  total-return, calendar, provenance, period coverage, and content hash all pass.
+
+The current ticker list is never backfilled into history. A final adjusted series downloaded
+today is not a PIT total-return vintage. ETF, equity, and benchmark memberships use separate
+`US_ETF`, `US_EQUITY`, and `BENCHMARK` classifications.
+
+Research ingest is separate from `daily` and never runs automatically:
 
 ```powershell
-python scripts/run_alpha_research_certification.py --cutoff 2026-08-11T09:58:57.456915+00:00
+python main.py research-data audit
+python main.py research-data --root var/research-data status
+python main.py research-data --root var/research-data import data/research/imports/package.csv --required-start 2015-01-02 --required-end 2026-06-30
+python main.py research-data --root var/research-data certify
+python main.py research-data --root var/research-data manifest
 ```
 
-Exit code 3 with `NOT_CERTIFIABLE` is expected when historical membership,
-delistings, PIT corporate actions, or locked OOS evidence is absent. Large imported
-research rows belong under ignored `data/research/`; only versioned manifests,
-content hashes, and concise research reports belong in Git.
+`import` accepts long-form CSV or Parquet and SQLite. Every row carries the common fields
+`dataset_id`, `schema_version`, `dataset_provider`, `dataset_source`, `retrieved_at`,
+`as_of`, `cutoff`, `use_scope`, `record_type`, `source`, and `provider`. Record types are:
+
+- `SECURITY`: permanent ID, ticker validity, exchange, listing/delisting, security type.
+- `MEMBERSHIP`: universe ID/type, effective interval, availability and source timestamp.
+- `PRICE`: raw OHLCV plus explicit adjustment kind and optional PIT total-return vintage.
+- `CORPORATE_ACTION`: effective/announcement/available dates and supplied lifecycle terms.
+- `CALENDAR`: calendar ID, session, open/close, and early-close flag.
+
+SQLite may use one `research_rows` table or the named tables `securities`, `memberships`,
+`prices`, `corporate_actions`, and `calendar_sessions`. Parquet support is in the `research`
+dependency group. Unknown fields remain unknown; an unavailable delisting return is never
+zero. `TEST_FIXTURE` packages can prove plumbing but always have `production_eligible=false`.
+Exit code 3 with `NOT_CERTIFIABLE` is expected when critical evidence is absent. Large raw,
+normalized, and certified research rows stay under ignored `data/research/` or `var/`; only
+source, schemas, small fixtures, tests, and concise non-private reports belong in Git.
 
 ## Configuration
 
