@@ -1,89 +1,63 @@
 # Personal Alpha Terminal
 
-Terminal-first personal quantitative decision system for medium/low-frequency U.S. equity portfolio management.
+Personal, medium/low-frequency, long-only U.S. equity decision support. It runs daily, produces a manual action list or HOLD, and never places an order. Charles Schwab execution is manual. This is not investment advice.
 
-The deterministic Quant Pipeline performs data checks, point-in-time validation, factor and alpha calculation, portfolio construction, risk control, and execution planning. Charles Schwab is supported only as a CSV/manual-execution workflow. There is no broker API and no automatic trading. LLM support is optional and explanation-only.
+## Architecture and safety boundary
 
-## What it does
+The deterministic chain is `DATA -> PIT -> FEATURE -> FACTOR -> CANDIDATE -> APPROVED SIGNAL -> PORTFOLIO -> RISK -> DECISION -> MANUAL EXECUTION`. A candidate is research output; a signal has passed signal validity; an approved signal also has an immutable production certification; only a risk-approved decision can become a proposed manual trade.
 
-- Runs one audited chain: Data → PIT → Features → Factors → Alpha → Probability → Portfolio → Risk → Decision → Execution Plan.
-- Fails closed when data, PIT evidence, a real portfolio, model approval, or risk checks are insufficient.
-- Imports a Charles Schwab holdings CSV without modifying the source file.
-- Records ACCEPT/REJECT/WATCH and user-entered fills; ACCEPT never changes holdings.
-- Keeps immutable daily run snapshots so a result can be reproduced and reviewed.
-- Provides PIT-gated historical backtests. Fixture tests never count as real-data alpha evidence.
+The system fails closed on future rows, stale/incomplete data, missing PIT or survivorship evidence, missing strategy approval, an unselected portfolio, or risk failure. No stage is renamed or bypassed to produce a trade. Optional probability and market-regime overlays may be `UNCALIBRATED` / `OPTIONAL_UNAVAILABLE`; they do not change deterministic alpha. LLM use is optional and explanation-only—never stock selection, alpha, sizing, risk, or execution.
 
-## Quick start
+## Data and PIT
 
-Double-click `PersonalAlphaTerminal.exe`. With no real portfolio, the terminal reports `PORTFOLIO NOT INITIALIZED` and does not create buy orders.
+Yahoo Finance is the default daily provider. Twelve Data, Alpha Vantage, and Stooq are optional adapters subject to the same certification. Each run records cutoff, snapshot/version ID, provider, counts, coverage, quality status, certification state, and content hash. Features and SPY/QQQ benchmarks use the same completed-session PIT convention. Free current-universe data is not accepted as historical survivorship-safe evidence.
 
-```text
-PersonalAlphaTerminal.exe portfolio-init --name "My Portfolio" --cash 100000
-PersonalAlphaTerminal.exe portfolio-import schwab.csv --portfolio-id 1 --as-of 2026-08-08
-PersonalAlphaTerminal.exe portfolio-import schwab.csv --portfolio-id 1 --as-of 2026-08-08 --commit
-PersonalAlphaTerminal.exe daily
+## Portfolio initialization
+
+Holdings are never inferred. Create a persistent, auditable manual ledger (cash-only is valid):
+
+```powershell
+python main.py portfolio-init --name "My Portfolio" --cash 100000
+python main.py portfolio-init --name "My Portfolio" --cash 50000 --position "AAPL=10:180" --position "MSFT=5"
+python main.py portfolio-list
 ```
 
-The first import command is preview-only. `--commit` is required to update the real ledger.
+Then verify the returned ID and set it explicitly in local `config.yaml`:
+
+```yaml
+portfolio_id: 1
+```
+
+An existing but unselected ledger remains `PORTFOLIO_NOT_SELECTED`; zero ledgers is `PORTFOLIO_NOT_INITIALIZED`. A Schwab CSV can be previewed and then committed explicitly:
+
+```powershell
+python main.py portfolio-import schwab.csv --portfolio-id 1 --as-of 2026-08-11
+python main.py portfolio-import schwab.csv --portfolio-id 1 --as-of 2026-08-11 --commit --cash 25000
+```
 
 ## Daily workflow
 
-1. Run `daily` (the double-click default).
-2. Read DATA HEALTH and every PIPELINE gate.
-3. Treat candidates and signals as diagnostic evidence, not trades.
-4. Only `FINAL VALIDATED DECISIONS` are formal outputs.
-5. Use `accept`, `reject`, or `watch` to record your review.
-6. Place any accepted order manually at Charles Schwab.
-7. After each broker fill, use `mark-executed` with a unique fill ID. Partial fills update only
-   the quantity actually filled; restart-safe order state remains `PARTIAL` until complete.
-
-```text
-PersonalAlphaTerminal.exe accept <recommendation_id> --run-id <run_id>
-PersonalAlphaTerminal.exe mark-executed <recommendation_id> --run-id <run_id> --fill-id <fill_id> --price 100 --quantity 10 --fees 0
+```powershell
+python main.py daily
+python main.py data-provider status
+python main.py doctor
 ```
 
-`cancel-execution` and `modify-execution` require the same run/recommendation identity and an
-audit reason. They never contact Charles Schwab. Only a user-entered fill changes cash or shares.
+Read the top-level `ACTIONABLE` / `NON_ACTIONABLE` classification and primary blockers first. Evidence is stored under the configured `reports/daily-runs/<run_id>/` as a result snapshot and run certificate with canonical input/result hashes. Runtime reports, databases, caches, `.env`, credentials, and real portfolio data are ignored by Git.
 
-## Commands
+Strategy production approval requires chronological train/validation/locked-OOS or walk-forward evidence, identical PIT convention for SPY and QQQ, survivorship and corporate-action controls, commissions/spread/slippage/impact, and acceptable turnover, drawdown, concentration, benchmark alpha, and stability. `quant_engine.strategy_certification` evaluates and hashes that evidence; failing evidence produces `BLOCKED`, never an approval artifact.
 
-`daily`, `refresh`, `data`, `portfolio`, `portfolio-init`, `portfolio-import`, `factors`,
-`probability`, `risk`, `decisions`, `backtest`, `research`, `doctor`, `diagnostics`, `settings`,
-`accept`, `reject`, `watch`, `mark-executed`, `cancel-execution`, `modify-execution`, `version`,
-`help`.
+## Configuration
 
-`NO_ACTION` means every required stage completed and no rebalance survived the no-trade rules.
-`BLOCKED`/`NOT_ACTIONABLE` means evidence is incomplete; read the blocking stage, reason, cutoff,
-run ID and configuration/model/data hashes. It is the expected safe result when validation is
-not yet sufficient.
+Copy `config.example.yaml` and `.env.example`; keep secrets only in the environment or local untracked files. Optional provider keys are `TWELVE_DATA_API_KEY` and `ALPHA_VANTAGE_API_KEY`. See [LLM configuration](docs/LLM_CONFIGURATION.md), [architecture](docs/ARCHITECTURE.md), [terminal guide](docs/TERMINAL_GUIDE.md), and [production closure report](docs/PRODUCTION_CLOSURE_REPORT.md).
 
-## Data, logs, and backup
-
-User data is stored separately from the program:
-
-```text
-%LOCALAPPDATA%\PersonalAlphaTerminal
-```
-
-Back up `data/`, `config.yaml`, `config.env`, and `backups/`. Do not share API keys. Logs are rotated (`app.log`, `data.log`, `error.log`); generated reports and diagnostics have bounded retention. Databases, portfolio records, configurations, and immutable data snapshots are never removed by retention cleanup.
-
-## Documentation
-
-- [Terminal guide](docs/TERMINAL_GUIDE.md)
-- [Architecture](docs/ARCHITECTURE.md)
-- [LLM configuration](docs/LLM_CONFIGURATION.md)
-- [Troubleshooting](docs/TROUBLESHOOTING.md)
-
-## Source verification
-
-Python 3.12–3.14 is supported for development. End users of the Windows release do not install Python or Node.
+## Development and tests
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
-.\.venv\Scripts\python.exe -m pytest
+.\.venv\Scripts\python.exe -m ruff check src tests
+.\.venv\Scripts\python.exe -m pytest -q
 ```
 
-## Risk disclaimer
-
-This software is research and decision support, not investment advice. Historical results do not guarantee future performance. Free market-data sources cannot certify complete historical constituent, delisting, corporate-action, or fundamental-restatement history; the affected actions and backtests remain blocked. Prefer `NO ACTIONABLE DECISION` over an incomplete evidence chain.
+Fixture approval artifacts prove plumbing only; they are not real investment evidence. Historical results do not guarantee future performance.

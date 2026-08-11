@@ -86,6 +86,19 @@ Neither modification nor cancellation reverses fills that already changed the re
 - `research`: run research workflow, never an execution bypass.
 - `doctor` / `diagnostics`: check configuration, database/migration, storage, calendar, portfolio, broker and optional AI state.
 - `settings`: show resolved effective values plus stable runtime/root hashes, not raw YAML text.
+- `data-provider status`: inspect optional Twelve Data, Alpha Vantage, Stooq and CBOE services
+  without running a strategy or touching the portfolio. `NOT_CONFIGURED` is an optional
+  configuration diagnosis and does not block a certified Yahoo daily run.
+- `data-provider test twelve-data` / `data-provider test alpha-vantage`: authenticate with a
+  single SPY daily request and validate schema plus latest completed session. Keys are read from
+  `TWELVE_DATA_API_KEY` and `ALPHA_VANTAGE_API_KEY` and are never written to run evidence.
+
+Daily data certification does not download a second copy merely to prove Yahoo data. It validates
+the selected primary (or primary-failure fallback) with exact calendar coverage, freshness,
+OHLCV, timestamp, corporate-action and PIT checks. Optional comparison diagnostics may route
+through Twelve Data, Alpha Vantage, Stooq or CBOE, but their absence cannot override valid
+single-source evidence. A fallback cache is usable only when it includes the required latest
+session and passes the same internal certification.
 
 Decision Trace uses `NOT_CAPTURED` when a real intermediate (for example winsorized values or a pre-risk target) was not persisted. It never copies a normalized value into a raw field or a post-risk target into a pre-risk field.
 

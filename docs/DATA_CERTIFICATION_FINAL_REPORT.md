@@ -94,7 +94,7 @@ Every refresh persists stable JSON artifacts under its immutable data snapshot:
 
 Every daily run persists stage manifests plus `run_certificate.json`, which contains the final per-symbol certification matrix, data/config hashes, blockers, and the separate portfolio state. No secrets or API keys are included.
 
-## 9. Automated validation
+## 9. Automated validation (historical pre-Final-Closure checkpoint)
 
 - Ruff: PASS (`src`, `tests`, `migrations`, `scripts`)
 - mypy strict: PASS, 340 source files
@@ -104,7 +104,7 @@ Every daily run persists stage manifests plus `run_certificate.json`, which cont
 
 The untracked `source_audit_export/` is preserved user audit evidence and is intentionally outside the production-tree Ruff scope.
 
-## 10. Real network validation
+## 10. Real network validation (historical pre-Final-Closure checkpoint)
 
 Two isolated cold-start TEST-profile runs reproduced the same result. The final run is:
 
@@ -126,3 +126,90 @@ The run used a new isolated SQLite database and did not create or change a produ
 3. Historical corporate-action announcement/revision completeness and historical universe membership are not certified by the free live sources; historical PIT backtests remain fail-closed where those capabilities are required.
 
 The code no longer has an internal permanent `NOT_CERTIFIED` placeholder: it performs real evidence collection, explains every symbol, establishes a real cutoff, and fails closed on the external evidence gap. No Gate, alpha threshold, risk threshold, or strategy parameter was relaxed.
+
+## 12. Post-Final-Closure cross-provider finalization
+
+### Baseline and scope
+
+- Final Closure baseline commit: `6e9bce305de417fd18c26614e7c6b008497682d3`.
+- Baseline regression: **516 passed** before this incremental change.
+- The existing corporate-action, canonical raw/PIT separation, exchange-calendar coverage,
+  data hash, immutable evidence, benchmark cutoff and fail-closed contracts were retained.
+- Alpha, factor, probability, portfolio, risk and strategy thresholds were not changed.
+
+### Independent provider architecture
+
+- Primary history remains Yahoo Finance raw OHLCV.
+- Stock/ETF independent priority is Twelve Data official API, Alpha Vantage official API, then
+  Stooq best-effort. Routing is per symbol and records every attempted provider and failure
+  category.
+- VIX remains Yahoo primary versus CBOE Global Indices official history.
+- Stooq HTML/JavaScript challenge detection remains blocking/unavailable evidence. No browser,
+  anti-bot bypass or scraping workaround was added.
+- Provider state distinguishes `AUTH_NOT_CONFIGURED`, `AUTH_FAILED`, `RATE_LIMITED`, `TIMEOUT`,
+  `PROVIDER_UNAVAILABLE`, `INVALID_SYMBOL`, `EMPTY_RESPONSE`, `MALFORMED_RESPONSE`,
+  `SCHEMA_MISMATCH`, `API_INFORMATION`, and `LATEST_SESSION_MISSING`.
+
+### Reconciliation and cache policy
+
+- Secondary history uses a configured recent reconciliation window: minimum 20 and preferred
+  60 XNYS sessions. It does not need to duplicate Yahoo's complete primary-history window.
+- Comparison remains calendar-aligned normalized return-path evidence. It reports overlap,
+  latest-session alignment, maximum/median return difference, divergence count/ratio and
+  normalized latest-close-path difference.
+- Latest-session equality is mandatory. A prior successful cache entry is reusable only when
+  its recorded latest session exactly equals the current expected session; stale cache cannot
+  certify a new run.
+- Cache metadata includes provider, symbol, retrieval/as-of times, latest session, row count,
+  stable content hash and schema version. API keys are excluded from URLs in diagnostics,
+  artifacts, hashes and cache documents.
+- Multiple independent providers can certify different symbols in one run; the first successful
+  provider per symbol is used to avoid unnecessary calls and free-tier quota exhaustion.
+
+### Evidence and terminal
+
+- `provider_reconciliation_report.json` records the secondary candidates attempted, selected
+  provider, primary/secondary latest sessions, overlap statistics, failure category and cache
+  provenance for each ticker.
+- Data certification reports required, optional and total certified counts independently. An
+  optional rejection cannot enter cross-sectional ranking; a required rejection remains
+  `FAIL_BLOCKING`.
+- `data-provider status` performs preflight only. `data-provider test twelve-data` and
+  `data-provider test alpha-vantage` make a single SPY authentication/schema/latest-session
+  request and never run strategy or portfolio code.
+
+### Automated validation
+
+- Final pytest: **537 passed**, 0 failed. The Windows sandbox run used its actual sandbox ACL
+  identity for PostgreSQL backup tests and `NUMBA_DISABLE_JIT=1` for the optional VectorBT
+  regression; neither changes production quant logic.
+- Quant critical marker suite: **31 passed**, 505 deselected, 0 failed.
+- Ruff: PASS (`src`, `tests`, `migrations`, `scripts`).
+- mypy strict: PASS, 348 source files.
+- pip check: PASS.
+- secret scan: PASS.
+- New coverage includes Twelve Data ETF/success/auth/rate-limit/malformed/latest-session cases,
+  Alpha Vantage compact/success/Note/Information/rate-limit/latest-session cases, per-symbol
+  Twelve-to-Alpha fallback, multi-secondary symbol certification, Stooq best-effort, all-source
+  failure, bounded timeout, cache freshness, response-symbol integrity, secret redaction,
+  provider CLI and strict latest price-path divergence.
+
+### Real-network validation and current blocker
+
+- Neither `TWELVE_DATA_API_KEY` nor `ALPHA_VANTAGE_API_KEY` is configured in the current runtime.
+- A cold-start attempt produced run `daily-8c6d0cdcda8048348b2387375888cc57` and persisted its
+  fail-closed certificate under the isolated TEST profile. The managed execution environment
+  also blocked outbound sockets (`curl error 7` / Windows socket access denied), so this run
+  could not revalidate Yahoo or CBOE and is classified `INVALID_NON_ACTIONABLE`.
+- Required certified: 0/15; optional certified: 0/3 in that environment-blocked attempt.
+  DATA was `FAIL_BLOCKING`; PIT/Feature/Factor/Signal/Probability were `NOT_RUN`; Portfolio was
+  independently `NOT_INITIALIZED`; Risk/Decision/Execution remained blocked/empty.
+- The earlier unrestricted real run remains the latest evidence that Yahoo 18/18, corporate
+  actions and CBOE VIX can succeed. It does not substitute for a new independent stock/ETF API
+  certificate.
+
+Current readiness is therefore **WAITING_FOR_USER_SUPPLIED_INDEPENDENT_DATA_API_KEY** and the
+managed validation environment is additionally **BLOCKED_BY_ENVIRONMENT** for live sockets.
+This is not a code-path failure: deterministic producer/adapter/fallback/certificate tests pass,
+while the daily gate correctly refuses trading without current independent evidence. Portfolio
+initialization remains a separate user action and was not performed.
