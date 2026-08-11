@@ -19,6 +19,7 @@ pytest-managed temporary directories and is discarded afterwards.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import asdict
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -38,6 +39,10 @@ from personal_alpha_terminal.application.universe import MINIMUM_US_RESEARCH_UNI
 from personal_alpha_terminal.core.config import Settings
 from personal_alpha_terminal.core.effective_config import EffectiveRuntimeConfig
 from personal_alpha_terminal.data.database import build_engine, build_session_factory
+from personal_alpha_terminal.data.us_market.broad_universe import (
+    parse_symbol_directories,
+    write_directory_snapshot,
+)
 from personal_alpha_terminal.data.us_market.pit_total_return import (
     PITRawBar,
     PointInTimeTotalReturnBuilder,
@@ -95,12 +100,62 @@ def _bar_dates(end: date, periods: int) -> list[date]:
     return [item.date() for item in pd.bdate_range(end=end, periods=periods)]
 
 
+def _write_test_b_current_directory(
+    config: EffectiveRuntimeConfig,
+    *,
+    decision_time: datetime,
+) -> None:
+    """Seed explicit current-directory provenance for the isolated TEST fixture."""
+
+    source_date = decision_time.date().strftime("%m%d%Y")
+    nasdaq_rows = [
+        "Symbol|Security Name|Market Category|Test Issue|Financial Status|"
+        "Round Lot Size|ETF|NextShares"
+    ]
+    other_rows = [
+        "ACT Symbol|Security Name|Exchange|CQS Symbol|ETF|Round Lot Size|"
+        "Test Issue|NASDAQ Symbol"
+    ]
+    for asset in MINIMUM_US_RESEARCH_UNIVERSE:
+        if asset.asset_type != "stock":
+            continue
+        if asset.exchange == "XNAS":
+            nasdaq_rows.append(
+                f"{asset.ticker}|{asset.name} Common Stock|Q|N|N|100|N|N"
+            )
+        elif asset.exchange in {"XNYS", "XASE"}:
+            exchange = "N" if asset.exchange == "XNYS" else "A"
+            other_rows.append(
+                f"{asset.ticker}|{asset.name} Common Stock|{exchange}|"
+                f"{asset.ticker}|N|100|N|{asset.ticker}"
+            )
+    nasdaq_rows.append(f"File Creation Time: {source_date}1200|||||||")
+    other_rows.append(f"File Creation Time: {source_date}1200|||||||")
+    snapshot = parse_symbol_directories(
+        "\n".join(nasdaq_rows),
+        "\n".join(other_rows),
+        retrieved_at=decision_time - timedelta(hours=1),
+    )
+    write_directory_snapshot(snapshot, config.cache_dir / "us-current-directory")
+
+
 def _deterministic_close(session_index: int, symbol_index: int) -> float:
     """Smooth, strictly positive, upward-drifting price path."""
 
     return 100.0 + 5.0 * symbol_index + session_index * (
         0.02 + 0.015 * symbol_index
     ) + 2.0 * float(np.sin(session_index / (10.0 + symbol_index)))
+
+
+def _risk_aligned_close(session_index: int, symbol_index: int) -> float:
+    """Cross-sectionally distinct paths with beta below the unchanged live cap."""
+
+    base = 100.0 + 5.0 * symbol_index
+    loading = 1.0 if symbol_index == 0 else 0.74 + 0.01 * (symbol_index % 5)
+    market_cycle = loading * 0.02 * float(np.sin(session_index / 12.0))
+    idiosyncratic = 0.002 * float(np.sin(session_index / (7.0 + symbol_index % 4)))
+    drift = 0.0002 * (1.0 + 0.02 * symbol_index) * session_index
+    return base * (1.0 + drift + market_cycle + idiosyncratic)
 
 
 def _seed_securities(session: Session) -> dict[str, Stock]:
@@ -136,7 +191,9 @@ def _seed_securities(session: Session) -> dict[str, Stock]:
         "AMZN": "Communication",
         "GOOGL": "Communication",
         "META": "Communication",
-        "JPM": "Diversified I",
+        # Keep the equity-only cross-section independently neutralizable now that
+        # GLD is correctly excluded from stock factor ranking.
+        "JPM": "Diversified II",
         "JNJ": "Diversified II",
         "XOM": "Diversified II",
     }
@@ -172,13 +229,14 @@ def _seed_prices(
     end_date: date,
     periods: int,
     decision_time: datetime,
+    close_function: Callable[[int, int], float] = _deterministic_close,
 ) -> dict[str, list[date]]:
     dates = _bar_dates(end_date, periods)
     for symbol_index, asset in enumerate(MINIMUM_US_RESEARCH_UNIVERSE):
         stock = stocks[asset.ticker]
         is_index = asset.asset_type == "index"
         for session_index, trade_date in enumerate(dates):
-            close = _deterministic_close(session_index, symbol_index)
+            close = close_function(session_index, symbol_index)
             available = datetime.combine(
                 trade_date, datetime.min.time(), tzinfo=UTC
             ) + timedelta(hours=20, minutes=30)
@@ -214,6 +272,7 @@ def _seed_pit_series(
     dates: list[date],
     decision_time: datetime,
     symbols: tuple[str, ...],
+    close_function: Callable[[int, int], float] = _deterministic_close,
 ) -> None:
     repository = USPointInTimeRepository(session)
     builder = PointInTimeTotalReturnBuilder()
@@ -224,7 +283,7 @@ def _seed_pit_series(
             PITRawBar(
                 permanent_security_id=asset.canonical_code,
                 trade_date=trade_date,
-                close=_deterministic_close(index, symbol_index),
+                close=close_function(index, symbol_index),
                 source_id=f"fixture:{asset.canonical_code}:{trade_date.isoformat()}",
                 available_at=datetime.combine(
                     trade_date, datetime.min.time(), tzinfo=UTC
@@ -627,10 +686,14 @@ def _seed_test_b_state(
     *,
     produce_artifacts: bool,
 ) -> tuple[int, EffectiveRuntimeConfig]:
-    config = EffectiveRuntimeConfig(report_dir=tmp_path / "reports")
+    config = EffectiveRuntimeConfig(
+        cache_dir=tmp_path / "cache",
+        report_dir=tmp_path / "reports",
+    )
     data_version = "fixture-data-version-b"
     decision_time = TEST_B_DECISION_TIME
     analysis_date = decision_time.date()
+    _write_test_b_current_directory(config, decision_time=decision_time)
 
     stocks = _seed_securities(session)
     _seed_prices(
@@ -639,6 +702,7 @@ def _seed_test_b_state(
         end_date=analysis_date,
         periods=TEST_B_BAR_COUNT,
         decision_time=decision_time,
+        close_function=_risk_aligned_close,
     )
     dates = _bar_dates(analysis_date, TEST_B_BAR_COUNT)
     research_symbols = tuple(
@@ -652,6 +716,7 @@ def _seed_test_b_state(
         dates=dates,
         decision_time=decision_time,
         symbols=research_symbols,
+        close_function=_risk_aligned_close,
     )
     snapshot = _seed_universe_with_memberships(
         session,
