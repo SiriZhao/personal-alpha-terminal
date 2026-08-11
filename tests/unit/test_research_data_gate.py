@@ -71,7 +71,6 @@ def test_portfolio_decision_requires_every_production_control() -> None:
         ("universe_snapshot_id", None, "universe snapshot"),
         ("corporate_actions_complete", False, "corporate-action"),
         ("trading_calendar_complete", False, "calendar"),
-        ("dual_source_verified", False, "second-source"),
         ("allow_portfolio_decision", False, "portfolio decisions"),
     ),
 )
@@ -81,6 +80,18 @@ def test_decision_gate_fails_closed(field: str, value: object, message: str) -> 
     assert decision.status is GateStatus.BLOCKED
     assert not decision.may_rank_securities
     assert any(message in item for item in decision.blockers)
+
+
+def test_missing_second_source_is_diagnostic_not_blocking() -> None:
+    evidence = replace(_evidence(), dual_source_verified=False)
+    decision = ResearchDataGate().evaluate(
+        _request(),
+        evidence,
+        evaluated_at=datetime(2026, 8, 1, 1, tzinfo=UTC),
+    )
+    assert decision.status is GateStatus.APPROVED
+    assert decision.may_generate_positions
+    assert not any("second-source" in item for item in decision.blockers)
 
 
 def test_display_can_be_degraded_but_never_authorizes_positions() -> None:

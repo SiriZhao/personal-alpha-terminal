@@ -47,10 +47,34 @@ def capture_daily_quant_result(result: DailyQuantResult, *, width: int = 120) ->
     return stream.getvalue()
 
 
+def _layered_status(result: DailyQuantResult) -> str:
+    data_status = next(
+        (stage.status for stage in result.stages if stage.name == "DATA"),
+        None,
+    )
+    data_ready = data_status in {StageStatus.PASS, StageStatus.PASS_DEGRADED}
+    quant_ready = result.diagnostic_analysis_complete
+    portfolio_ready = result.portfolio.status != "NOT_INITIALIZED"
+    risk_ready = result.risk.status == "PASS"
+    trading_actionable = result.actionable
+    return (
+        f"DATA {'READY' if data_ready else 'BLOCKED'}   "
+        f"QUANT ANALYSIS {'READY' if quant_ready else 'NOT READY'}   "
+        f"PORTFOLIO {'READY' if portfolio_ready else 'REQUIRED'}   "
+        f"RISK {'READY' if risk_ready else 'BLOCKED'}   "
+        f"TRADING {'ACTIONABLE' if trading_actionable else 'BLOCKED'}   "
+        f"LLM {result.llm_status}"
+    )
+
+
 def _header(result: DailyQuantResult) -> str:
     classification = {
-        "CERTIFIED_ACTIONABLE": "CERTIFIED ACTIONABLE RUN",
+        "CERTIFIED_ACTIONABLE": "ACTIONABLE TRADING PLAN · MANUAL EXECUTION ONLY",
         "CERTIFIED_NO_ACTION": "CERTIFIED NO-ACTION RUN",
+        "VALID_ANALYSIS_NON_ACTIONABLE": (
+            "VALID QUANT ANALYSIS / NON-ACTIONABLE\n"
+            "FORMAL TRADING DECISION NOT AVAILABLE"
+        ),
         "INVALID_NON_ACTIONABLE": "INVALID / NON-ACTIONABLE QUANT RUN\nDO NOT USE FOR TRADING",
     }[result.run_classification]
     raw_latest = max(
@@ -72,9 +96,7 @@ def _header(result: DailyQuantResult) -> str:
         f"Trade {result.trade_date}\n"
         f"Data through {data_through}   "
         f"Duration {result.duration_seconds:.2f}s\n"
-        f"QUANT {'READY' if result.actionable else 'NOT READY'}   "
-        f"PORTFOLIO {result.portfolio.status}   RISK {result.risk.status}   "
-        f"DECISION {result.decision_readiness.value}   LLM {result.llm_status}"
+        f"{_layered_status(result)}"
     )
 
 
@@ -99,20 +121,18 @@ def _data_certification(result: DailyQuantResult, console: Console) -> None:
     evidence = stage.metadata if stage is not None else {}
     body = (
         f"Status {stage.status.value if stage else 'NOT_RUN'}   "
-        f"Provider {evidence.get('provider', 'UNAVAILABLE')}   "
-        f"Fallback {evidence.get('fallback_provider', 'UNAVAILABLE')}\n"
+        f"Provider {evidence.get('provider', 'UNAVAILABLE')}\n"
         f"Snapshot {evidence.get('snapshot_id', 'UNAVAILABLE')}   "
         f"Requested {_item_count(evidence.get('requested_symbols'))}   "
         f"Received {_item_count(evidence.get('received_symbols'))}   "
-        f"Primary valid {_item_count(evidence.get('primary_valid_symbols'))}   "
-        f"Secondary checked {_item_count(evidence.get('secondary_checked_symbols'))}\n"
-        f"Certified {_item_count(evidence.get('certified_symbols'))}   "
+        f"Valid {_item_count(evidence.get('certified_symbols'))}   "
         f"Rejected {_item_count(evidence.get('rejected_symbols'))}   "
         f"Missing {_item_count(evidence.get('missing_symbols'))}   "
         f"Stale {_item_count(evidence.get('stale_symbols'))}\n"
         f"Bars expected {evidence.get('expected_bars', 0)}   "
         f"matched {evidence.get('matched_bars', 0)}   "
         f"unexpected {evidence.get('unexpected_bars', 0)}   "
+        f"quarantined {evidence.get('quarantined_bars', 0)}   "
         f"missing {evidence.get('missing_bars', 0)}   "
         f"received {evidence.get('received_bars', 0)}   "
         f"valid {evidence.get('valid_bars', 0)}   "
@@ -120,12 +140,27 @@ def _data_certification(result: DailyQuantResult, console: Console) -> None:
         f"Latest {evidence.get('latest_timestamp', 'UNAVAILABLE')}   "
         f"PIT cutoff {result.data_cutoff.isoformat() if result.data_cutoff else 'UNAVAILABLE'}\n"
         f"Corporate actions {evidence.get('corporate_action_status', 'NOT_CERTIFIED')}   "
-        f"Cross-provider {evidence.get('provider_reconciliation', 'NOT_CERTIFIED')}   "
+        f"PIT integrity {evidence.get('pit_integrity_status', 'NOT_CERTIFIED')}   "
+        f"Freshness {evidence.get('freshness_status', 'NOT_CERTIFIED')}   "
         f"Duplicates {evidence.get('duplicate_rows', 0)}   "
         f"Invalid OHLC {evidence.get('invalid_ohlc', 0)}   "
         f"Future rows {evidence.get('future_rows', 0)}   "
         f"Timezone violations {evidence.get('timezone_violations', 0)}"
     )
+    fallback_usage = evidence.get("fallback_usage", ())
+    if isinstance(fallback_usage, (list, tuple)) and fallback_usage:
+        fallback_table = Table(title="FALLBACK USED")
+        fallback_table.add_column("Ticker")
+        fallback_table.add_column("Provider")
+        fallback_table.add_column("Reason", overflow="fold")
+        for item in fallback_usage:
+            if isinstance(item, dict):
+                fallback_table.add_row(
+                    str(item.get("symbol", "--")),
+                    str(item.get("provider", "--")),
+                    str(item.get("reason", "primary request failed")),
+                )
+        console.print(fallback_table)
     console.print(
         Panel(
             body,
@@ -146,13 +181,13 @@ def _data_certification(result: DailyQuantResult, console: Console) -> None:
         if isinstance(item, dict) and item.get("final") != "CERTIFIED"
     ] if isinstance(matrix, (list, tuple)) else []
     if rejected:
-        table = Table(title="FAILED / REJECTED SYMBOLS")
+        table = Table(title="REJECTED DATA")
         table.add_column("Ticker")
         table.add_column("Required")
         table.add_column("Gate")
         table.add_column("Reason", overflow="fold")
         for item in rejected:
-            gate = "CROSS_PROVIDER"
+            gate = "DATA"
             if item.get("primary") != "PASS":
                 gate = "PRIMARY/CALENDAR"
             elif item.get("corporate_action") not in {"PASS", "PASS_WITH_WARNING"}:
@@ -270,11 +305,17 @@ def _market(result: DailyQuantResult, console: Console) -> None:
 
 def _portfolio(result: DailyQuantResult, console: Console) -> None:
     summary = result.portfolio
+    onboarding = (
+        "\nQuant diagnostics remain available. Formal trading decisions require:\n"
+        "  portfolio-init\n  or portfolio-import"
+        if summary.status == "NOT_INITIALIZED"
+        else ""
+    )
     console.print(
         Panel(
             f"Status {summary.status}   NAV {_money(summary.nav)}   Cash {_money(summary.cash)}   "
             f"Invested {_percent(summary.invested_weight)}   "
-            f"Cash weight {_percent(summary.cash_weight)}",
+            f"Cash weight {_percent(summary.cash_weight)}{onboarding}",
             title="REAL PORTFOLIO · MANUAL LEDGER",
         )
     )
@@ -543,21 +584,40 @@ def _execution(result: DailyQuantResult, console: Console) -> None:
 
 
 def _benchmark(result: DailyQuantResult, console: Console) -> None:
-    table = Table(title="BENCHMARK · SAME PIT DATA CONVENTION")
-    for column in ("Benchmark", "Status", "N", "Period Return", "Ann Vol", "Note"):
+    table = Table(title="BENCHMARK · SAME PIT DATA CONVENTION AS STRATEGY")
+    for column in (
+        "Benchmark",
+        "Status",
+        "Start",
+        "End",
+        "N",
+        "Period Return",
+        "Ann Vol",
+        "Max DD",
+        "Note",
+    ):
         table.add_column(column, overflow="fold")
     if not result.benchmarks:
-        table.add_row("--", "UNAVAILABLE", "0", "--", "--", "No certified comparable sample")
+        table.add_row(
+            "--", "UNAVAILABLE", "--", "--", "0", "--", "--", "--",
+            "No certified comparable sample",
+        )
     for item in result.benchmarks:
         table.add_row(
             item.name,
             item.status,
+            str(item.start_date or "--"),
+            str(item.end_date or "--"),
             str(item.observation_count),
             _signed_percent(item.period_return),
             _percent(item.annualized_volatility),
+            _signed_percent(item.max_drawdown),
             item.note,
         )
     console.print(table)
+    cost = result.provenance.get("transaction_cost_assumption")
+    if isinstance(cost, str) and cost:
+        console.print(f"Cost assumption: {cost}")
 
 
 def _run_certificate(result: DailyQuantResult, console: Console) -> None:
@@ -584,15 +644,21 @@ def _summary(result: DailyQuantResult, console: Console) -> None:
         "UNKNOWN",
     )
     if not result.actionable:
+        valid_analysis = result.diagnostic_analysis_complete
+        conclusion = (
+            "VALID QUANT ANALYSIS - FORMAL TRADING DECISION UNAVAILABLE"
+            if valid_analysis
+            else "INVALID / NON-ACTIONABLE QUANT RUN - DO NOT USE FOR TRADING"
+        )
         console.print(
             Panel(
                 f"Run {result.run_classification}   Pipeline {result.decision_readiness.value}   "
                 f"Data {data_status}   Portfolio {result.portfolio.status}   "
                 f"Risk {result.risk.status}\n"
                 f"Actions 0   Blockers: {blockers}\n\n"
-                "INVALID / NON-ACTIONABLE QUANT RUN - DO NOT USE FOR TRADING",
+                + conclusion,
                 title="TODAY SUMMARY",
-                border_style="red",
+                border_style="yellow" if valid_analysis else "red",
             )
         )
         return

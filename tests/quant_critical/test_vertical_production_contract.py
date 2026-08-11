@@ -719,8 +719,9 @@ def test_probability_without_calibration_never_becomes_probability(tmp_path: Pat
         assert all(item.evidence_coverage > 0 for item in alpha.signals)
         assert all(not item.confidence_calibrated for item in alpha.signals)
         assert all(item.confidence == 0 for item in alpha.signals)
-        assert output.status is ProductionPipelineStatus.BLOCKED
-        assert "no valid PRODUCTION_APPROVED alpha signals" in output.blockers
+        assert output.status is ProductionPipelineStatus.READY
+        assert output.target is not None
+        assert output.blockers == ()
     finally:
         session.close()
         engine.dispose()

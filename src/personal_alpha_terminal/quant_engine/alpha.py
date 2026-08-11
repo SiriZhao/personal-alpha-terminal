@@ -73,11 +73,18 @@ class AlphaSignal:
             raise ValueError("alpha identity and lineage are required")
 
     def production_eligible(self, decision_time: datetime) -> bool:
+        '''Return whether deterministic alpha may enter the production chain.
+
+        Probability calibration is deliberately not a prerequisite here. The
+        immutable model approval owns OOS/PIT/cost validation; an optional
+        probability artifact may annotate confidence, but cannot enable or
+        disable the deterministic expected-return signal.
+        '''
+
         return (
             self.validation_status is AlphaValidationStatus.PRODUCTION_APPROVED
             and self.data_quality is AlphaDataQuality.VALID
             and self.pit_valid
-            and self.confidence_calibrated
             and self.as_of <= decision_time <= self.valid_until
         )
 
@@ -134,10 +141,10 @@ class UnifiedAlphaEngine:
             grouped.setdefault((signal.symbol, signal.horizon), []).append(signal)
         output: dict[tuple[str, int], float] = {}
         for key, items in grouped.items():
-            denominator = sum(item.confidence for item in items)
+            denominator = sum(item.evidence_coverage for item in items)
             if denominator <= 0:
                 continue
             output[key] = sum(
-                item.expected_excess_return * item.confidence for item in items
+                item.expected_excess_return * item.evidence_coverage for item in items
             ) / denominator
         return output

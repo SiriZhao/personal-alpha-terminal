@@ -1,5 +1,5 @@
 from dataclasses import replace
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 from personal_alpha_terminal.core.data_timestamps import daily_bar_timestamps
@@ -224,3 +224,57 @@ def test_quality_checker_blocks_unexplained_extreme_adjusted_return() -> None:
 
     assert result.has_errors
     assert "extreme_adjusted_return" in {issue.code for issue in result.issues}
+
+
+def test_quality_checker_blocks_frozen_ohlc_series() -> None:
+    start = date(2026, 8, 3)
+    sessions = [
+        start + timedelta(days=offset)
+        for offset in range(20)
+        if (start + timedelta(days=offset)).weekday() < 5
+    ][:10]
+    result = DataQualityChecker().validate(
+        [bar(item) for item in sessions],
+        expected_symbol="000001",
+        expected_market="A",
+        start_date=sessions[0],
+        end_date=sessions[-1],
+    )
+    assert result.has_errors
+    assert "frozen_ohlc_series" in {issue.code for issue in result.issues}
+
+
+def test_quality_checker_blocks_persistent_zero_volume() -> None:
+    start = date(2026, 8, 3)
+    sessions = [
+        start + timedelta(days=offset)
+        for offset in range(10)
+        if (start + timedelta(days=offset)).weekday() < 5
+    ][:5]
+    result = DataQualityChecker().validate(
+        [bar(item, close=str(10 + index / 100), volume=0) for index, item in enumerate(sessions)],
+        expected_symbol="000001",
+        expected_market="A",
+        start_date=sessions[0],
+        end_date=sessions[-1],
+    )
+    assert result.has_errors
+    assert "zero_volume_series" in {issue.code for issue in result.issues}
+
+
+def test_quality_checker_allows_zero_volume_when_asset_has_no_volume_semantics() -> None:
+    start = date(2026, 8, 3)
+    sessions = [
+        start + timedelta(days=offset)
+        for offset in range(10)
+        if (start + timedelta(days=offset)).weekday() < 5
+    ][:5]
+    result = DataQualityChecker().validate(
+        [bar(item, close=str(10 + index / 100), volume=0) for index, item in enumerate(sessions)],
+        expected_symbol="000001",
+        expected_market="A",
+        start_date=sessions[0],
+        end_date=sessions[-1],
+        require_volume=False,
+    )
+    assert "zero_volume_series" not in {issue.code for issue in result.issues}

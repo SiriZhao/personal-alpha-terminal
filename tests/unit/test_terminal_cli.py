@@ -109,3 +109,18 @@ def test_explain_reads_only_persisted_decision_trace(tmp_path: Path, monkeypatch
     )
     monkeypatch.setattr(terminal_cli, "load_config", lambda _path: config)
     assert terminal_cli._explain(tmp_path / "config.yaml", "msft") == 0
+
+
+def test_provider_status_is_preflight_only_and_redacts_credentials(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(terminal_cli.default_config_text(), encoding="utf-8")
+    monkeypatch.delenv("TWELVE_DATA_API_KEY", raising=False)
+    monkeypatch.delenv("ALPHA_VANTAGE_API_KEY", raising=False)
+    result = terminal_cli.main(
+        ["--config", str(config_path), "data-provider", "status"]
+    )
+    output = capsys.readouterr().out
+    assert result == 0
+    assert "daily readiness is unaffected" in output

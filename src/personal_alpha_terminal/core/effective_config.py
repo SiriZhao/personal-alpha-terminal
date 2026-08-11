@@ -37,7 +37,15 @@ class EffectiveRuntimeConfig:
     report_dir: Path = Path("reports")
     primary_provider: str = "yahoo"
     fallback_provider: str = "stooq"
-    provider_priority: tuple[str, ...] = ("yahoo", "stooq")
+    provider_priority: tuple[str, ...] = (
+        "yahoo",
+        "stooq",
+    )
+    independent_provider_priority: tuple[str, ...] = (
+        "twelve_data",
+        "alpha_vantage",
+        "stooq",
+    )
     timeout_seconds: int = 20
     max_retries: int = 2
     retry_backoff_seconds: float = 0.5
@@ -45,6 +53,8 @@ class EffectiveRuntimeConfig:
     reconciliation_warning_tolerance: float = 0.01
     reconciliation_blocking_tolerance: float = 0.05
     reconciliation_maximum_blocking_ratio: float = 0.01
+    reconciliation_minimum_overlap_sessions: int = 20
+    reconciliation_preferred_overlap_sessions: int = 60
     nasdaq_23h_enabled: bool = False
     nasdaq_23h_effective_date: date | None = None
     night_execution_enabled: bool = False
@@ -65,10 +75,24 @@ class EffectiveRuntimeConfig:
             raise ValueError("the production terminal supports market=US only")
         if not self.provider_priority:
             raise ValueError("at least one provider must be configured")
+        allowed_independent_providers = {"twelve_data", "alpha_vantage", "stooq"}
+        unsupported = set(self.independent_provider_priority) - allowed_independent_providers
+        if unsupported:
+            names = ", ".join(sorted(unsupported))
+            raise ValueError(f"unsupported independent provider(s): {names}")
+        if len(set(self.independent_provider_priority)) != len(
+            self.independent_provider_priority
+        ):
+            raise ValueError("independent provider priority contains duplicates")
         if self.night_execution_enabled:
             raise ValueError("night execution is disabled for manual execution")
         if not 0.5 <= self.reconciliation_minimum_coverage <= 1:
             raise ValueError("reconciliation minimum coverage is invalid")
+        if (
+            self.reconciliation_preferred_overlap_sessions
+            < self.reconciliation_minimum_overlap_sessions
+        ):
+            raise ValueError("preferred reconciliation overlap must be at least the minimum")
 
     @property
     def strategy_parameter_hash(self) -> str:
@@ -125,6 +149,7 @@ class EffectiveRuntimeConfig:
             "cache_dir": self.cache_dir,
             "report_dir": self.report_dir,
             "provider_priority": self.provider_priority,
+            "independent_provider_priority": self.independent_provider_priority,
             "timeout_seconds": self.timeout_seconds,
             "max_retries": self.max_retries,
             "retry_backoff_seconds": self.retry_backoff_seconds,
@@ -132,6 +157,10 @@ class EffectiveRuntimeConfig:
             "reconciliation_warning_tolerance": self.reconciliation_warning_tolerance,
             "reconciliation_blocking_tolerance": self.reconciliation_blocking_tolerance,
             "reconciliation_maximum_blocking_ratio": self.reconciliation_maximum_blocking_ratio,
+            "reconciliation_minimum_overlap_sessions": self.reconciliation_minimum_overlap_sessions,
+            "reconciliation_preferred_overlap_sessions": (
+                self.reconciliation_preferred_overlap_sessions
+            ),
             "nasdaq_23h_enabled": self.nasdaq_23h_enabled,
             "nasdaq_23h_effective_date": self.nasdaq_23h_effective_date,
             "night_execution_enabled": self.night_execution_enabled,
@@ -167,7 +196,7 @@ def resolve_effective_runtime_config(
         cache_dir=Path(scalar.get("cache_dir", "data/cache")),
         report_dir=Path(scalar.get("report_dir", "reports")),
         primary_provider=scalar.get("primary_provider", "yahoo").lower(),
-        fallback_provider=scalar.get("fallback_provider", "stooq").lower(),
+        fallback_provider=scalar.get("fallback_provider", "twelve_data").lower(),
         provider_priority=tuple(
             dict.fromkeys(
                 item.lower()
@@ -175,9 +204,16 @@ def resolve_effective_runtime_config(
                     "provider_priority",
                     (
                         scalar.get("primary_provider", "yahoo"),
-                        scalar.get("fallback_provider", "stooq"),
+                        scalar.get("fallback_provider", "twelve_data"),
                     ),
                 )
+            )
+        ),
+        independent_provider_priority=tuple(
+            item.lower()
+            for item in lists.get(
+                "independent_provider_priority",
+                ("twelve_data", "alpha_vantage", "stooq"),
             )
         ),
         timeout_seconds=_integer(scalar, "timeout_seconds", settings.market_data_timeout_seconds),
@@ -204,6 +240,16 @@ def resolve_effective_runtime_config(
             scalar,
             "reconciliation_maximum_blocking_ratio",
             settings.market_data_reconciliation_maximum_blocking_ratio,
+        ),
+        reconciliation_minimum_overlap_sessions=_integer(
+            scalar,
+            "reconciliation_minimum_overlap_sessions",
+            settings.market_data_reconciliation_minimum_overlap_sessions,
+        ),
+        reconciliation_preferred_overlap_sessions=_integer(
+            scalar,
+            "reconciliation_preferred_overlap_sessions",
+            settings.market_data_reconciliation_preferred_overlap_sessions,
         ),
         nasdaq_23h_enabled=_boolean(
             scalar, "nasdaq_23h_enabled", settings.nasdaq_23h_enabled
@@ -250,6 +296,9 @@ def resolve_effective_runtime_config(
             "market_data_max_retries": config.max_retries,
             "market_data_retry_backoff_seconds": config.retry_backoff_seconds,
             "market_data_provider_cache_dir": config.cache_dir,
+            "market_data_independent_provider_priority": ",".join(
+                config.independent_provider_priority
+            ),
             "market_data_reconciliation_minimum_coverage": config.reconciliation_minimum_coverage,
             "market_data_reconciliation_warning_return_tolerance": (
                 config.reconciliation_warning_tolerance
@@ -259,6 +308,12 @@ def resolve_effective_runtime_config(
             ),
             "market_data_reconciliation_maximum_blocking_ratio": (
                 config.reconciliation_maximum_blocking_ratio
+            ),
+            "market_data_reconciliation_minimum_overlap_sessions": (
+                config.reconciliation_minimum_overlap_sessions
+            ),
+            "market_data_reconciliation_preferred_overlap_sessions": (
+                config.reconciliation_preferred_overlap_sessions
             ),
             "nasdaq_23h_enabled": config.nasdaq_23h_enabled,
             "nasdaq_23h_effective_date": config.nasdaq_23h_effective_date,
@@ -275,6 +330,11 @@ def effective_config_from_settings(settings: Settings) -> EffectiveRuntimeConfig
     return EffectiveRuntimeConfig(
         cache_dir=settings.market_data_provider_cache_dir,
         report_dir=settings.daily_pipeline_report_path.parent,
+        independent_provider_priority=tuple(
+            item.strip().lower()
+            for item in settings.market_data_independent_provider_priority.split(",")
+            if item.strip()
+        ),
         timeout_seconds=settings.market_data_timeout_seconds,
         max_retries=settings.market_data_max_retries,
         retry_backoff_seconds=settings.market_data_retry_backoff_seconds,
@@ -289,6 +349,12 @@ def effective_config_from_settings(settings: Settings) -> EffectiveRuntimeConfig
         ),
         reconciliation_maximum_blocking_ratio=(
             settings.market_data_reconciliation_maximum_blocking_ratio
+        ),
+        reconciliation_minimum_overlap_sessions=(
+            settings.market_data_reconciliation_minimum_overlap_sessions
+        ),
+        reconciliation_preferred_overlap_sessions=(
+            settings.market_data_reconciliation_preferred_overlap_sessions
         ),
         nasdaq_23h_enabled=settings.nasdaq_23h_enabled,
         nasdaq_23h_effective_date=settings.nasdaq_23h_effective_date,
@@ -384,7 +450,12 @@ def _read_restricted_yaml(
         active_list = None
         in_holdings = key == "holdings"
         if not value:
-            if key in {"symbols", "required_symbols", "provider_priority"}:
+            if key in {
+                "symbols",
+                "required_symbols",
+                "provider_priority",
+                "independent_provider_priority",
+            }:
                 active_list = key
             elif key != "holdings":
                 raise ValueError(f"{path}:{number}: empty value is not supported")
@@ -436,6 +507,10 @@ fallback_provider: stooq
 provider_priority:
   - yahoo
   - stooq
+independent_provider_priority:
+  - twelve_data
+  - alpha_vantage
+  - stooq
 timeout_seconds: 20
 max_retries: 2
 retry_backoff_seconds: 0.5
@@ -443,6 +518,8 @@ reconciliation_minimum_coverage: 0.95
 reconciliation_warning_tolerance: 0.01
 maximum_provider_difference: 0.05
 reconciliation_maximum_blocking_ratio: 0.01
+reconciliation_minimum_overlap_sessions: 20
+reconciliation_preferred_overlap_sessions: 60
 nasdaq_23h_enabled: false
 night_execution_enabled: false
 default_execution_session: REGULAR

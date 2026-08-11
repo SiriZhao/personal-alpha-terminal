@@ -137,6 +137,13 @@ class Settings(BaseSettings):
     market_data_retry_backoff_seconds: float = Field(default=1.0, ge=0, le=60)
     market_data_timeout_seconds: int = Field(default=20, ge=1, le=120)
     market_data_provider_cache_dir: Path = Path("var/cache/providers")
+    market_data_independent_provider_priority: str = "twelve_data,alpha_vantage,stooq"
+    twelve_data_api_key: str | None = Field(
+        default=None, validation_alias="TWELVE_DATA_API_KEY", repr=False
+    )
+    alpha_vantage_api_key: str | None = Field(
+        default=None, validation_alias="ALPHA_VANTAGE_API_KEY", repr=False
+    )
     # Engineering safety defaults, not optimized strategy parameters.  Reconciliation
     # compares normalized daily returns because free providers do not share one price-
     # adjustment convention.
@@ -151,6 +158,12 @@ class Settings(BaseSettings):
     )
     market_data_reconciliation_maximum_blocking_ratio: float = Field(
         default=0.01, ge=0.0, le=0.25
+    )
+    market_data_reconciliation_minimum_overlap_sessions: int = Field(
+        default=20, ge=5, le=500
+    )
+    market_data_reconciliation_preferred_overlap_sessions: int = Field(
+        default=60, ge=5, le=500
     )
     nasdaq_23h_enabled: bool = Field(
         default=False,

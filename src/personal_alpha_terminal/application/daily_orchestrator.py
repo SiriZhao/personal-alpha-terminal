@@ -200,6 +200,16 @@ class DailyQuantOrchestrator:
                             "; ".join((*certification.blockers, *certification.warnings))
                             or readiness.technical_reason
                         ),
+                        dataset_id="market-data:US:raw-ohlcv",
+                        as_of=analysis_date,
+                        cutoff=certification.pit_cutoff,
+                        snapshot_id=certification.snapshot_id or "UNAVAILABLE",
+                        data_version=certification.snapshot_id or "UNAVAILABLE",
+                        provider=certification.provider,
+                        row_count=certification.valid_bars,
+                        quality_status=certification.status.value,
+                        content_hash=certification.data_hash or "UNAVAILABLE",
+                        certification_state=certification.status.value,
                     ),
                 )
                 warnings.extend(certification.warnings)
@@ -297,11 +307,10 @@ class DailyQuantOrchestrator:
         return self._persist_result(result)
 
     def _resolve_portfolio(self, requested: int | None) -> int | None:
+        if requested is None:
+            return None
         with self._factory() as session:
-            if requested is not None:
-                return requested if session.get(Portfolio, requested) is not None else None
-            ids = tuple(session.scalars(select(Portfolio.id).order_by(Portfolio.id).limit(2)))
-        return ids[0] if len(ids) == 1 else None
+            return requested if session.get(Portfolio, requested) is not None else None
 
     def _portfolio_preflight_issue(
         self,
@@ -317,7 +326,10 @@ class DailyQuantOrchestrator:
             return "PORTFOLIO NOT INITIALIZED; run portfolio-init or portfolio-import"
         if requested is not None:
             return f"configured portfolio id {requested} does not exist"
-        return "multiple portfolios exist; select portfolio_id explicitly"
+        return (
+            "PORTFOLIO NOT SELECTED; set portfolio_id in config.yaml after verifying "
+            "the manual ledger"
+        )
 
     def _analysis_date(self, timestamp_et: datetime, session: MarketSession) -> date:
         candidate = timestamp_et.date()
@@ -452,6 +464,12 @@ class DailyQuantOrchestrator:
         warnings: tuple[str, ...],
     ) -> DailyQuantResult:
         actionable = workflow.status in {"GENERATED", "NO_DECISION"} and not blockers
+        data_cutoff = self._resolved_data_cutoff(stages, workflow.data_cutoff)
+        data_metadata = stages.get(
+            "DATA", StageResult("DATA", StageStatus.NOT_RUN, 0.0, "", {})
+        ).metadata
+        snapshot_id = str(data_metadata.get("snapshot_id") or "UNAVAILABLE")
+        snapshot_hash = str(data_metadata.get("data_hash") or "UNAVAILABLE")
         build = current_build_metadata()
         factors = tuple(
             FactorRow(
@@ -612,14 +630,7 @@ class DailyQuantOrchestrator:
                 for reason in target.risk_reductions
             )
         execution = self._execution_plan(workflow, decisions, actionable)
-        benchmark = BenchmarkSummary(
-            workflow.benchmark_symbol,
-            "PIT PROXY" if workflow.benchmark_observations else "UNAVAILABLE",
-            workflow.benchmark_observations,
-            workflow.benchmark_period_return,
-            workflow.benchmark_annualized_volatility,
-            "Same PIT return dataset; no unsupported long-horizon annualization is shown.",
-        )
+        benchmarks = self._benchmarks(workflow)
         pit_status = (
             StageStatus.PASS
             if workflow.data_certification == "APPROVED"
@@ -630,10 +641,10 @@ class DailyQuantOrchestrator:
             DataHealthItem(
                 "POINT_IN_TIME_TOTAL_RETURN",
                 analysis_date,
-                workflow.data_cutoff.date() if workflow.data_cutoff else None,
+                data_cutoff.date() if data_cutoff else None,
                 (
-                    (analysis_date - workflow.data_cutoff.date()).days
-                    if workflow.data_cutoff
+                    (analysis_date - data_cutoff.date()).days
+                    if data_cutoff
                     else None
                 ),
                 None,
@@ -641,6 +652,16 @@ class DailyQuantOrchestrator:
                 ",".join(workflow.source_ids) or "UNAVAILABLE",
                 pit_status,
                 f"data_version={workflow.data_hash}",
+                dataset_id="research-data:US:pit-total-return",
+                as_of=analysis_date,
+                cutoff=data_cutoff,
+                snapshot_id=snapshot_id,
+                data_version=workflow.data_hash,
+                provider=str(data_metadata.get("provider") or "UNAVAILABLE"),
+                row_count=len(workflow.factors),
+                quality_status=pit_status.value,
+                content_hash=snapshot_hash,
+                certification_state=pit_status.value,
             ),
             DataHealthItem(
                 "CERTIFIED_US_UNIVERSE",
@@ -656,6 +677,16 @@ class DailyQuantOrchestrator:
                 ",".join(workflow.source_ids) or "UNAVAILABLE",
                 pit_status,
                 f"members={workflow.universe_count}; valid={len(workflow.factors)}",
+                dataset_id="universe:US:certified-live",
+                as_of=analysis_date,
+                cutoff=data_cutoff,
+                snapshot_id=workflow.universe_snapshot_id,
+                data_version=workflow.data_hash,
+                provider=str(data_metadata.get("provider") or "UNAVAILABLE"),
+                member_count=workflow.universe_count,
+                quality_status=pit_status.value,
+                content_hash=snapshot_hash,
+                certification_state=pit_status.value,
             ),
         )
         return DailyQuantResult(
@@ -667,13 +698,16 @@ class DailyQuantOrchestrator:
             trade_date,
             market_session,
             market_structure,
-            workflow.data_cutoff,
+            data_cutoff,
             DecisionReadiness.READY if actionable else DecisionReadiness.NOT_ACTIONABLE,
             "OPTIONAL/OFFLINE" if self._settings.llm_provider == "disabled" else "OPTIONAL",
             self._ordered_stages(stages),
             strategy_data_health,
             workflow.risk_regime,
-            "Regime probability is unavailable; no uncalibrated score changes alpha.",
+            (
+                workflow.risk_regime_detail
+                or "Regime probability is unavailable; no uncalibrated score changes alpha."
+            ),
             factors,
             probability,
             tuple(sorted(factors, key=lambda item: item.rank)[:10]),
@@ -682,13 +716,34 @@ class DailyQuantOrchestrator:
             decisions if actionable else (),
             tuple(rejected),
             execution,
-            (benchmark,),
+            benchmarks,
             blockers,
             warnings,
             {
                 "database_run_id": workflow.run_id,
-                "data_hash": workflow.data_hash,
+                "data_hash": snapshot_hash,
+                "data_snapshot_id": snapshot_id,
+                "research_data_version": workflow.data_hash,
+                "universe_version": workflow.universe_snapshot_id,
                 "model_hash": workflow.model_hash,
+                "strategy_version": workflow.strategy_version,
+                "factor_version": workflow.strategy_version,
+                "signal_version": workflow.strategy_version,
+                "production_approval_artifact_id": (
+                    workflow.production_approval_artifact_id
+                ),
+                "portfolio_validation_artifact_id": (
+                    workflow.portfolio_validation_artifact_id
+                ),
+                "probability_artifact_id": workflow.probability_artifact_id,
+                "portfolio_snapshot_id": workflow.portfolio_snapshot_id,
+                "deterministic_core_model": workflow.strategy_version,
+                "ml_model": "NOT_REQUIRED",
+                "llm_model": (
+                    "OPTIONAL_OFFLINE"
+                    if self._settings.llm_provider == "disabled"
+                    else "OPTIONAL_EXPLANATION_ONLY"
+                ),
                 "build_identifier": build.build_id,
                 "git_commit": build.git_commit,
                 "build_time": build.build_time,
@@ -698,6 +753,22 @@ class DailyQuantOrchestrator:
                 "universe_count": workflow.universe_count,
                 "manual_broker": "Charles Schwab",
                 "automatic_execution": False,
+                "transaction_cost_assumption": (
+                    f"commission {self._effective_config.transaction_cost.commission_bps} bps; "
+                    f"spread {self._effective_config.transaction_cost.spread_bps} bps; "
+                    f"slippage {self._effective_config.transaction_cost.slippage_bps} bps; "
+                    f"impact {self._effective_config.transaction_cost.impact_coefficient_bps} bps; "
+                    "GROSS benchmark returns shown pre-cost (no live strategy track record)"
+                ),
+                "cost_assumptions": {
+                    "commission_bps": self._effective_config.transaction_cost.commission_bps,
+                    "spread_bps": self._effective_config.transaction_cost.spread_bps,
+                    "slippage_bps": self._effective_config.transaction_cost.slippage_bps,
+                    "impact_coefficient_bps": (
+                        self._effective_config.transaction_cost.impact_coefficient_bps
+                    ),
+                    "model_version": self._effective_config.transaction_cost.version,
+                },
                 "identity_hashes": {
                     **(workflow.identity_hashes or {}),
                     "model_approval_hash": workflow.model_approval_hash,
@@ -708,14 +779,41 @@ class DailyQuantOrchestrator:
             tuple(
                 sorted(
                     {
-                        item.model_version
-                        for item in decisions
-                        if item.model_version != "UNAVAILABLE"
+                        workflow.strategy_version,
+                        *(
+                            item.model_version
+                            for item in decisions
+                            if item.model_version != "UNAVAILABLE"
+                        ),
                     }
+                    - {"UNAVAILABLE"}
                 )
             ),
             self._decision_traces(factors, decisions, target_weights, current),
         )
+
+    @staticmethod
+    def _resolved_data_cutoff(
+        stages: dict[str, StageResult], workflow_cutoff: datetime | None
+    ) -> datetime | None:
+        """Prefer the certified market-observation cutoff from DATA evidence.
+
+        PIT return frames use session dates as their index, so their maximum
+        index is midnight UTC and is not the actual market-data cutoff.  The DATA
+        certificate carries the canonical timezone-aware observation cutoff.
+        """
+
+        fallback = StageResult("DATA", StageStatus.NOT_RUN, 0, "", {})
+        value = stages.get("DATA", fallback).metadata.get("pit_cutoff")
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, str):
+            try:
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError:
+                return workflow_cutoff
+            return parsed if parsed.tzinfo is not None else workflow_cutoff
+        return workflow_cutoff
 
     @staticmethod
     def _decision_traces(
@@ -758,6 +856,78 @@ class DailyQuantOrchestrator:
                 "rejection_reason": None if decision else factor.status,
             }
         return traces
+
+    @staticmethod
+    def _benchmarks(workflow: TodayResult) -> tuple[BenchmarkSummary, ...]:
+        rows: list[BenchmarkSummary] = []
+        evidence_by_symbol = {item.symbol: item for item in workflow.benchmark_evidences}
+        primary = evidence_by_symbol.get(workflow.benchmark_symbol)
+        if workflow.benchmark_observations and workflow.benchmark_period_return is not None:
+            rows.append(
+                BenchmarkSummary(
+                    workflow.benchmark_symbol,
+                    "PIT PROXY",
+                    workflow.benchmark_observations,
+                    workflow.benchmark_period_return,
+                    workflow.benchmark_annualized_volatility,
+                    (
+                        "Same PIT return dataset; no unsupported long-horizon "
+                        "annualization is shown."
+                    ),
+                    start_date=primary.start_date if primary else None,
+                    end_date=primary.end_date if primary else None,
+                    max_drawdown=primary.max_drawdown if primary else None,
+                )
+            )
+        else:
+            rows.append(
+                BenchmarkSummary(
+                    workflow.benchmark_symbol,
+                    "UNAVAILABLE",
+                    0,
+                    None,
+                    None,
+                    "No certified comparable sample",
+                )
+            )
+        nasdaq_symbol = next(
+            (
+                item.symbol
+                for item in workflow.benchmark_evidences
+                if item.symbol != workflow.benchmark_symbol
+            ),
+            None,
+        )
+        if nasdaq_symbol is not None:
+            evidence = evidence_by_symbol[nasdaq_symbol]
+            rows.append(
+                BenchmarkSummary(
+                    evidence.symbol,
+                    "PIT PROXY",
+                    evidence.observation_count,
+                    evidence.period_return,
+                    evidence.annualized_volatility,
+                    (
+                        "Same PIT return dataset and cutoff as the strategy; "
+                        "Nasdaq-100 proxy."
+                    ),
+                    start_date=evidence.start_date,
+                    end_date=evidence.end_date,
+                    max_drawdown=evidence.max_drawdown,
+                )
+            )
+        else:
+            rows.append(
+                BenchmarkSummary(
+                    "QQQ",
+                    "NOT_AVAILABLE",
+                    0,
+                    None,
+                    None,
+                    "Nasdaq-100 proxy not present in the certified PIT universe",
+                )
+            )
+        return tuple(rows)
 
     @staticmethod
     def _execution_plan(

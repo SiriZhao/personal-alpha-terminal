@@ -32,6 +32,18 @@ class Portfolio(TimestampMixin, Base):
         default=Decimal("0"),
         nullable=False,
     )
+    source: Mapped[str] = mapped_column(
+        String(64),
+        default="manual",
+        nullable=False,
+        server_default="manual",
+    )
+    schema_version: Mapped[str] = mapped_column(
+        String(32),
+        default="portfolio-v1",
+        nullable=False,
+        server_default="portfolio-v1",
+    )
 
     positions: Mapped[list["PortfolioPosition"]] = relationship(
         back_populates="portfolio",

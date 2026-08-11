@@ -147,7 +147,9 @@ def test_model_approval_does_not_imply_probability_calibration(tmp_path: Path) -
         evidence_coverage=0.9,
     )
     assert signal.evidence_coverage == 0.9
-    assert not signal.production_eligible(now)
+    assert signal.production_eligible(now)
+    assert not signal.confidence_calibrated
+    assert signal.confidence == 0.0
     registry = ValidationArtifactRegistry(tmp_path / "artifacts")
     identity = ProbabilityCalibrationIdentity(
         "USAdaptiveAlphaCoreV1:1.0.0", "data-v1", "strategy-hash"

@@ -7,7 +7,7 @@ import json
 import logging
 import os
 import sys
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -134,18 +134,187 @@ def _change_execution(args: argparse.Namespace) -> int:
     return 0
 
 
+def _parse_position_spec(value: str) -> tuple[str, str, str | None]:
+    """Parse one ``TICKER=SHARES[:AVERAGE_COST]`` entry."""
+
+    if "=" not in value:
+        raise ValueError(f"position must use TICKER=SHARES[:AVG_COST] format: {value!r}")
+    ticker, _, rest = value.partition("=")
+    shares, _, cost = rest.partition(":")
+    return ticker.strip(), shares.strip(), (cost.strip() or None)
+
+
+def _portfolio_init_wizard(service: ApplicationService, args: argparse.Namespace) -> int:
+    """Interactive real-ledger initialization with cancel, retry and confirmation."""
+
+    from personal_alpha_terminal.portfolio.portfolio_validation import (
+        PortfolioValidationError,
+        ValidatedPosition,
+        validate_average_cost,
+        validate_cash,
+        validate_shares,
+        validate_ticker,
+    )
+
+    create = service.create_portfolio_with_positions
+    console.print(
+        Panel(
+            "REAL PORTFOLIO LEDGER\n"
+            "Broker connection: NONE. Orders are always manual at Charles Schwab.\n"
+            "Type 'cancel' at any prompt to abort without saving anything.",
+            title="PORTFOLIO INITIALIZATION",
+            border_style="cyan",
+        )
+    )
+
+    def prompt(message: str) -> str:
+        answer = console.input(f"{message} ").strip()
+        if answer.lower() == "cancel":
+            raise KeyboardInterrupt
+        return answer
+
+    try:
+        name = args.name
+        while True:
+            entered = prompt(f"Portfolio name [{name}]:")
+            if entered:
+                name = entered
+            if name.strip():
+                break
+            console.print("[red]Portfolio name must not be empty.[/red]")
+
+        cash = None
+        while cash is None:
+            raw = prompt("Cash balance (USD):")
+            try:
+                cash = validate_cash(raw)
+            except PortfolioValidationError as error:
+                console.print(f"[red]{error}; please re-enter cash.[/red]")
+
+        positions: list[ValidatedPosition] = []
+        console.print(
+            "Enter positions as TICKER=SHARES[:AVERAGE_COST], one per line.\n"
+            "Average cost is optional. Press Enter on an empty line when done."
+        )
+        while True:
+            raw = prompt(f"Position {len(positions) + 1} (blank line to finish):")
+            if not raw:
+                break
+            try:
+                ticker_text, shares_text, cost_text = _parse_position_spec(raw)
+                ticker = validate_ticker(ticker_text)
+                shares = validate_shares(shares_text)
+                average_cost = (
+                    validate_average_cost(cost_text) if cost_text not in (None, "") else None
+                )
+                if any(ticker == item.ticker for item in positions):
+                    console.print(f"[red]Duplicate ticker {ticker}; please re-enter.[/red]")
+                    continue
+                positions.append(ValidatedPosition(ticker, shares, average_cost))
+                console.print(f"[green]Added {ticker}: {shares} shares.[/green]")
+            except (PortfolioValidationError, ValueError) as error:
+                console.print(f"[red]{error}; please re-enter the position.[/red]")
+
+        table = Table(title="PORTFOLIO INITIALIZATION SUMMARY")
+        table.add_column("Item")
+        table.add_column("Value", justify="right")
+        table.add_row("Name", name)
+        table.add_row("Cash (USD)", str(cash))
+        for item in positions:
+            table.add_row(
+                f"{item.ticker} shares",
+                str(item.shares)
+                + (f" @ {item.average_cost}" if item.average_cost is not None else ""),
+            )
+        console.print(table)
+        confirmation = prompt("Save this portfolio? [y/N]:")
+        if confirmation.lower() not in {"y", "yes"}:
+            console.print("Portfolio initialization cancelled; nothing was saved.")
+            return 1
+
+        portfolio_id, warnings = create(
+            name=name,
+            cash_balance=cash,
+            currency=args.currency,
+            positions=tuple(positions),
+            source="cli-interactive",
+        )
+        console.print(f"Created portfolio id={portfolio_id}; broker connection: NONE")
+        for warning in warnings:
+            console.print(f"WARNING: {warning}")
+        return 0
+    except (KeyboardInterrupt, EOFError):
+        console.print("Portfolio initialization cancelled; nothing was saved.")
+        return 1
+
+
 def _portfolio_command(args: argparse.Namespace) -> int:
     service = _service_for_args(args)
     if args.command == "portfolio-init":
-        portfolio_id = service.create_portfolio(
-            name=args.name,
-            cash_balance=args.cash,
-            currency=args.currency,
+        interactive = (
+            sys.stdin.isatty()
+            and os.environ.get("PAT_NONINTERACTIVE") != "1"
+            and getattr(args, "cash", None) is None
         )
+        if interactive:
+            return _portfolio_init_wizard(service, args)
+        if getattr(args, "cash", None) is None:
+            console.print(
+                "ERROR: --cash is required (or run interactively). "
+                "Cash is never assumed."
+            )
+            return 2
+        from personal_alpha_terminal.portfolio.portfolio_validation import (
+            PortfolioValidationError as _ValidationError,
+        )
+        from personal_alpha_terminal.portfolio.portfolio_validation import (
+            validate_cash,
+            validate_positions,
+        )
+
+        try:
+            cash = validate_cash(args.cash)
+            raw_rows: list[tuple[object, object, object | None]] = []
+            for spec in getattr(args, "position", None) or ():
+                ticker, shares, cost = _parse_position_spec(spec)
+                raw_rows.append((ticker, shares, cost))
+            positions = validate_positions(raw_rows)
+        except (_ValidationError, ValueError) as error:
+            console.print(f"ERROR: {error}")
+            return 2
+        try:
+            portfolio_id, warnings = service.create_portfolio_with_positions(
+                name=args.name,
+                cash_balance=cash,
+                currency=args.currency,
+                positions=positions,
+                source="cli-manual",
+            )
+        except ValueError as error:
+            console.print(f"ERROR: {error}")
+            return 2
         console.print(f"Created portfolio id={portfolio_id}; broker connection: NONE")
+        for warning in warnings:
+            console.print(f"WARNING: {warning}")
         return 0
     if args.command == "portfolio-import":
+        cash_override = None
+        if getattr(args, "cash", None) is not None:
+            from personal_alpha_terminal.portfolio.portfolio_validation import (
+                PortfolioValidationError,
+                validate_cash,
+            )
+
+            try:
+                cash_override = validate_cash(args.cash)
+            except PortfolioValidationError as error:
+                console.print(f"ERROR: {error}")
+                return 2
         parsed = service.preview_portfolio_csv(source=args.csv)
+        if cash_override is not None and parsed.cash_balance is not None:
+            console.print(
+                "WARNING: explicit --cash overrides the cash row found in the CSV."
+            )
         table = Table(title=f"PORTFOLIO IMPORT PREVIEW - {parsed.format_name}")
         table.add_column("Symbol")
         table.add_column("Quantity", justify="right")
@@ -156,22 +325,34 @@ def _portfolio_command(args: argparse.Namespace) -> int:
                 str(row.quantity),
                 str(row.average_cost) if row.average_cost is not None else "--",
             )
-        if parsed.cash_balance is not None:
-            table.add_row("CASH", str(parsed.cash_balance), "--")
+        effective_cash = cash_override if cash_override is not None else parsed.cash_balance
+        if effective_cash is not None:
+            table.add_row("CASH", str(effective_cash), "--")
+        else:
+            table.add_row("CASH", "(unchanged; not specified)", "--")
         console.print(table)
         for warning in parsed.warnings:
             console.print(f"WARNING: {warning}")
         if not args.commit:
             console.print("Preview only. Re-run with --commit to update the real portfolio ledger.")
             return 0
-        result = service.import_portfolio_csv(
-            portfolio_id=args.portfolio_id,
-            source=args.csv,
-            as_of_date=date.fromisoformat(args.as_of),
-        )
+        try:
+            result = service.import_portfolio_csv(
+                portfolio_id=args.portfolio_id,
+                source=args.csv,
+                as_of_date=date.fromisoformat(args.as_of),
+                cash_override=cash_override,
+            )
+        except ValueError as error:
+            console.print(f"ERROR: {error}")
+            return 2
         console.print(
             f"Committed {result.imported_count} positions; "
             f"unmatched={len(result.unmatched_symbols)}; format={result.format_name}"
+        )
+        console.print(
+            "Cash updated" if result.cash_balance_updated else
+            "Cash unchanged (no explicit cash provided)"
         )
         for warning in result.warnings:
             console.print(f"WARNING: {warning}")
@@ -186,8 +367,8 @@ def _portfolio_command(args: argparse.Namespace) -> int:
         table.add_column("Ticker")
         table.add_column("Shares", justify="right")
         table.add_column("Average cost", justify="right")
-        positions = cast(tuple[dict[str, object], ...], status["positions"])
-        for item in positions:
+        position_rows = cast(tuple[dict[str, object], ...], status["positions"])
+        for item in position_rows:
             table.add_row(
                 str(item["symbol"]),
                 str(item["shares"]),
@@ -197,7 +378,10 @@ def _portfolio_command(args: argparse.Namespace) -> int:
         return 0
     portfolios = service.list_portfolios()
     if not portfolios:
-        console.print("No real portfolio configured. Run portfolio-init or portfolio-import.")
+        console.print(
+            "QUANT ANALYSIS READY · PORTFOLIO REQUIRED · TRADING BLOCKED\n"
+            "No real portfolio configured. Run portfolio-init or portfolio-import."
+        )
         return 3
     for item in portfolios:
         console.print(
@@ -230,6 +414,35 @@ def _doctor(config_path: Path) -> int:
                 checks.append(("FAIL", label, type(error).__name__))
         checks.append(("PASS", "Runtime config hash", config.runtime_config_hash))
         checks.append(("PASS", "Effective symbols", ",".join(config.symbols)))
+        from personal_alpha_terminal.data.market_data.independent_providers import (
+            build_independent_provider_router,
+        )
+
+        provider_router = build_independent_provider_router(
+            cache_dir=config.cache_dir,
+            timeout_seconds=config.timeout_seconds,
+            max_retries=config.max_retries,
+            retry_backoff_seconds=config.retry_backoff_seconds,
+            twelve_api_key=config.settings.twelve_data_api_key,
+            alpha_api_key=config.settings.alpha_vantage_api_key,
+            priority=config.independent_provider_priority,
+        )
+        equity_configured = any(
+            item.configured and item.provider_id in {"twelve_data", "alpha_vantage"}
+            for item in provider_router.health()
+        )
+        checks.append(
+            (
+                "PASS" if equity_configured else "WARN",
+                "Optional fallback data",
+                (
+                    "configured"
+                    if equity_configured
+                    else "not configured; Yahoo remains primary and strict internal "
+                    "certification remains active"
+                ),
+            )
+        )
         application = _application_service(effective_config=config)
         readiness = application.get_system_health()
         checks.append(
@@ -280,6 +493,100 @@ def _doctor(config_path: Path) -> int:
         table.add_row(status, label, detail)
     console.print(table)
     return 2 if any(status == "FAIL" for status, _, _ in checks) else 0
+
+
+def _provider_command(config_path: Path, action: str, provider_name: str | None) -> int:
+    from personal_alpha_terminal.application.universe import ResearchAsset
+    from personal_alpha_terminal.data.market_data.independent_providers import (
+        AlphaVantageProvider,
+        IndependentProviderError,
+        TwelveDataProvider,
+        build_independent_provider_router,
+    )
+
+    config = load_config(config_path)
+    router = build_independent_provider_router(
+        cache_dir=config.cache_dir,
+        timeout_seconds=config.timeout_seconds,
+        max_retries=config.max_retries,
+        retry_backoff_seconds=config.retry_backoff_seconds,
+        twelve_api_key=config.settings.twelve_data_api_key,
+        alpha_api_key=config.settings.alpha_vantage_api_key,
+        priority=config.independent_provider_priority,
+    )
+    if action == "status":
+        table = Table(title="INDEPENDENT DATA PROVIDERS")
+        for column in (
+            "Provider",
+            "Role",
+            "Configured",
+            "Reachable",
+            "Latest session",
+            "Last success",
+            "Reason",
+        ):
+            table.add_column(column)
+        for item in router.health():
+            table.add_row(
+                item.provider_id,
+                item.role,
+                "YES" if item.configured else "NO",
+                item.reachable,
+                item.latest_session or "--",
+                item.last_success or "--",
+                item.failure_category or ("AUTH_NOT_CONFIGURED" if not item.configured else "--"),
+            )
+        console.print(table)
+        if not router.twelve.configured and not router.alpha.configured:
+            console.print(
+                "Optional API fallbacks are not configured; daily readiness is unaffected"
+            )
+        return 0
+
+    providers = {
+        "twelve-data": router.twelve,
+        "twelve_data": router.twelve,
+        "alpha-vantage": router.alpha,
+        "alpha_vantage": router.alpha,
+    }
+    provider = providers.get(str(provider_name).lower())
+    if not isinstance(provider, (TwelveDataProvider, AlphaVantageProvider)):
+        raise ValueError("provider test supports twelve-data or alpha-vantage")
+    expected = _latest_completed_us_session(datetime.now(UTC))
+    asset = ResearchAsset("SPY", "SPDR S&P 500 ETF", "ARCX", "etf", "health")
+    try:
+        result = provider.fetch(
+            asset,
+            expected - timedelta(days=120),
+            expected,
+            expected_latest_session=expected,
+        )
+    except IndependentProviderError as error:
+        console.print(
+            f"{provider.provider_id}: FAIL {error.category.value} ({error})"
+        )
+        return 3
+    console.print(
+        f"{provider.provider_id}: PASS latest={result.latest_session} "
+        f"rows={len(result.prices)} cache={result.cache_hit}"
+    )
+    return 0
+
+
+def _latest_completed_us_session(now: datetime) -> date:
+    import exchange_calendars as xcals  # type: ignore[import-untyped]
+    calendar = xcals.get_calendar("XNYS")
+    sessions = calendar.sessions_in_range(
+        (now.date() - timedelta(days=14)).isoformat(), now.date().isoformat()
+    )
+    completed = [
+        session
+        for session in sessions
+        if calendar.session_close(session).to_pydatetime().astimezone(UTC) <= now
+    ]
+    if not completed:
+        raise RuntimeError("no completed XNYS session is available")
+    return date.fromisoformat(str(completed[-1].date()))
 
 
 def _research(config_path: Path) -> int:
@@ -421,6 +728,13 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("research", help="Run the audited local research pipeline")
     subparsers.add_parser("backtest", help="Check the PIT backtest execution gate")
     subparsers.add_parser("init-config")
+    data_provider = subparsers.add_parser(
+        "data-provider", help="Inspect optional market-data fallbacks without running strategy"
+    )
+    provider_subcommands = data_provider.add_subparsers(dest="provider_action", required=True)
+    provider_subcommands.add_parser("status")
+    provider_test = provider_subcommands.add_parser("test")
+    provider_test.add_argument("provider", choices=("twelve-data", "alpha-vantage"))
     for name in ("accept", "reject", "watch"):
         command = subparsers.add_parser(name)
         command.add_argument("recommendation_id")
@@ -451,13 +765,25 @@ def build_parser() -> argparse.ArgumentParser:
     modify_execution.add_argument("--reason", required=True)
     portfolio_init = subparsers.add_parser("portfolio-init")
     portfolio_init.add_argument("--name", default="My Portfolio")
-    portfolio_init.add_argument("--cash", type=float, default=0.0)
+    portfolio_init.add_argument("--cash", type=float, default=None)
     portfolio_init.add_argument("--currency", default="USD")
+    portfolio_init.add_argument(
+        "--position",
+        action="append",
+        default=None,
+        help="TICKER=SHARES[:AVERAGE_COST]; repeat for each position",
+    )
     portfolio_import = subparsers.add_parser("portfolio-import")
     portfolio_import.add_argument("csv", type=Path)
     portfolio_import.add_argument("--portfolio-id", type=int, required=True)
     portfolio_import.add_argument("--as-of", required=True)
     portfolio_import.add_argument("--commit", action="store_true")
+    portfolio_import.add_argument(
+        "--cash",
+        type=float,
+        default=None,
+        help="Explicit cash balance; never assumed when omitted",
+    )
     subparsers.add_parser("portfolio-list")
     subparsers.add_parser("portfolio", help="Alias for portfolio-list")
     portfolio_show = subparsers.add_parser("portfolio-show")
@@ -502,6 +828,10 @@ def main(argv: list[str] | None = None) -> int:
 
             console.print(f"Personal Alpha Terminal {__version__}")
             return 0
+        if command == "data-provider":
+            return _provider_command(
+                args.config, args.provider_action, getattr(args, "provider", None)
+            )
         if command == "research":
             return _research(args.config)
         if command == "backtest":

@@ -16,6 +16,9 @@ from personal_alpha_terminal.data.market_data.schemas import (
 class DataQualityChecker:
     """Validate, reject structurally unsafe bars, and remove duplicates."""
 
+    _MAX_IDENTICAL_OHLC_RUN = 10
+    _MAX_ZERO_VOLUME_RUN = 5
+
     def validate(
         self,
         bars: list[PriceBar],
@@ -70,7 +73,7 @@ class DataQualityChecker:
             accepted[key] = bar
 
         ordered = tuple(sorted(accepted.values(), key=lambda item: item.date))
-        issues.extend(self._validate_series(ordered))
+        issues.extend(self._validate_series(ordered, require_volume=require_volume))
         return DataQualityResult(
             bars=ordered,
             issues=tuple(issues),
@@ -275,8 +278,14 @@ class DataQualityChecker:
     def _validate_series(
         self,
         bars: tuple[PriceBar, ...],
+        *,
+        require_volume: bool,
     ) -> list[QualityIssue]:
         issues: list[QualityIssue] = []
+        identical_run = 1
+        zero_volume_run = (
+            1 if bars and bars[0].volume is not None and bars[0].volume == 0 else 0
+        )
         for previous, current in zip(bars, bars[1:], strict=False):
             gap_days = (current.date - previous.date).days
             if gap_days > 10:
@@ -321,6 +330,36 @@ class DataQualityChecker:
                             date=current.date,
                         )
                     )
+            previous_ohlc = (previous.open, previous.high, previous.low, previous.close)
+            current_ohlc = (current.open, current.high, current.low, current.close)
+            identical_run = identical_run + 1 if current_ohlc == previous_ohlc else 1
+            zero_volume_run = (
+                zero_volume_run + 1
+                if current.volume is not None and current.volume == 0
+                else 0
+            )
+            if identical_run == self._MAX_IDENTICAL_OHLC_RUN:
+                issues.append(
+                    self._error(
+                        "frozen_ohlc_series",
+                        (
+                            "Ten consecutive sessions have identical OHLC; "
+                            "provider data may be frozen."
+                        ),
+                        current.date,
+                    )
+                )
+            if require_volume and zero_volume_run == self._MAX_ZERO_VOLUME_RUN:
+                issues.append(
+                    self._error(
+                        "zero_volume_series",
+                        (
+                            "Five consecutive sessions have zero volume; "
+                            "verify listing and provider freshness."
+                        ),
+                        current.date,
+                    )
+                )
         return issues
 
     @staticmethod

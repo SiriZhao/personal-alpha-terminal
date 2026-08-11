@@ -220,10 +220,9 @@ class ResearchDataGate:
             if not evidence.trading_calendar_complete:
                 blockers.append("exchange calendar is incomplete")
 
-        if request.purpose in _DECISION_PURPOSES and not evidence.dual_source_verified:
-            blockers.append("portfolio decisions require second-source verification")
-        elif not evidence.dual_source_verified:
-            warnings.append("second-source verification is incomplete")
+        # Independent-provider comparison is optional operational diagnostics.  The
+        # selected source must pass the same strict calendar/PIT/quality contract,
+        # but a second commercial/free API is not a production prerequisite.
 
         if blockers:
             status = GateStatus.BLOCKED

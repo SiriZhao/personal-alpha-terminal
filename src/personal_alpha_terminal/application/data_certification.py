@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -12,7 +13,6 @@ from sqlalchemy.orm import Session
 from personal_alpha_terminal.application.daily_result import StageStatus
 from personal_alpha_terminal.application.universe import MINIMUM_US_RESEARCH_UNIVERSE
 from personal_alpha_terminal.core.config import Settings
-from personal_alpha_terminal.data.market_data.capabilities import PROVIDER_CAPABILITIES
 from personal_alpha_terminal.models import CorporateAction, DataSnapshotManifest, Price, Stock
 
 
@@ -56,6 +56,14 @@ class DailyDataCertification:
     evidence_paths: dict[str, str]
     blockers: tuple[str, ...]
     warnings: tuple[str, ...]
+    required_certified: int = 0
+    required_total: int = 0
+    optional_certified: int = 0
+    optional_total: int = 0
+    quarantined_bars: int = 0
+    fallback_usage: tuple[dict[str, object], ...] = ()
+    pit_integrity_status: str = "NOT_CERTIFIED"
+    freshness_status: str = "NOT_CERTIFIED"
 
     def metadata(self) -> dict[str, object]:
         return asdict(self)
@@ -113,9 +121,7 @@ class DailyDataCertifier:
         stale = {
             symbol
             for symbol in required
-            if latest_dates.get(symbol) is not None
-            and (analysis_date - latest_dates[symbol]).days
-            > self.settings.console_data_stale_days
+            if latest_dates.get(symbol) != analysis_date
         }
         stock_ids = tuple(stocks.values())
         invalid_rows = self.session.execute(
@@ -205,9 +211,7 @@ class DailyDataCertifier:
             if isinstance(item, dict) and item.get("symbol")
         }
         corporate_status = str(document.get("corporate_action_status", "NOT_CERTIFIED"))
-        reconciliation_status = str(
-            document.get("provider_reconciliation_status", "NOT_CERTIFIED")
-        )
+        reconciliation_status = "NOT_REQUIRED"
         accepted_statuses = {"PASS", "PASS_WITH_WARNING"}
         symbol_matrix: list[dict[str, object]] = []
         certified: set[str] = set()
@@ -228,24 +232,19 @@ class DailyDataCertifier:
             )
             action_status = str(action.get("status", "UNAVAILABLE"))
             cross_status = str(reconciliation.get("status", "UNAVAILABLE"))
-            if cross_status != "UNAVAILABLE":
+            attempts = reconciliation.get("secondary_candidates_attempted", [])
+            if cross_status != "UNAVAILABLE" or attempts:
                 secondary_checked.add(symbol)
             final = (
                 primary_ok
                 and action_status in accepted_statuses
-                and cross_status in accepted_statuses
+                and invalid_by_symbol.get(symbol, 0) == 0
             )
             reasons: list[str] = []
             if not primary_ok:
                 reasons.append("primary/calendar coverage failed")
             if action_status not in accepted_statuses:
                 reasons.append("corporate actions " + action_status)
-            if cross_status not in accepted_statuses:
-                reasons.append(
-                    "cross-provider "
-                    + cross_status
-                    + (f": {reconciliation.get('reason')}" if reconciliation.get("reason") else "")
-                )
             if final:
                 certified.add(symbol)
             else:
@@ -270,7 +269,16 @@ class DailyDataCertifier:
                         else "FAIL"
                     ),
                     "corporate_action": action_status,
-                    "cross_provider": cross_status,
+                    "cross_provider": "NOT_REQUIRED",
+                    "secondary_provider": reconciliation.get("secondary_provider"),
+                    "secondary_candidates_attempted": attempts,
+                    "primary_latest_session": reconciliation.get("primary_latest_session"),
+                    "secondary_latest_session": reconciliation.get("secondary_latest_session"),
+                    "overlap_rows": reconciliation.get("matched_rows", 0),
+                    "max_return_diff": reconciliation.get("max_return_diff"),
+                    "median_return_diff": reconciliation.get("median_return_diff"),
+                    "large_divergence_ratio": reconciliation.get("large_divergence_ratio"),
+                    "failure_category": reconciliation.get("failure_category"),
                     "pit": "PASS" if final and document.get("pit_data_cutoff") else "FAIL",
                     "final": "CERTIFIED" if final else "REJECTED",
                     "reason": "; ".join(reasons),
@@ -330,8 +338,6 @@ class DailyDataCertifier:
             blockers.append(f"timestamp contract violations detected: {timestamp_violations}")
         if corporate_status not in accepted_statuses:
             blockers.append("corporate-action ledger is not certified for PIT decisions")
-        if reconciliation_status not in accepted_statuses:
-            blockers.append("independent provider reconciliation is not certified")
         unquarantined = max(unexpected - quarantined_bars, 0)
         if unquarantined:
             blockers.append(
@@ -356,7 +362,6 @@ class DailyDataCertifier:
             if blockers
             else StageStatus.PASS_DEGRADED
             if warnings or corporate_status == "PASS_WITH_WARNING"
-            or reconciliation_status == "PASS_WITH_WARNING"
             else StageStatus.PASS
         )
         latest_timestamp = max(
@@ -371,7 +376,7 @@ class DailyDataCertifier:
             snapshot_id=manifest.snapshot_id if manifest else None,
             data_hash=manifest.content_hash if manifest else None,
             provider=manifest.provider_name if manifest else "UNAVAILABLE",
-            fallback_provider=self._fallback_provider(manifest),
+            fallback_provider=self._fallback_provider(manifest, document),
             requested_symbols=tuple(manifest.symbols) if manifest else tuple(sorted(assets)),
             received_symbols=tuple(sorted(received)),
             primary_valid_symbols=tuple(
@@ -420,6 +425,26 @@ class DailyDataCertifier:
             else {},
             blockers=tuple(dict.fromkeys(blockers)),
             warnings=tuple(dict.fromkeys(warnings)),
+            required_certified=len(certified & required),
+            required_total=len(required),
+            optional_certified=len(certified & optional),
+            optional_total=len(optional),
+            quarantined_bars=quarantined_bars,
+            fallback_usage=tuple(
+                dict(item)
+                for item in document.get("fallback_usage", [])
+                if isinstance(item, dict)
+            ),
+            pit_integrity_status=(
+                "PASS"
+                if pit_cutoff is not None
+                and pit_cutoff <= decision_time
+                and not future_rows
+                and not action_future_rows
+                and not timestamp_violations
+                else "FAIL"
+            ),
+            freshness_status="PASS" if not stale else "FAIL",
         )
 
     @staticmethod
@@ -433,26 +458,21 @@ class DailyDataCertifier:
         return payload if isinstance(payload, dict) else {}
 
     @classmethod
-    def _fallback_provider(cls, manifest: DataSnapshotManifest | None) -> str | None:
-        active = {
-            item.strip()
-            for item in (manifest.provider_name if manifest is not None else "").split(",")
-            if item.strip()
-        }
-        coverage: dict[str, set[str]] = {}
-        for capability in PROVIDER_CAPABILITIES:
-            if (
-                capability.market == "US"
-                and capability.supported
-                and capability.provider not in active
-            ):
-                coverage.setdefault(capability.provider, set()).add(capability.asset_type)
-        if not coverage:
-            return None
-        return ",".join(
-            f"{provider}:{'/'.join(sorted(asset_types))}"
-            for provider, asset_types in sorted(coverage.items())
-        )
+    def _fallback_provider(
+        cls, manifest: DataSnapshotManifest | None, document: Mapping[str, Any] | None = None
+    ) -> str | None:
+        fallbacks = document.get("fallback_usage") if isinstance(document, Mapping) else None
+        if isinstance(fallbacks, list):
+            used = sorted(
+                {
+                    str(item.get("provider"))
+                    for item in fallbacks
+                    if isinstance(item, Mapping) and item.get("provider")
+                }
+            )
+            if used:
+                return ",".join(used)
+        return None
 
 
 def _parse_datetime(value: object) -> datetime | None:

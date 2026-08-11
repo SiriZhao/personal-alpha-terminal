@@ -313,6 +313,29 @@ def test_primary_outage_falls_back_to_secondary_provider(
         assert stored.source == "secondary"
 
 
+def test_successful_primary_does_not_request_secondary_provider(
+    session_factory: sessionmaker[Session],
+) -> None:
+    with session_factory() as session:
+        add_stock(session, "AAPL", "US")
+        primary = FakeProvider({"AAPL": [make_bar("AAPL", "US", 29, "199")]})
+        primary.source = "yahoo_finance"
+        primary.provider_id = "primary.fixture"
+        secondary = FakeProvider({"AAPL": [make_bar("AAPL", "US", 29, "200")]})
+        secondary.source = "optional_fallback"
+        secondary.provider_id = "secondary.fixture"
+        report = MarketDataEngine(
+            providers=[primary, secondary],
+            repository=PriceRepository(session),
+            settings=settings(),
+            sleep=lambda _delay: None,
+        ).update_daily_data(markets={"US"}, end_date=date(2026, 7, 29))
+
+    assert report.success_count == 1
+    assert len(primary.calls) == 1
+    assert secondary.calls == []
+
+
 def test_registered_index_uses_index_provider_method(
     session_factory: sessionmaker[Session],
 ) -> None:

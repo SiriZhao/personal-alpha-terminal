@@ -451,7 +451,10 @@ def _expected_returns(
                 signal.model_version,
             )
         )
-        grouped.setdefault(signal.symbol, []).append((decayed, signal.confidence))
+        # Evidence coverage is deterministic completeness. Probability
+        # confidence remains zero unless a separate locked-OOS calibration
+        # artifact exists, and never controls the base alpha calculation.
+        grouped.setdefault(signal.symbol, []).append((decayed, signal.evidence_coverage))
     expected = {
         symbol: (
             sum(value * confidence for value, confidence in items)

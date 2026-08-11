@@ -1,5 +1,6 @@
 .env
 .venv/
+.venv*/
 node_modules/
 frontend/
 __pycache__/
@@ -9,19 +10,26 @@ __pycache__/
 .final-tmp/
 .codex-temp/
 .pat-test-*/
+.var/
 .mypy_cache/
 .ruff_cache/
+.hypothesis/
+.ipynb_checkpoints/
 .coverage
+coverage.xml
 htmlcov/
 build/
 dist/
+out/
 release/
 exam_results/
 exam_workspace/
 *.egg-info/
 var/
+data/cache/
 data/raw/
 data/processed/
+source_audit_export/
 logs/
 /reports/
 /docs/reports/*
@@ -41,3 +49,10 @@ updates/
 .audit-lock
 .build-lock
 .streamlit/secrets.toml
+
+# IDE / OS caches
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini

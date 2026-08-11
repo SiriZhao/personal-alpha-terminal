@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from pathlib import Path
 
 from sqlalchemy import func, select, text
@@ -49,6 +50,12 @@ from personal_alpha_terminal.models import (
     Portfolio,
     PortfolioPosition,
     QuantDecisionRun,
+    Stock,
+)
+from personal_alpha_terminal.portfolio.portfolio_validation import (
+    ValidatedPosition,
+    validate_cash,
+    validate_ticker,
 )
 from personal_alpha_terminal.portfolio.position_import import (
     ParsedPositionFile,
@@ -252,10 +259,41 @@ class ApplicationService:
         cash_balance: float = 0.0,
         currency: str = "USD",
     ) -> int:
+        portfolio_id, _warnings = self.create_portfolio_with_positions(
+            name=name,
+            cash_balance=cash_balance,
+            currency=currency,
+            positions=(),
+            source="cli-manual",
+        )
+        return portfolio_id
+
+    def create_portfolio_with_positions(
+        self,
+        *,
+        name: str,
+        cash_balance: float | Decimal,
+        currency: str = "USD",
+        positions: tuple[ValidatedPosition, ...] = (),
+        source: str = "cli-manual",
+        as_of_date: date | None = None,
+    ) -> tuple[int, tuple[str, ...]]:
+        """Create the real manual ledger atomically with optional positions.
+
+        The whole operation is one transaction: either the portfolio and every
+        matched position are persisted, or nothing is.  Tickers that do not match
+        the US security master are excluded with an explicit warning instead of
+        being fabricated; cash is never assumed.
+        """
+
         normalized = name.strip()
+        if not normalized:
+            raise ValueError("portfolio name must not be empty")
         normalized_currency = currency.strip().upper()
-        if not normalized or cash_balance < 0 or normalized_currency != "USD":
-            raise ValueError("portfolio name and non-negative cash are required")
+        if normalized_currency != "USD":
+            raise ValueError("the production terminal supports USD portfolios only")
+        cash = validate_cash(cash_balance)
+        snapshot_date = as_of_date or datetime.now(UTC).date()
         with self._factory.begin() as session:
             if session.scalar(select(Portfolio).where(Portfolio.name == normalized)) is not None:
                 raise ValueError("portfolio name already exists")
@@ -263,11 +301,41 @@ class ApplicationService:
                 name=normalized,
                 description="Manual Charles Schwab tracking; no broker connection",
                 base_currency=normalized_currency,
-                cash_balance=cash_balance,
+                cash_balance=cash,
+                source=source,
             )
             session.add(model)
             session.flush()
-            return model.id
+            warnings: list[str] = []
+            seen: set[str] = set()
+            for item in positions:
+                ticker = validate_ticker(item.ticker)
+                if ticker in seen:
+                    raise ValueError(f"duplicate ticker: {ticker}")
+                seen.add(ticker)
+                stock = session.scalar(
+                    select(Stock).where(
+                        Stock.market == "US",
+                        Stock.symbol == ticker,
+                        Stock.is_active.is_(True),
+                    )
+                )
+                if stock is None:
+                    warnings.append(
+                        f"ticker {ticker} is not in the US security master and was excluded"
+                    )
+                    continue
+                session.add(
+                    PortfolioPosition(
+                        portfolio_id=model.id,
+                        stock_id=stock.id,
+                        as_of_date=snapshot_date,
+                        quantity=item.shares,
+                        average_cost=item.average_cost,
+                    )
+                )
+            session.flush()
+            return model.id, tuple(warnings)
 
     def import_portfolio_csv(
         self,
@@ -275,10 +343,18 @@ class ApplicationService:
         portfolio_id: int,
         source: Path,
         as_of_date: date,
+        cash_override: Decimal | None = None,
     ) -> PositionImportResult:
         if as_of_date > datetime.now(UTC).date():
             raise ValueError("portfolio as_of date cannot be in the future")
         parsed = parse_position_csv(source.read_bytes())
+        if cash_override is not None:
+            parsed = ParsedPositionFile(
+                format_name=parsed.format_name,
+                rows=parsed.rows,
+                cash_balance=validate_cash(cash_override),
+                warnings=parsed.warnings,
+            )
         with self._factory.begin() as session:
             return PositionImportService(session).import_snapshot(
                 portfolio_id=portfolio_id,

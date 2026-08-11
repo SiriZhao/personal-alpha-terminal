@@ -57,8 +57,8 @@ def parse_position_csv(content: bytes) -> ParsedPositionFile:
     is_schwab = "marketvalue" in normalized and (
         "costbasis" in normalized or "%ofaccount" in normalized
     )
-    symbol_header = _required_header(normalized, "symbol")
-    quantity_header = _required_header(normalized, "quantity")
+    symbol_header = _required_header(normalized, "symbol", aliases=("ticker",))
+    quantity_header = _required_header(normalized, "quantity", aliases=("shares",))
     average_header = normalized.get("averagecost") or normalized.get("pricepaid")
     cost_basis_header = normalized.get("costbasis")
     rows: list[PositionImportRow] = []
@@ -239,11 +239,13 @@ def _normalize_header(value: str) -> str:
     )
 
 
-def _required_header(headers: dict[str, str], name: str) -> str:
-    try:
-        return headers[name]
-    except KeyError as exc:
-        raise ValueError(f"position CSV is missing required column: {name}") from exc
+def _required_header(
+    headers: dict[str, str], name: str, *, aliases: tuple[str, ...] = ()
+) -> str:
+    for key in (name, *aliases):
+        if key in headers:
+            return headers[key]
+    raise ValueError(f"position CSV is missing required column: {name}")
 
 
 def _decimal(value: str | None, line: int, label: str) -> Decimal:

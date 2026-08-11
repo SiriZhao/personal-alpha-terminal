@@ -2,6 +2,7 @@ import pytest
 from pydantic import ValidationError
 
 from personal_alpha_terminal.core.config import Settings
+from personal_alpha_terminal.core.effective_config import EffectiveRuntimeConfig
 
 
 def test_settings_accept_explicit_sqlite_configuration() -> None:
@@ -126,3 +127,20 @@ def test_portfolio_risk_parameters_are_validated() -> None:
 
     with pytest.raises(ValidationError):
         Settings(_env_file=None, portfolio_maximum_absolute_beta=0)
+
+
+def test_effective_config_rejects_unknown_or_duplicate_independent_provider() -> None:
+    assert (
+        EffectiveRuntimeConfig(
+            independent_provider_priority=()
+        ).independent_provider_priority
+        == ()
+    )
+
+    with pytest.raises(ValueError, match="unsupported independent provider"):
+        EffectiveRuntimeConfig(independent_provider_priority=("unknown",))
+
+    with pytest.raises(ValueError, match="contains duplicates"):
+        EffectiveRuntimeConfig(
+            independent_provider_priority=("twelve_data", "twelve_data")
+        )

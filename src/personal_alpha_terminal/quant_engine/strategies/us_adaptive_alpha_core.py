@@ -101,7 +101,15 @@ class USAdaptiveAlphaCoreV1:
             return StrategyAlphaResult(
                 (), ("price_cross_section",), self.config.parameter_fingerprint, ()
             )
-        observations = features.merge(metadata, on="permanent_security_id", how="left")
+        metadata_for_merge = metadata.drop(
+            columns=["ticker"],
+            errors="ignore",
+        )
+        observations = features.merge(
+            metadata_for_merge,
+            on="permanent_security_id",
+            how="left",
+        )
         specs = [
             FactorSpec(
                 "momentum_12_1",
@@ -140,13 +148,13 @@ class USAdaptiveAlphaCoreV1:
         production = bool(
             approval is not None
             and approval.parameter_fingerprint == parameter_fingerprint
-            and approval.data_version == data_version
         )
+        calibration_data_version = approval.data_version if approval is not None else data_version
         calibrated = bool(
             calibration is not None
             and calibration.locked_oos
             and calibration.identity.alpha_model_version == f"{self.model_id}:{self.version}"
-            and calibration.identity.alpha_data_version == data_version
+            and calibration.identity.alpha_data_version == calibration_data_version
             and calibration.identity.strategy_parameter_hash == parameter_fingerprint
         )
         if production and any(status.value != "VALID" for status in processed.statuses.values()):

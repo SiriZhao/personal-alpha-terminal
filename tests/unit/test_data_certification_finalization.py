@@ -104,7 +104,7 @@ def test_reconciliation_blocks_large_return_disagreement(
     assert result.blocking_divergences == 1
 
 
-def test_sparse_blocking_divergence_is_explicit_warning(
+def test_latest_session_price_divergence_is_blocking_even_when_sparse(
     session_factory: sessionmaker[Session],
 ) -> None:
     with session_factory() as session:
@@ -114,9 +114,9 @@ def test_sparse_blocking_divergence_is_explicit_warning(
         secondary = dict(primary)
         secondary[dates[-1]] = 100.0
         result = certifier._compare("TEST", primary, secondary)
-    assert result.status is EvidenceStatus.PASS_WITH_WARNING
+    assert result.status is EvidenceStatus.FAIL_BLOCKING
     assert result.blocking_divergences == 1
-    assert "blocking-threshold" in result.reason
+    assert result.failure_category == "LATEST_PRICE_DIVERGENCE"
 
 
 def test_received_greater_than_expected_is_not_capped_or_hidden(
@@ -194,6 +194,7 @@ def test_corporate_actions_persist_without_fake_announcement(
             start_date=dates[0],
             analysis_date=dates[-1],
             decision_time=NOW,
+            include_optional_reconciliation=True,
         )
         persisted = tuple(session.scalars(select(CorporateAction)))
     assert bundle.corporate_actions.status is EvidenceStatus.PASS
@@ -206,6 +207,49 @@ def test_corporate_actions_persist_without_fake_announcement(
     }
     assert all(item.announcement_date is None for item in persisted)
     assert bundle.data_cutoff is not None and bundle.data_cutoff <= NOW
+
+
+def test_daily_lineage_does_not_request_optional_secondary(
+    session_factory: sessionmaker[Session],
+) -> None:
+    dates = [date(2026, 1, 5), date(2026, 1, 6), date(2026, 1, 7)]
+    calls = 0
+
+    def secondary(*_args):
+        nonlocal calls
+        calls += 1
+        return {item: 100.0 for item in dates}
+
+    with session_factory.begin() as session:
+        _add_prices(session, dates)
+        bundle = DataLineageCertifier(
+            session,
+            _settings(),
+            action_fetcher=lambda *_args: (),
+            secondary_fetcher=secondary,
+        ).certify(
+            assets=(ASSET,),
+            start_date=dates[0],
+            analysis_date=dates[-1],
+            decision_time=NOW,
+        )
+    assert calls == 0
+    assert bundle.reconciliation.status is EvidenceStatus.NOT_RUN_OPTIONAL
+
+
+def test_optional_reconciliation_window_is_not_limited_by_incremental_refresh(
+    session_factory: sessionmaker[Session],
+) -> None:
+    import personal_alpha_terminal.application.data_lineage_certification as module
+
+    settings = _settings()
+    with session_factory() as session:
+        start = DataLineageCertifier(session, settings)._reconciliation_start(
+            date(2026, 8, 7)
+        )
+    assert len(module._xnys_dates(start, date(2026, 8, 7))) >= (
+        settings.market_data_reconciliation_preferred_overlap_sessions
+    )
 
 
 def test_future_action_availability_fails_closed(

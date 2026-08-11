@@ -120,6 +120,8 @@ class ModelRegistryService:
         parameter_fingerprint: str,
         decision_time: datetime,
     ) -> ModelApprovalRecord | None:
+        if not data_version.strip():
+            raise ValueError('runtime data version is required')
         if decision_time.tzinfo is None:
             raise ValueError("decision_time must be timezone-aware")
         record = self.session.scalar(
@@ -132,10 +134,10 @@ class ModelRegistryService:
         if record is None:
             return None
         return self.session.scalar(
-            select(ModelApprovalRecord).where(
+            select(ModelApprovalRecord)
+            .where(
                 ModelApprovalRecord.model_id == model_id,
                 ModelApprovalRecord.version == version,
-                ModelApprovalRecord.data_version == data_version,
                 ModelApprovalRecord.parameter_fingerprint == parameter_fingerprint,
                 ModelApprovalRecord.approved_at <= decision_time,
                 ModelApprovalRecord.locked_oos.is_(True),
@@ -143,6 +145,8 @@ class ModelRegistryService:
                 ModelApprovalRecord.survivorship_bias_controlled.is_(True),
                 ModelApprovalRecord.costs_included.is_(True),
             )
+            .order_by(ModelApprovalRecord.approved_at.desc(), ModelApprovalRecord.id.desc())
+            .limit(1)
         )
 
 

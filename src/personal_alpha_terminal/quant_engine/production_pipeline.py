@@ -171,7 +171,10 @@ class DailyQuantPipeline:
             inputs.alpha_signals, decision_time=inputs.decision_time
         )
         if not approved_alpha:
-            blockers.append("no valid PRODUCTION_APPROVED alpha signals")
+            blockers.append(
+                "STRATEGY_NOT_PRODUCTION_APPROVED: no immutable approval backed by "
+                "locked OOS, PIT, survivorship-controlled and after-cost evidence"
+            )
             stages.append(PipelineStage("Alpha Signals", "BLOCKED", blockers[-1]))
             return DailyQuantOutput(
                 ProductionPipelineStatus.BLOCKED,

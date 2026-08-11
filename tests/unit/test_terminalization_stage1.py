@@ -312,7 +312,7 @@ class _SafeDataService:
             latest_completed_session=date(2026, 8, 7),
             decision_timestamp_convention="fixture next-session",
             corporate_action_status="PASS",
-            provider_reconciliation="PASS",
+            provider_reconciliation="NOT_REQUIRED",
             duplicate_rows=0,
             invalid_ohlc=0,
             nan_counts={"open": 0, "high": 0, "low": 0, "close": 0},
@@ -331,8 +331,8 @@ class _UnsafeDataService(_SafeDataService):
         return replace(
             super().daily_certification(**_kwargs),
             status=StageStatus.FAIL_BLOCKING,
-            provider_reconciliation="NOT_CERTIFIED",
-            blockers=("independent provider reconciliation is not certified",),
+            pit_integrity_status="FAIL",
+            blockers=("PIT data cutoff is unavailable",),
         )
 
 
@@ -437,7 +437,7 @@ def test_blocked_data_certificate_preserves_real_certification_evidence(
     assert any(item.rejected_by == "PORTFOLIO" for item in result.rejected_signals)
     assert evidence["received_symbols"] == list(SYMBOLS)
     assert evidence["valid_bars"] == 504 * len(SYMBOLS)
-    assert evidence["provider_reconciliation"] == "NOT_CERTIFIED"
+    assert evidence["provider_reconciliation"] == "NOT_REQUIRED"
     assert evidence["snapshot_id"] == "fixture-snapshot"
 
 
@@ -552,7 +552,9 @@ def test_missing_portfolio_and_stale_data_fail_closed(
     missing_rendered = capture_daily_quant_result(missing)
     assert "NOT_ACTIONABLE" in missing_rendered
     assert "NO_ACTION" not in missing_rendered
-    assert missing.run_classification == "INVALID_NON_ACTIONABLE"
+    assert missing.run_classification == "VALID_ANALYSIS_NON_ACTIONABLE"
+    assert missing.diagnostic_analysis_complete
+    assert "VALID QUANT ANALYSIS" in missing_rendered
 
     class _Stale(_SafeDataService):
         def get_data_readiness(self, **_kwargs):

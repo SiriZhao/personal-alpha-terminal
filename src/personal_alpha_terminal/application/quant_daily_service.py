@@ -10,6 +10,11 @@ from math import floor
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from personal_alpha_terminal.application.regime_link import (
+    REGIME_UNAVAILABLE,
+    RegimeLinkResult,
+    latest_regime_link,
+)
 from personal_alpha_terminal.core.effective_config import EffectiveRuntimeConfig
 from personal_alpha_terminal.data.us_market.session import CertifiedUSSessionService
 from personal_alpha_terminal.models import (
@@ -18,6 +23,8 @@ from personal_alpha_terminal.models import (
     QuantDecisionRun,
     SecurityMaster,
 )
+from personal_alpha_terminal.quant_engine.alpha import AlphaSignal
+from personal_alpha_terminal.quant_engine.benchmark import BenchmarkEvidence
 from personal_alpha_terminal.quant_engine.costs import TransactionCostModel
 from personal_alpha_terminal.quant_engine.input_assembler import (
     AssembledDailyInput,
@@ -117,6 +124,14 @@ class TodayResult:
     probability_calibration_status: str = "PROBABILITY_NOT_CALIBRATED"
     stress: PortfolioStressReport | None = None
     risk_state: PortfolioRiskState | None = None
+    risk_regime_detail: str = ""
+    benchmark_evidences: tuple[BenchmarkEvidence, ...] = ()
+    strategy_version: str = 'UNAVAILABLE'
+    production_approval_artifact_id: str = 'NOT_APPROVED'
+    portfolio_validation_artifact_id: str = 'NOT_APPROVED'
+    probability_artifact_id: str = 'OPTIONAL_UNAVAILABLE'
+    universe_snapshot_id: str = 'UNAVAILABLE'
+    portfolio_snapshot_id: str = 'NOT_INITIALIZED'
 
 
 class ProductionDailyWorkflow:
@@ -184,7 +199,7 @@ class ProductionDailyWorkflow:
                 data_certification="BLOCKED",
                 model_status="NOT_READY",
                 portfolio_status=("NOT_INITIALIZED" if portfolio_id is None else "UNCHANGED"),
-                risk_regime="SCORE_UNAVAILABLE",
+                risk_regime=REGIME_UNAVAILABLE,
                 gross_target=None,
                 cash_target=None,
                 recommendations=(),
@@ -195,16 +210,26 @@ class ProductionDailyWorkflow:
                 model_hash="UNAVAILABLE",
                 config_hash="UNAVAILABLE",
                 pipeline_stages=self._blocked_research_stages(blocker),
+                risk_regime_detail=(
+                    "REGIME OPTIONAL: research stages blocked; regime evidence not evaluated."
+                ),
             )
+
+        regime_link = latest_regime_link(
+            self.session,
+            self.effective_config.settings,
+            decision_time=decision_time,
+        )
 
         if portfolio_id is None:
             blocker = "PORTFOLIO NOT INITIALIZED; run portfolio-init or portfolio-import"
-            return self._research_only_result(research, blocker)
+            return self._research_only_result(research, blocker, regime_link=regime_link)
 
         try:
             assembled = self.assembler.complete_with_portfolio(
                 research,
                 portfolio_id=portfolio_id,
+                regime=regime_link.regime_input,
             )
             portfolio_approval = self.validation_registry.matching_portfolio_approval(
                 PortfolioValidationIdentity(
@@ -240,7 +265,7 @@ class ProductionDailyWorkflow:
                 data_certification="BLOCKED",
                 model_status="NOT_READY",
                 portfolio_status="UNCHANGED",
-                risk_regime="SCORE_UNAVAILABLE",
+                risk_regime=regime_link.display_status,
                 gross_target=None,
                 cash_target=None,
                 recommendations=(),
@@ -262,18 +287,16 @@ class ProductionDailyWorkflow:
                 benchmark_observations=research.benchmark_observations,
                 benchmark_period_return=research.benchmark_period_return,
                 benchmark_annualized_volatility=research.benchmark_annualized_volatility,
+                risk_regime_detail=regime_link.detail,
+                benchmark_evidences=research.benchmark_evidences,
             )
 
         inputs = assembled.inputs
         if inputs.authorization.evidence is None:
             raise ValueError("production authorization is missing immutable data evidence")
         evidence = inputs.authorization.evidence
-        data_version = (
-            output.target.data_version if output.target is not None else "UNAVAILABLE"
-        )
-        model_version = (
-            output.target.model_version if output.target is not None else "UNAVAILABLE"
-        )
+        data_version = assembled.data_version
+        model_version = assembled.strategy_version
         fingerprint = _fingerprint(
             {
                 "portfolio_id": portfolio_id,
@@ -296,6 +319,7 @@ class ProductionDailyWorkflow:
                 assembled.parameter_fingerprint,
                 assembled=assembled,
                 output=output,
+                regime_link=regime_link,
             )
 
         if output.status is ProductionPipelineStatus.BLOCKED or output.decision is None:
@@ -318,6 +342,7 @@ class ProductionDailyWorkflow:
                 assembled.parameter_fingerprint,
                 assembled=assembled,
                 output=output,
+                regime_link=regime_link,
             )
 
         execution = self.sessions.next_tradable_open(decision_time=decision_time)
@@ -391,10 +416,25 @@ class ProductionDailyWorkflow:
             assembled.parameter_fingerprint,
             assembled=assembled,
             output=output,
+            regime_link=regime_link,
         )
 
     @staticmethod
     def _research_stages(research: AssembledResearchInput) -> tuple[PipelineStage, ...]:
+        approved = tuple(
+            item
+            for item in research.alpha_signals
+            if item.production_eligible(research.decision_time)
+        )
+        alpha_status = "VALID" if approved else "BLOCKED"
+        alpha_detail = (
+            f"{len(approved)} PRODUCTION_APPROVED signals"
+            if approved
+            else (
+                "STRATEGY_NOT_PRODUCTION_APPROVED: candidates remain DIAGNOSTIC_ONLY; "
+                "locked OOS, PIT, survivorship and after-cost evidence is absent"
+            )
+        )
         return (
             PipelineStage("Data Quality Gate", "VALID", "CERTIFIED"),
             PipelineStage("PIT Universe", "VALID", research.universe_snapshot_id),
@@ -411,8 +451,8 @@ class ProductionDailyWorkflow:
             ),
             PipelineStage(
                 "Alpha Signals",
-                "VALID",
-                f"{len(research.alpha_signals)} model-approved signals",
+                alpha_status,
+                alpha_detail,
             ),
         )
 
@@ -428,8 +468,23 @@ class ProductionDailyWorkflow:
         return (PipelineStage("Data Quality Gate", "BLOCKED", blocker),)
 
     def _research_only_result(
-        self, research: AssembledResearchInput, blocker: str
+        self,
+        research: AssembledResearchInput,
+        blocker: str,
+        *,
+        regime_link: RegimeLinkResult | None = None,
     ) -> TodayResult:
+        link = regime_link or RegimeLinkResult(
+            None,
+            REGIME_UNAVAILABLE,
+            "REGIME OPTIONAL: market-regime evidence was not evaluated.",
+        )
+        strategy_blocker = _strategy_blocker(
+            research.alpha_signals, decision_time=research.decision_time
+        )
+        result_blockers = tuple(
+            dict.fromkeys(item for item in (strategy_blocker, blocker) if item is not None)
+        )
         return TodayResult(
             run_id=0,
             decision_time=research.decision_time,
@@ -437,17 +492,17 @@ class ProductionDailyWorkflow:
             data_freshness="CERTIFIED_AS_OF_DECISION",
             status="BLOCKED",
             data_certification="APPROVED",
-            model_status="APPROVED",
+            model_status=("PRODUCTION_APPROVED" if strategy_blocker is None else "DIAGNOSTIC_ONLY"),
             portfolio_status="NOT_INITIALIZED",
-            risk_regime="SCORE_UNAVAILABLE",
+            risk_regime=link.display_status,
             gross_target=None,
             cash_target=None,
             recommendations=(),
             no_rebalance_reason=None,
-            blockers=(blocker,),
+            blockers=result_blockers,
             warnings=(),
             data_hash=research.data_version,
-            model_hash=self.assembler.strategy.version,
+            model_hash=research.strategy_version,
             config_hash=self.effective_config.canonical_run_config_hash,
             pipeline_stages=(*self._research_stages(research), PipelineStage(
                 "Portfolio Construction", "BLOCKED", blocker
@@ -467,6 +522,18 @@ class ProductionDailyWorkflow:
             cash_balance=None,
             configured_target_volatility=None,
             identity_hashes=self._identity_hashes(research.data_version),
+            model_approval_hash=research.model_approval_hash,
+            probability_calibration_status=(
+                "CALIBRATED_LOCKED_OOS"
+                if research.probability_artifact_id != "OPTIONAL_UNAVAILABLE"
+                else "PROBABILITY_NOT_CALIBRATED"
+            ),
+            risk_regime_detail=link.detail,
+            benchmark_evidences=research.benchmark_evidences,
+            strategy_version=research.strategy_version,
+            production_approval_artifact_id=research.model_approval_hash,
+            probability_artifact_id=research.probability_artifact_id,
+            universe_snapshot_id=research.universe_snapshot_id,
         )
 
     def _persist_blocked(
@@ -515,6 +582,7 @@ class ProductionDailyWorkflow:
         *,
         assembled: AssembledDailyInput | None = None,
         output: DailyQuantOutput | None = None,
+        regime_link: RegimeLinkResult | None = None,
     ) -> TodayResult:
         recommendations = tuple(
             TodayRecommendation(
@@ -562,28 +630,50 @@ class ProductionDailyWorkflow:
         no_rebalance = None
         if run.status == "no_decision":
             no_rebalance = "all target differences are inside the validated no-trade band"
+        data_approved = bool(
+            assembled is not None
+            and assembled.inputs.authorization.decision.status.value == "APPROVED"
+        )
+        strategy_blocker = (
+            _strategy_blocker(
+                assembled.inputs.alpha_signals,
+                decision_time=assembled.inputs.decision_time,
+            )
+            if assembled is not None
+            else "STRATEGY_NOT_EVALUATED"
+        )
+        resolved_data_version = (
+            assembled.data_version if assembled is not None else run.data_version
+        )
+        resolved_strategy_version = (
+            assembled.strategy_version if assembled is not None else run.model_version
+        )
         return TodayResult(
             run_id=run.id,
             decision_time=run.as_of_time,
             market_session="POST_CLOSE_DECISION",
             data_freshness=(
                 "CERTIFIED_AS_OF_DECISION"
-                if run.gate_status == "APPROVED"
+                if data_approved
                 else "UNAVAILABLE"
             ),
             status=run.status.upper(),
-            data_certification=run.gate_status,
-            model_status="APPROVED" if run.gate_status == "APPROVED" else "NOT_READY",
+            data_certification="APPROVED" if data_approved else "BLOCKED",
+            model_status=(
+                "PRODUCTION_APPROVED" if strategy_blocker is None else "DIAGNOSTIC_ONLY"
+            ),
             portfolio_status="TARGET_COMPUTED" if run.gate_status == "APPROVED" else "UNCHANGED",
-            risk_regime="SCORE_UNAVAILABLE",
+            risk_regime=(
+                regime_link.display_status if regime_link is not None else REGIME_UNAVAILABLE
+            ),
             gross_target=gross if run.gate_status == "APPROVED" else None,
             cash_target=1 - gross if run.gate_status == "APPROVED" else None,
             recommendations=recommendations,
             no_rebalance_reason=no_rebalance,
             blockers=tuple(run.blockers),
             warnings=(),
-            data_hash=run.data_version,
-            model_hash=run.model_version,
+            data_hash=resolved_data_version,
+            model_hash=resolved_strategy_version,
             config_hash=self.effective_config.canonical_run_config_hash,
             pipeline_stages=output.stages if output is not None else (),
             factors=getattr(assembled, "factors", ()),
@@ -625,11 +715,11 @@ class ProductionDailyWorkflow:
                 if output is not None
                 else None
             ),
-            identity_hashes=self._identity_hashes(run.data_version),
+            identity_hashes=self._identity_hashes(resolved_data_version),
             model_approval_hash=(
-                output.target.model_validation_id
-                if output is not None and output.target is not None
-                else "UNAVAILABLE"
+                assembled.model_approval_hash
+                if assembled is not None
+                else "NOT_APPROVED"
             ),
             probability_calibration_status=(
                 "CALIBRATED_LOCKED_OOS"
@@ -638,6 +728,36 @@ class ProductionDailyWorkflow:
             ) if assembled is not None else "PROBABILITY_NOT_CALIBRATED",
             stress=output.stress if output is not None else None,
             risk_state=(assembled.inputs.portfolio_risk_state if assembled is not None else None),
+            risk_regime_detail=(
+                regime_link.detail
+                if regime_link is not None
+                else "REGIME OPTIONAL: market-regime evidence was not evaluated."
+            ),
+            benchmark_evidences=(
+                assembled.benchmark_evidences if assembled is not None else ()
+            ),
+            strategy_version=resolved_strategy_version,
+            production_approval_artifact_id=(
+                assembled.model_approval_hash if assembled is not None else "NOT_APPROVED"
+            ),
+            portfolio_validation_artifact_id=(
+                output.target.model_validation_id
+                if output is not None and output.target is not None
+                else "NOT_APPROVED"
+            ),
+            probability_artifact_id=(
+                assembled.probability_artifact_id
+                if assembled is not None
+                else "OPTIONAL_UNAVAILABLE"
+            ),
+            universe_snapshot_id=(
+                assembled.universe_snapshot_id if assembled is not None else "UNAVAILABLE"
+            ),
+            portfolio_snapshot_id=(
+                _portfolio_snapshot_id(assembled)
+                if assembled is not None
+                else "NOT_INITIALIZED"
+            ),
         )
 
     def _identity_hashes(self, data_version: str) -> dict[str, str]:
@@ -650,6 +770,32 @@ class ProductionDailyWorkflow:
             "cost_model_hash": self.effective_config.cost_model_hash,
             "canonical_run_config_hash": self.effective_config.canonical_run_config_hash,
         }
+
+
+def _strategy_blocker(
+    signals: tuple[AlphaSignal, ...], *, decision_time: datetime
+) -> str | None:
+    approved = tuple(
+        item
+        for item in signals
+        if item.production_eligible(decision_time)
+    )
+    if approved:
+        return None
+    return (
+        "STRATEGY_NOT_PRODUCTION_APPROVED: no immutable approval backed by locked OOS, "
+        "PIT, survivorship-controlled and after-cost evidence"
+    )
+
+
+def _portfolio_snapshot_id(assembled: AssembledDailyInput) -> str:
+    return _fingerprint(
+        {
+            "cash": assembled.cash_balance,
+            "positions": [asdict(item) for item in assembled.portfolio_positions],
+            "data_cutoff": assembled.data_cutoff,
+        }
+    )
 
 
 def _fingerprint(payload: dict[str, object]) -> str:

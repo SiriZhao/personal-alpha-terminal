@@ -211,8 +211,7 @@ def test_complete_required_data_is_pass(
         )
     assert result.status is StageStatus.PASS
     assert result.coverage == 1.0
-    assert result.fallback_provider is not None
-    assert "stooq:etf/stock" in result.fallback_provider
+    assert result.fallback_provider is None
     assert not result.blockers
 
 
@@ -310,7 +309,7 @@ def test_stale_required_price_is_blocking(
     assert required in result.stale_symbols
 
 
-def test_uncertified_lineage_and_corporate_actions_are_blocking(
+def test_optional_reconciliation_is_not_a_gate_but_corporate_actions_are(
     session_factory: sessionmaker[Session], tmp_path: Path
 ) -> None:
     with session_factory.begin() as session:
@@ -326,8 +325,24 @@ def test_uncertified_lineage_and_corporate_actions_are_blocking(
             manifest=manifest,
         )
     assert result.status is StageStatus.FAIL_BLOCKING
-    assert result.provider_reconciliation == "UNAVAILABLE"
+    assert result.provider_reconciliation == "NOT_REQUIRED"
     assert result.corporate_action_status == "UNAVAILABLE"
+    assert not any("reconciliation" in blocker for blocker in result.blockers)
+
+
+def test_old_snapshot_with_failed_reconciliation_remains_readable_and_can_pass(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    with session_factory.begin() as session:
+        manifest = _seed(session, tmp_path, reconciled=False, corporate_actions=True)
+        result = DailyDataCertifier(session, _settings(tmp_path)).certify(
+            analysis_date=ANALYSIS_DATE,
+            decision_time=DECISION_TIME,
+            manifest=manifest,
+        )
+    assert result.status is StageStatus.PASS
+    assert result.provider_reconciliation == "NOT_REQUIRED"
+    assert not result.blockers
 
 
 def test_cold_database_requests_full_history(

@@ -16,6 +16,7 @@ from personal_alpha_terminal.core.fingerprints import fingerprint
 class StageStatus(StrEnum):
     PASS = "PASS"
     PASS_DEGRADED = "PASS_DEGRADED"
+    OPTIONAL_UNAVAILABLE = "OPTIONAL_UNAVAILABLE"
     FAIL_BLOCKING = "FAIL_BLOCKING"
     NOT_RUN = "NOT_RUN"
 
@@ -51,6 +52,17 @@ class DataHealthItem:
     source: str
     status: StageStatus
     detail: str = ""
+    dataset_id: str = "UNAVAILABLE"
+    as_of: date | None = None
+    cutoff: datetime | None = None
+    snapshot_id: str = "UNAVAILABLE"
+    data_version: str = "UNAVAILABLE"
+    provider: str = "UNAVAILABLE"
+    row_count: int | None = None
+    member_count: int | None = None
+    quality_status: str = "UNAVAILABLE"
+    content_hash: str = "UNAVAILABLE"
+    certification_state: str = "UNAVAILABLE"
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,6 +206,9 @@ class BenchmarkSummary:
     period_return: float | None
     annualized_volatility: float | None
     note: str
+    start_date: date | None = None
+    end_date: date | None = None
+    max_drawdown: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -260,9 +275,38 @@ class DailyQuantResult:
         )
 
     @property
+    def diagnostic_analysis_complete(self) -> bool:
+        """Return whether the portfolio-independent quant analysis completed.
+
+        This is deliberately weaker than ``actionable``.  It allows a user with
+        no initialized real portfolio to inspect PIT factors, alpha and
+        probability evidence without suggesting that a trading decision exists.
+        """
+
+        required = {
+            "CALENDAR",
+            "DATA",
+            "PIT",
+            "FEATURE",
+            "FACTOR",
+            "SIGNAL",
+            "PROBABILITY",
+        }
+        completed = {
+            item.name
+            for item in self.stages
+            if item.status in {StageStatus.PASS, StageStatus.PASS_DEGRADED}
+        }
+        return required <= completed
+
+    @property
     def run_classification(self) -> str:
         if not self.actionable:
-            return "INVALID_NON_ACTIONABLE"
+            return (
+                "VALID_ANALYSIS_NON_ACTIONABLE"
+                if self.diagnostic_analysis_complete
+                else "INVALID_NON_ACTIONABLE"
+            )
         if self.execution_plan.legs:
             return "CERTIFIED_ACTIONABLE"
         return "CERTIFIED_NO_ACTION"
@@ -335,6 +379,39 @@ class DailyQuantResult:
             "data_cutoff": self.data_cutoff.isoformat() if self.data_cutoff else None,
             "config_hash": self.config_hash,
             "identity_hashes": self.provenance.get("identity_hashes", {}),
+            "canonical_input_hash": canonical_input_hash(self),
+            "canonical_result_hash": canonical_result_hash(self),
+            "evidence_identity": {
+                "pit_cutoff": self.data_cutoff.isoformat() if self.data_cutoff else None,
+                "data_snapshot_id": self.provenance.get(
+                    "data_snapshot_id", "UNAVAILABLE"
+                ),
+                "data_hash": self.provenance.get("data_hash", "UNAVAILABLE"),
+                "research_data_version": self.provenance.get(
+                    "research_data_version", "UNAVAILABLE"
+                ),
+                "universe_version": self.provenance.get(
+                    "universe_version", "UNAVAILABLE"
+                ),
+                "strategy_version": self.provenance.get(
+                    "strategy_version", "UNAVAILABLE"
+                ),
+                "factor_version": self.provenance.get("factor_version", "UNAVAILABLE"),
+                "signal_version": self.provenance.get("signal_version", "UNAVAILABLE"),
+                "production_approval_artifact_id": self.provenance.get(
+                    "production_approval_artifact_id", "NOT_APPROVED"
+                ),
+                "portfolio_validation_artifact_id": self.provenance.get(
+                    "portfolio_validation_artifact_id", "NOT_APPROVED"
+                ),
+                "probability_artifact_id": self.provenance.get(
+                    "probability_artifact_id", "OPTIONAL_UNAVAILABLE"
+                ),
+                "portfolio_snapshot_id": self.provenance.get(
+                    "portfolio_snapshot_id", "NOT_INITIALIZED"
+                ),
+                "cost_assumptions": self.provenance.get("cost_assumptions", {}),
+            },
             "stage_evidence_chain": evidence_chain,
             "stage_chain_root_hash": (
                 evidence_chain[-1]["output_hash"] if evidence_chain else "UNAVAILABLE"
@@ -377,6 +454,46 @@ class DailyQuantResult:
         target = run_directory / "run_certificate.json"
         _atomic_json(target, certificate)
         return target
+
+
+def canonical_input_hash(result: DailyQuantResult) -> str:
+    """Stable identity for repeated runs over the same decision inputs."""
+
+    return fingerprint(
+        {
+            "analysis_date": result.analysis_date,
+            "trade_date": result.trade_date,
+            "data_cutoff": result.data_cutoff,
+            "config_hash": result.config_hash,
+            "identity_hashes": result.provenance.get("identity_hashes", {}),
+            "data_snapshot_id": result.provenance.get("data_snapshot_id"),
+            "data_hash": result.provenance.get("data_hash"),
+            "research_data_version": result.provenance.get("research_data_version"),
+            "universe_version": result.provenance.get("universe_version"),
+            "portfolio_snapshot_id": result.provenance.get("portfolio_snapshot_id"),
+        }
+    )
+
+
+def canonical_result_hash(result: DailyQuantResult) -> str:
+    """Stable hash of decision-critical outputs, excluding run timing and UUID."""
+
+    return fingerprint(
+        {
+            "canonical_input_hash": canonical_input_hash(result),
+            "classification": result.run_classification,
+            "stage_statuses": [
+                (item.name, item.status.value, item.message) for item in result.stages
+            ],
+            "factors": [asdict(item) for item in result.factors],
+            "probabilities": [asdict(item) for item in result.probabilities],
+            "portfolio": asdict(result.portfolio),
+            "risk": asdict(result.risk),
+            "decisions": [asdict(item) for item in result.final_decisions],
+            "blockers": result.blockers,
+            "warnings": result.warnings,
+        }
+    )
 
 
 def build_stage_evidence_chain(result: DailyQuantResult) -> list[dict[str, object]]:

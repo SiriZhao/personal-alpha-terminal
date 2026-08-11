@@ -11,6 +11,7 @@ from enum import StrEnum
 from hashlib import sha256
 from math import isfinite
 from pathlib import Path
+from statistics import median
 from typing import Any, cast
 from urllib.request import Request, urlopen
 
@@ -21,12 +22,14 @@ from sqlalchemy.orm import Session
 from personal_alpha_terminal.application.universe import ResearchAsset
 from personal_alpha_terminal.core.config import Settings
 from personal_alpha_terminal.core.market_time import normalize_utc
-from personal_alpha_terminal.data.market_data.contracts import AssetPriceRequest
 from personal_alpha_terminal.data.market_data.exceptions import ProviderRequestError
-from personal_alpha_terminal.data.market_data.normalization import PriceNormalizer
-from personal_alpha_terminal.data.market_data.providers.stooq import (
-    StooqETFAdapter,
-    StooqStockAdapter,
+from personal_alpha_terminal.data.market_data.independent_providers import (
+    IndependentProviderError,
+    IndependentProviderRouter,
+    ProviderAttempt,
+    ProviderFailureCategory,
+    ProviderHealth,
+    build_independent_provider_router,
 )
 from personal_alpha_terminal.models import CorporateAction, Price, Stock
 
@@ -36,6 +39,7 @@ class EvidenceStatus(StrEnum):
     PASS_WITH_WARNING = "PASS_WITH_WARNING"
     FAIL_BLOCKING = "FAIL_BLOCKING"
     UNAVAILABLE = "UNAVAILABLE"
+    NOT_RUN_OPTIONAL = "NOT_RUN_OPTIONAL"
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +89,16 @@ class ReconciliationSymbolEvidence:
     warning_divergences: int
     blocking_divergences: int
     reason: str
+    secondary_candidates_attempted: tuple[ProviderAttempt, ...] = ()
+    primary_latest_session: date | None = None
+    secondary_latest_session: date | None = None
+    calendar_alignment: str = "NOT_CAPTURED"
+    max_return_diff: float | None = None
+    median_return_diff: float | None = None
+    large_divergence_ratio: float | None = None
+    latest_close_relative_difference: float | None = None
+    failure_category: str | None = None
+    cache_hit: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,6 +111,16 @@ class ProviderReconciliationCertificate:
     blocking_return_tolerance: float
     symbol_results: tuple[ReconciliationSymbolEvidence, ...]
     content_hash: str
+    reconciliation_window_start: date | None = None
+    reconciliation_window_end: date | None = None
+    minimum_overlap_sessions: int = 0
+    preferred_overlap_sessions: int = 0
+    latest_session_required: bool = True
+    required_certified: int = 0
+    required_total: int = 0
+    optional_certified: int = 0
+    optional_total: int = 0
+    provider_preflight: tuple[ProviderHealth, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,11 +157,11 @@ SecondaryFetcher = Callable[[ResearchAsset, date, date], Mapping[date, float]]
 
 
 class DataLineageCertifier:
-    """Create evidence for actions, independent prices and exact calendar coverage.
+    """Create strict single-source lineage and optional comparison evidence.
 
-    It does not downgrade failures.  A primary download and a fallback label are not
-    independent reconciliation; a required symbol is certified only when both evidence
-    chains are actually available and pass.
+    Daily certification is based on exact calendar coverage, point-in-time availability,
+    raw-price invariants and the corporate-action ledger.  Independent comparison is an
+    explicitly requested diagnostic and is never an actionable prerequisite.
     """
 
     def __init__(
@@ -147,11 +171,25 @@ class DataLineageCertifier:
         *,
         action_fetcher: ActionFetcher | None = None,
         secondary_fetcher: SecondaryFetcher | None = None,
+        provider_router: IndependentProviderRouter | None = None,
     ) -> None:
         self.session = session
         self.settings = settings
         self.action_fetcher = action_fetcher or self._fetch_yahoo_actions
-        self.secondary_fetcher = secondary_fetcher or self._fetch_secondary
+        self.secondary_fetcher = secondary_fetcher
+        self.provider_router = provider_router or build_independent_provider_router(
+            cache_dir=settings.market_data_provider_cache_dir,
+            timeout_seconds=settings.market_data_timeout_seconds,
+            max_retries=settings.market_data_max_retries,
+            retry_backoff_seconds=settings.market_data_retry_backoff_seconds,
+            twelve_api_key=settings.twelve_data_api_key,
+            alpha_api_key=settings.alpha_vantage_api_key,
+            priority=tuple(
+                item.strip().lower()
+                for item in settings.market_data_independent_provider_priority.split(",")
+                if item.strip()
+            ),
+        )
 
     def certify(
         self,
@@ -160,16 +198,37 @@ class DataLineageCertifier:
         start_date: date,
         analysis_date: date,
         decision_time: datetime,
+        source_by_symbol: Mapping[str, str] | None = None,
+        include_optional_reconciliation: bool = False,
     ) -> LineageEvidenceBundle:
         if decision_time.tzinfo is None:
             raise ValueError("decision_time must be timezone-aware")
-        primary = self._primary_prices(assets, start_date, analysis_date, decision_time)
+        primary = self._primary_prices(
+            assets,
+            start_date,
+            analysis_date,
+            decision_time,
+            source_by_symbol=source_by_symbol,
+        )
         action_certificate = self._certify_actions(
             assets, start_date, analysis_date, decision_time
         )
-        reconciliation, secondary_dates = self._reconcile(
-            assets, primary, start_date, analysis_date
-        )
+        if include_optional_reconciliation:
+            reconciliation_start = self._reconciliation_start(analysis_date)
+            comparison_primary = self._primary_prices(
+                assets,
+                reconciliation_start,
+                analysis_date,
+                decision_time,
+                source_by_symbol=source_by_symbol,
+            )
+            reconciliation, secondary_dates = self._reconcile(
+                assets, comparison_primary, reconciliation_start, analysis_date
+            )
+        else:
+            reconciliation, secondary_dates = self._optional_reconciliation_not_run(
+                assets, analysis_date
+            )
         coverage = self._coverage(
             assets, primary, secondary_dates, start_date, analysis_date
         )
@@ -201,6 +260,8 @@ class DataLineageCertifier:
         start_date: date,
         end_date: date,
         decision_time: datetime,
+        *,
+        source_by_symbol: Mapping[str, str] | None = None,
     ) -> dict[str, tuple[Price, ...]]:
         symbols = [item.ticker for item in assets]
         stocks = {
@@ -210,12 +271,16 @@ class DataLineageCertifier:
             )
         }
         result: dict[str, list[Price]] = {symbol: [] for symbol in symbols}
+        selected_sources = {
+            symbol: (source_by_symbol or {}).get(symbol, "yahoo_finance")
+            for symbol in symbols
+        }
         rows = self.session.scalars(
             select(Price)
             .where(
                 Price.stock_id.in_(stocks),
                 Price.trade_date.between(start_date, end_date),
-                Price.source == "yahoo_finance",
+                Price.source.in_(tuple(sorted(set(selected_sources.values())))),
                 Price.price_type.in_(("unadjusted_ohlcv", "index_level_ohlcv")),
                 Price.available_time.is_not(None),
                 Price.available_time <= decision_time,
@@ -223,8 +288,83 @@ class DataLineageCertifier:
             .order_by(Price.stock_id, Price.trade_date)
         )
         for row in rows:
-            result[stocks[row.stock_id]].append(row)
+            symbol = stocks[row.stock_id]
+            if row.source == selected_sources[symbol]:
+                result[symbol].append(row)
         return {symbol: tuple(values) for symbol, values in result.items()}
+
+    def _reconciliation_start(self, end_date: date) -> date:
+        """Return a real trading-session window, independent of incremental refresh size."""
+
+        preferred = self.settings.market_data_reconciliation_preferred_overlap_sessions
+        lookback_days = max(90, preferred * 3)
+        sessions = sorted(_xnys_dates(end_date - timedelta(days=lookback_days), end_date))
+        selected = sessions[-preferred:]
+        return selected[0] if selected else end_date
+
+    def _optional_reconciliation_not_run(
+        self,
+        assets: Sequence[ResearchAsset],
+        end_date: date,
+    ) -> tuple[ProviderReconciliationCertificate, dict[str, set[date]]]:
+        results = tuple(
+            ReconciliationSymbolEvidence(
+                symbol=asset.ticker,
+                status=EvidenceStatus.NOT_RUN_OPTIONAL,
+                secondary_provider="none",
+                primary_rows=0,
+                secondary_rows=0,
+                matched_rows=0,
+                coverage=0.0,
+                warning_divergences=0,
+                blocking_divergences=0,
+                reason="optional independent comparison was not requested by daily mode",
+                failure_category=None,
+            )
+            for asset in assets
+        )
+        payload = {
+            "status": EvidenceStatus.NOT_RUN_OPTIONAL.value,
+            "policy": "optional_diagnostic_not_actionable_prerequisite",
+            "symbols": [item.ticker for item in assets],
+            "end_date": end_date,
+        }
+        return (
+            ProviderReconciliationCertificate(
+                status=EvidenceStatus.NOT_RUN_OPTIONAL,
+                primary_provider="selected_primary_or_fallback",
+                secondary_providers=(
+                    "twelve_data",
+                    "alpha_vantage",
+                    "stooq",
+                    "cboe_global_indices",
+                ),
+                minimum_coverage=self.settings.market_data_reconciliation_minimum_coverage,
+                warning_return_tolerance=(
+                    self.settings.market_data_reconciliation_warning_return_tolerance
+                ),
+                blocking_return_tolerance=(
+                    self.settings.market_data_reconciliation_blocking_return_tolerance
+                ),
+                symbol_results=results,
+                content_hash=_hash(payload),
+                reconciliation_window_start=None,
+                reconciliation_window_end=end_date,
+                minimum_overlap_sessions=(
+                    self.settings.market_data_reconciliation_minimum_overlap_sessions
+                ),
+                preferred_overlap_sessions=(
+                    self.settings.market_data_reconciliation_preferred_overlap_sessions
+                ),
+                latest_session_required=True,
+                required_certified=0,
+                required_total=sum(item.required for item in assets),
+                optional_certified=0,
+                optional_total=sum(not item.required for item in assets),
+                provider_preflight=(),
+            ),
+            {},
+        )
 
     def _certify_actions(
         self,
@@ -329,47 +469,96 @@ class DataLineageCertifier:
     ) -> tuple[ProviderReconciliationCertificate, dict[str, set[date]]]:
         results: list[ReconciliationSymbolEvidence] = []
         secondary_dates: dict[str, set[date]] = {}
-        stooq_unavailable_reason: str | None = None
         session_dates = _xnys_dates(start_date, end_date)
+        ordered_sessions = sorted(session_dates)
+        preferred = self.settings.market_data_reconciliation_preferred_overlap_sessions
+        window_sessions = ordered_sessions[-preferred:]
+        reconciliation_start = window_sessions[0] if window_sessions else start_date
         for asset in assets:
             primary_close = {
                 item.trade_date: float(item.close)
                 for item in primary[asset.ticker]
-                if item.trade_date in session_dates
+                if item.trade_date in set(window_sessions)
             }
-            if asset.ticker != "^VIX" and stooq_unavailable_reason is not None:
+            if not primary_close:
                 results.append(
                     ReconciliationSymbolEvidence(
                         asset.ticker,
                         EvidenceStatus.UNAVAILABLE,
-                        "stooq",
-                        len(primary_close),
+                        "none",
+                        0,
                         0,
                         0,
                         0.0,
                         0,
                         0,
-                        stooq_unavailable_reason,
+                        "primary provider has no certified rows in the reconciliation window",
+                        failure_category=ProviderFailureCategory.EMPTY_RESPONSE.value,
                     )
                 )
                 continue
             try:
-                raw_secondary = dict(self.secondary_fetcher(asset, start_date, end_date))
+                expected_latest = max(primary_close)
+                if self.secondary_fetcher is not None:
+                    raw_secondary = dict(
+                        self.secondary_fetcher(asset, reconciliation_start, end_date)
+                    )
+                    provider_id = (
+                        "cboe_global_indices" if asset.ticker == "^VIX" else "fixture-secondary"
+                    )
+                    attempts: tuple[ProviderAttempt, ...] = ()
+                    cache_hit = False
+                elif asset.ticker == "^VIX":
+                    raw_secondary = dict(
+                        self._fetch_cboe_vix(asset, reconciliation_start, end_date)
+                    )
+                    provider_id = "cboe_global_indices"
+                    attempts = ()
+                    cache_hit = False
+                else:
+                    fetched = self.provider_router.fetch(
+                        asset,
+                        reconciliation_start,
+                        end_date,
+                        expected_latest_session=expected_latest,
+                    )
+                    raw_secondary = dict(fetched.prices)
+                    provider_id = fetched.provider_id
+                    attempts = fetched.attempts
+                    cache_hit = fetched.cache_hit
                 secondary = {
                     observed: value
                     for observed, value in raw_secondary.items()
-                    if observed in session_dates
+                    if observed in set(window_sessions)
                 }
                 secondary_dates[asset.ticker] = set(secondary)
-                results.append(self._compare(asset.ticker, primary_close, secondary))
+                results.append(
+                    self._compare(
+                        asset.ticker,
+                        primary_close,
+                        secondary,
+                        secondary_provider=provider_id,
+                        attempts=attempts,
+                        cache_hit=cache_hit,
+                        minimum_overlap_sessions=(
+                            0
+                            if self.secondary_fetcher is not None
+                            else self.settings.market_data_reconciliation_minimum_overlap_sessions
+                        ),
+                    )
+                )
             except (OSError, ProviderRequestError, RuntimeError, TypeError, ValueError) as exc:
-                if asset.ticker != "^VIX":
-                    stooq_unavailable_reason = str(exc)
+                category = (
+                    exc.category.value
+                    if isinstance(exc, IndependentProviderError)
+                    else ProviderFailureCategory.PROVIDER_UNAVAILABLE.value
+                )
+                attempts = exc.attempts if isinstance(exc, IndependentProviderError) else ()
                 results.append(
                     ReconciliationSymbolEvidence(
                         asset.ticker,
                         EvidenceStatus.UNAVAILABLE,
-                        "cboe_global_indices" if asset.ticker == "^VIX" else "stooq",
+                        "cboe_global_indices" if asset.ticker == "^VIX" else "none",
                         len(primary_close),
                         0,
                         0,
@@ -377,6 +566,11 @@ class DataLineageCertifier:
                         0,
                         0,
                         str(exc),
+                        attempts,
+                        max(primary_close, default=None),
+                        None,
+                        "UNAVAILABLE",
+                        failure_category=category,
                     )
                 )
         required = {item.ticker for item in assets if item.required}
@@ -402,17 +596,32 @@ class DataLineageCertifier:
             "status": status.value,
             "primary": "yahoo_finance",
             "symbols": [asdict(item) for item in results],
+            "window_start": reconciliation_start,
+            "window_end": end_date,
         }
+        passed = {EvidenceStatus.PASS, EvidenceStatus.PASS_WITH_WARNING}
+        required_results = [item for item in results if item.symbol in required]
+        optional_results = [item for item in results if item.symbol not in required]
         return (
             ProviderReconciliationCertificate(
                 status,
                 "yahoo_finance",
-                ("stooq", "cboe_global_indices"),
+                ("twelve_data", "alpha_vantage", "stooq", "cboe_global_indices"),
                 self.settings.market_data_reconciliation_minimum_coverage,
                 self.settings.market_data_reconciliation_warning_return_tolerance,
                 self.settings.market_data_reconciliation_blocking_return_tolerance,
                 tuple(results),
                 _hash(payload),
+                reconciliation_start,
+                end_date,
+                self.settings.market_data_reconciliation_minimum_overlap_sessions,
+                preferred,
+                True,
+                sum(item.status in passed for item in required_results),
+                len(required_results),
+                sum(item.status in passed for item in optional_results),
+                len(optional_results),
+                self.provider_router.health(),
             ),
             secondary_dates,
         )
@@ -422,12 +631,18 @@ class DataLineageCertifier:
         symbol: str,
         primary: Mapping[date, float],
         secondary: Mapping[date, float],
+        *,
+        secondary_provider: str = "stooq",
+        attempts: tuple[ProviderAttempt, ...] = (),
+        cache_hit: bool = False,
+        minimum_overlap_sessions: int = 0,
     ) -> ReconciliationSymbolEvidence:
         common = sorted(set(primary) & set(secondary))
         denominator = max(1, len(primary))
         coverage = len(common) / denominator
         warning = 0
         blocking = 0
+        return_differences: list[float] = []
         for previous, current in zip(common, common[1:], strict=False):
             if primary[previous] <= 0 or secondary[previous] <= 0:
                 blocking += 1
@@ -436,30 +651,72 @@ class DataLineageCertifier:
                 (primary[current] / primary[previous] - 1.0)
                 - (secondary[current] / secondary[previous] - 1.0)
             )
+            return_differences.append(delta)
             if delta > self.settings.market_data_reconciliation_blocking_return_tolerance:
                 blocking += 1
             elif delta > self.settings.market_data_reconciliation_warning_return_tolerance:
                 warning += 1
         ratio = blocking / max(1, len(common) - 1)
-        if coverage < self.settings.market_data_reconciliation_minimum_coverage:
+        primary_latest = max(primary, default=None)
+        secondary_latest = max(secondary, default=None)
+        first_common = common[0] if common else None
+        latest_close_difference = (
+            abs(
+                (primary[primary_latest] / primary[first_common])
+                / (secondary[secondary_latest] / secondary[first_common])
+                - 1.0
+            )
+            if primary_latest is not None
+            and secondary_latest is not None
+            and first_common is not None
+            and primary[first_common] > 0
+            and secondary[first_common] > 0
+            and secondary[secondary_latest] > 0
+            else None
+        )
+        minimum_overlap = minimum_overlap_sessions
+        if primary_latest is None or secondary_latest != primary_latest:
+            status = EvidenceStatus.FAIL_BLOCKING
+            reason = (
+                f"LATEST_SESSION_MISSING: secondary latest {secondary_latest} "
+                f"expected {primary_latest}"
+            )
+            failure_category = ProviderFailureCategory.LATEST_SESSION_MISSING.value
+        elif len(common) < minimum_overlap:
+            status = EvidenceStatus.FAIL_BLOCKING
+            reason = f"independent overlap {len(common)} below minimum {minimum_overlap}"
+            failure_category = "INSUFFICIENT_OVERLAP"
+        elif coverage < self.settings.market_data_reconciliation_minimum_coverage:
             status = EvidenceStatus.FAIL_BLOCKING
             reason = f"independent coverage {coverage:.2%} below minimum"
+            failure_category = "INSUFFICIENT_COVERAGE"
         elif ratio > self.settings.market_data_reconciliation_maximum_blocking_ratio:
             status = EvidenceStatus.FAIL_BLOCKING
             reason = f"blocking return divergence ratio {ratio:.2%}"
+            failure_category = "PRICE_DIVERGENCE"
+        elif (
+            latest_close_difference is not None
+            and latest_close_difference
+            > self.settings.market_data_reconciliation_blocking_return_tolerance
+        ):
+            status = EvidenceStatus.FAIL_BLOCKING
+            reason = f"latest close relative difference {latest_close_difference:.2%}"
+            failure_category = "LATEST_PRICE_DIVERGENCE"
         elif warning or blocking:
             status = EvidenceStatus.PASS_WITH_WARNING
             reason = (
                 f"{warning} warning and {blocking} blocking-threshold return "
                 "differences observed within the configured aggregate blocking ratio"
             )
+            failure_category = None
         else:
             status = EvidenceStatus.PASS
             reason = "normalized daily-return path reconciled"
+            failure_category = None
         return ReconciliationSymbolEvidence(
             symbol,
             status,
-            "cboe_global_indices" if symbol == "^VIX" else "stooq",
+            secondary_provider,
             len(primary),
             len(secondary),
             len(common),
@@ -467,6 +724,16 @@ class DataLineageCertifier:
             warning,
             blocking,
             reason,
+            attempts,
+            primary_latest,
+            secondary_latest,
+            "ALIGNED" if set(common) == set(primary) else "PARTIAL",
+            max(return_differences, default=None),
+            median(return_differences) if return_differences else None,
+            ratio,
+            latest_close_difference,
+            failure_category,
+            cache_hit,
         )
 
     def _coverage(
@@ -618,43 +885,25 @@ class DataLineageCertifier:
                     )
         return result
 
-    def _fetch_secondary(
+    def _fetch_cboe_vix(
         self, asset: ResearchAsset, start_date: date, end_date: date
     ) -> Mapping[date, float]:
-        if asset.ticker == "^VIX":
-            request = Request(
+        if asset.ticker != "^VIX":
+            raise ProviderRequestError("CBOE adapter supports ^VIX only")
+        request = Request(
                 "https://cdn.cboe.com/api/global/us_indices/daily_prices/VIX_History.csv",
                 headers={"User-Agent": "PersonalAlphaTerminal/1.1"},
             )
-            with urlopen(request, timeout=self.settings.market_data_timeout_seconds) as response:  # noqa: S310
-                payload = response.read().decode("utf-8-sig")
-            result: dict[date, float] = {}
-            for row in csv.DictReader(io.StringIO(payload)):
-                observed = datetime.strptime(row["DATE"], "%m/%d/%Y").date()
-                if start_date <= observed <= end_date:
-                    result[observed] = float(row["CLOSE"])
-            if not result:
-                raise ValueError("CBOE VIX history returned no comparable rows")
-            return result
-        adapter: StooqStockAdapter | StooqETFAdapter
-        if asset.asset_type == "stock":
-            adapter = StooqStockAdapter(timeout_seconds=self.settings.market_data_timeout_seconds)
-        elif asset.asset_type == "etf":
-            adapter = StooqETFAdapter(timeout_seconds=self.settings.market_data_timeout_seconds)
-        else:
-            raise ProviderRequestError("no independent secondary adapter for asset type")
-        batch = adapter.fetch_raw(
-            AssetPriceRequest(
-                symbol=asset.ticker,
-                market="US",
-                asset_type=asset.asset_type,  # type: ignore[arg-type]
-                price_currency="USD",
-                start_date=start_date,
-                end_date=end_date,
-            )
-        )
-        bars = PriceNormalizer().normalize(batch)
-        return {item.date: float(item.close) for item in bars}
+        with urlopen(request, timeout=self.settings.market_data_timeout_seconds) as response:  # noqa: S310
+            payload = response.read().decode("utf-8-sig")
+        result: dict[date, float] = {}
+        for row in csv.DictReader(io.StringIO(payload)):
+            observed = datetime.strptime(row["DATE"], "%m/%d/%Y").date()
+            if start_date <= observed <= end_date:
+                result[observed] = float(row["CLOSE"])
+        if not result:
+            raise ValueError("CBOE VIX history returned no comparable rows")
+        return result
 
 
 def write_evidence(path: Path, document: Mapping[str, Any]) -> str:

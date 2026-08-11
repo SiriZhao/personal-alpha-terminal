@@ -34,7 +34,14 @@ class _Credential(ctypes.Structure):
 
 def credential_target(provider: str) -> str:
     normalized = provider.strip().lower()
-    if normalized not in {"openai", "deepseek", "anthropic", "custom"}:
+    if normalized not in {
+        "openai",
+        "deepseek",
+        "anthropic",
+        "custom",
+        "twelve_data",
+        "alpha_vantage",
+    }:
         raise ValueError("unsupported credential provider")
     return f"{SERVICE_PREFIX}/{normalized}/api-key"
 
@@ -108,6 +115,8 @@ def load_credentials_into_environment() -> None:
         ("deepseek", "DEEPSEEK_API_KEY"),
         ("anthropic", "ANTHROPIC_API_KEY"),
         ("custom", "CUSTOM_API_KEY"),
+        ("twelve_data", "TWELVE_DATA_API_KEY"),
+        ("alpha_vantage", "ALPHA_VANTAGE_API_KEY"),
     ):
         if os.environ.get(variable):
             continue

@@ -1,11 +1,20 @@
 import os
 from logging.config import fileConfig
 
+import sqlalchemy as sa
 from alembic import context
 from sqlalchemy import engine_from_config, pool
+from sqlalchemy.sql.type_api import TypeEngine
 
 from personal_alpha_terminal.core.config import get_settings
 from personal_alpha_terminal.models import Base
+
+# Historical Alembic revisions legitimately reference ``sa.TypeEngine`` in
+# runtime-evaluated annotations.  Some frozen/packaged SQLAlchemy builds omit
+# this public re-export, so restore it here (the single place every migration
+# run passes through) without mutating the immutable revisions.
+if getattr(sa, "TypeEngine", None) is None:
+    setattr(sa, "TypeEngine", TypeEngine)  # noqa: B010 - compatibility export
 
 config = context.config
 if config.config_file_name is not None and config.attributes.get("configure_logger", True):

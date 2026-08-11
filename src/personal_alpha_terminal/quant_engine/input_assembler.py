@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timedelta
 
 import numpy as np
@@ -12,11 +12,16 @@ from personal_alpha_terminal.core.effective_config import EffectiveRuntimeConfig
 from personal_alpha_terminal.data.us_market.repository import USPointInTimeRepository
 from personal_alpha_terminal.models import Portfolio, PortfolioPosition, Price, SecurityMaster
 from personal_alpha_terminal.quant_engine.alpha import AlphaSignal
+from personal_alpha_terminal.quant_engine.benchmark import (
+    BenchmarkEvidence,
+    benchmark_evidence_from_returns,
+)
 from personal_alpha_terminal.quant_engine.model_registry import ModelRegistryService
 from personal_alpha_terminal.quant_engine.production_pipeline import DailyQuantInput
 from personal_alpha_terminal.quant_engine.risk.budget import (
     CorrelationRiskStatus,
     PortfolioRiskState,
+    RegimeRiskInput,
 )
 from personal_alpha_terminal.quant_engine.risk.model import AssetRiskMetadata
 from personal_alpha_terminal.quant_engine.strategies.us_adaptive_alpha_core import (
@@ -58,6 +63,13 @@ class AssembledDailyInput:
     benchmark_annualized_volatility: float | None
     portfolio_positions: tuple[PortfolioInputPosition, ...]
     cash_balance: float
+    benchmark_evidences: tuple[BenchmarkEvidence, ...] = ()
+    data_version: str = 'UNAVAILABLE'
+    universe_snapshot_id: str = 'UNAVAILABLE'
+    strategy_version: str = 'UNAVAILABLE'
+    model_approval_hash: str = 'NOT_APPROVED'
+    model_approval_data_version: str = 'NOT_APPROVED'
+    probability_artifact_id: str = 'OPTIONAL_UNAVAILABLE'
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,6 +92,11 @@ class AssembledResearchInput:
     benchmark_annualized_volatility: float | None
     universe_snapshot_id: str
     data_version: str
+    benchmark_evidences: tuple[BenchmarkEvidence, ...] = ()
+    strategy_version: str = 'UNAVAILABLE'
+    model_approval_hash: str = 'NOT_APPROVED'
+    model_approval_data_version: str = 'NOT_APPROVED'
+    probability_artifact_id: str = 'OPTIONAL_UNAVAILABLE'
 
 
 class ProductionDailyQuantInputAssembler:
@@ -130,9 +147,11 @@ class ProductionDailyQuantInputAssembler:
             raise ValueError("decision_time must be timezone-aware")
         universe = self.repository.certified_universe(as_of=decision_time)
         request = ResearchDataRequest(
-            purpose=ResearchPurpose.PORTFOLIO_DECISION,
+            # This first pass produces diagnostics even when no real portfolio is
+            # configured.  Portfolio construction has a separate approval gate.
+            purpose=ResearchPurpose.RESEARCH,
             market="US",
-            asset_type="stock",
+            asset_type="mixed",
             start_date=(decision_time - timedelta(days=history_days)).date(),
             end_date=decision_time.date(),
             decision_time=decision_time,
@@ -140,18 +159,16 @@ class ProductionDailyQuantInputAssembler:
             universe_snapshot_id=universe.snapshot_id,
         )
         authorization = ResearchDataGateService(self.session).authorize(request)
-        if any(
-            self.repository.tradability(item.id, as_of=decision_time) != "TRADABLE"
-            for item in universe.securities
-        ):
-            raise ValueError("universe contains UNKNOWN or non-tradable security status")
+        research_securities = tuple(
+            item for item in universe.securities if item.asset_type in {"stock", "etf"}
+        )
+        if not research_securities:
+            raise ValueError("certified live universe contains no research securities")
         start_time = decision_time - timedelta(days=history_days)
         price_frame, _versions = self.repository.total_return_frame(
-            universe.securities, as_of=decision_time, start_date=start_time
+            research_securities, as_of=decision_time, start_date=start_time
         )
-        metadata = self.repository.metadata_frame(universe.securities, as_of=decision_time)
-        if metadata["sector"].eq("UNKNOWN").any():
-            raise ValueError("certified sector metadata is required for portfolio construction")
+        metadata = self.repository.metadata_frame(research_securities, as_of=decision_time)
         registry = ModelRegistryService(self.session)
         record = registry.ensure_registered(
             model_id=self.strategy.model_id,
@@ -162,7 +179,7 @@ class ProductionDailyQuantInputAssembler:
                 "certified US universe",
                 "certified PIT corporate actions",
                 "certified raw prices",
-                "second-source reconciliation",
+                "strict selected-source calendar and PIT certification",
             ],
             hyperparameters={
                 **asdict(self.strategy.config),
@@ -181,15 +198,18 @@ class ProductionDailyQuantInputAssembler:
             parameter_fingerprint=self.strategy.config.parameter_fingerprint,
             decision_time=decision_time,
         )
+        approval_data_version = (
+            approval.data_version if approval is not None else 'NOT_APPROVED'
+        )
         calibration = self.validation_registry.matching_probability_calibration(
             ProbabilityCalibrationIdentity(
                 alpha_model_version=f"{self.strategy.model_id}:{self.strategy.version}",
-                alpha_data_version=universe.data_version,
+                alpha_data_version=approval_data_version,
                 strategy_parameter_hash=self.strategy.config.parameter_fingerprint,
             )
         )
         fundamentals = self.repository.fundamental_snapshot(
-            universe.securities, as_of=decision_time
+            research_securities, as_of=decision_time
         )
         strategy_result = self.strategy.generate(
             prices=price_frame,
@@ -241,7 +261,7 @@ class ProductionDailyQuantInputAssembler:
             strategy_result.disabled_components,
             strategy_result.parameter_fingerprint,
             strategy_result.factors,
-            len(universe.securities),
+            len(research_securities),
             returns.index.max().to_pydatetime(),
             tuple(authorization.evidence.source_ids) if authorization.evidence else (),
             benchmark_symbol,
@@ -258,6 +278,28 @@ class ProductionDailyQuantInputAssembler:
             ),
             universe.snapshot_id,
             universe.data_version,
+            tuple(
+                evidence
+                for evidence in (
+                    benchmark_evidence_from_returns(returns, benchmark_symbol),
+                    benchmark_evidence_from_returns(
+                        returns, self.effective_config.nasdaq_benchmark
+                    ),
+                )
+                if evidence is not None
+            ),
+            f'{self.strategy.model_id}:{self.strategy.version}:{strategy_result.parameter_fingerprint[:12]}',
+            (
+                approval.validation_manifest_hash
+                if approval is not None
+                else 'NOT_APPROVED'
+            ),
+            approval_data_version,
+            (
+                calibration.artifact_hash
+                if calibration is not None
+                else 'OPTIONAL_UNAVAILABLE'
+            ),
         )
 
     def complete_with_portfolio(
@@ -265,7 +307,23 @@ class ProductionDailyQuantInputAssembler:
         research: AssembledResearchInput,
         *,
         portfolio_id: int,
+        regime: RegimeRiskInput | None = None,
     ) -> AssembledDailyInput:
+        universe = self.repository.certified_universe(
+            as_of=research.decision_time,
+            snapshot_id=int(research.universe_snapshot_id),
+        )
+        if any(
+            self.repository.tradability(item.id, as_of=research.decision_time) != "TRADABLE"
+            for item in universe.securities
+            if item.asset_type in {"stock", "etf"}
+        ):
+            raise ValueError(
+                "formal portfolio construction requires certified TRADABLE status"
+            )
+        decision_authorization = ResearchDataGateService(self.session).authorize(
+            replace(research.authorization.request, purpose=ResearchPurpose.PORTFOLIO_DECISION)
+        )
         (
             current_weights,
             portfolio_value,
@@ -282,7 +340,7 @@ class ProductionDailyQuantInputAssembler:
         )
         return AssembledDailyInput(
             DailyQuantInput(
-                authorization=research.authorization,
+                authorization=decision_authorization,
                 decision_time=research.decision_time,
                 alpha_signals=research.alpha_signals,
                 returns=research.returns,
@@ -291,7 +349,7 @@ class ProductionDailyQuantInputAssembler:
                 current_weights=current_weights,
                 portfolio_value=portfolio_value,
                 portfolio_risk_state=risk_state,
-                regime=None,
+                regime=regime,
                 pit_valid=True,
                 universe_snapshot_id=research.universe_snapshot_id,
                 data_quality="CERTIFIED",
@@ -308,6 +366,13 @@ class ProductionDailyQuantInputAssembler:
             research.benchmark_annualized_volatility,
             portfolio_positions,
             cash_balance,
+            research.benchmark_evidences,
+            research.data_version,
+            research.universe_snapshot_id,
+            research.strategy_version,
+            research.model_approval_hash,
+            research.model_approval_data_version,
+            research.probability_artifact_id,
         )
 
     def _portfolio_state(

@@ -59,10 +59,12 @@ def test_unvalidated_or_nonpit_alpha_cannot_enter_daily_decision() -> None:
         signals, decision_time=NOW + timedelta(hours=1)
     )
     assert [item.signal_type for item in eligible] == ["volatility"]
-    assert not UnifiedAlphaEngine().for_decision(
+    uncalibrated = UnifiedAlphaEngine().for_decision(
         (_alpha(confidence_calibrated=False),),
         decision_time=NOW + timedelta(hours=1),
     )
+    assert len(uncalibrated) == 1
+    assert not uncalibrated[0].confidence_calibrated
 
 
 def test_conditional_probability_reports_baseline_and_expected_return_lift() -> None:

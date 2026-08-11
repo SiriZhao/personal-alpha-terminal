@@ -19,15 +19,16 @@ def test_daily_bar_quality_gate_handles_five_thousand_rows_within_budget() -> No
     while len(bars) < 5_000:
         if current.weekday() < 5:
             timestamps = daily_bar_timestamps(current, "US")
+            close = Decimal("100") + Decimal(len(bars) % 7) / Decimal("100")
             bars.append(
                 PriceBar(
                     symbol="PERF",
                     market="US",
                     date=current,
-                    open=Decimal("100"),
-                    high=Decimal("101"),
-                    low=Decimal("99"),
-                    close=Decimal("100"),
+                    open=close,
+                    high=close + 1,
+                    low=close - 1,
+                    close=close,
                     volume=1_000_000,
                     event_time=timestamps.event_time,
                     available_time=timestamps.available_time,

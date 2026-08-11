@@ -99,6 +99,9 @@ def test_initial_migration_builds_versioned_schema() -> None:
             revision = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
+        portfolio_columns = {
+            item["name"] for item in inspect(engine).get_columns("portfolios")
+        }
         health = inspect_database_health(engine)
     finally:
         engine.dispose()
@@ -173,11 +176,12 @@ def test_initial_migration_builds_versioned_schema() -> None:
     assert "ix_portfolio_positions_stock_id" in portfolio_position_indexes
     assert "ix_market_graph_edges_source_stock_id" in graph_edge_indexes
     assert "ix_market_graph_edges_target_stock_id" in graph_edge_indexes
-    assert revision == "d4a5b6c7d8e9"
+    assert revision == "e5f6a7b8c9d0"
+    assert {"source", "schema_version"} <= portfolio_columns
     assert not any(table.startswith("paper_") for table in tables)
     assert not health.ready
     assert health.dialect == "sqlite"
-    assert health.current_revision == "d4a5b6c7d8e9"
+    assert health.current_revision == "e5f6a7b8c9d0"
 
 
 def test_production_index_migration_round_trip() -> None:
@@ -214,5 +218,5 @@ def test_production_index_migration_round_trip() -> None:
 
     assert downgraded_revision == "e19f7b3c4a62"
     assert "ix_market_graph_edges_source_stock_id" not in downgraded_indexes
-    assert upgraded_revision == "d4a5b6c7d8e9"
+    assert upgraded_revision == "e5f6a7b8c9d0"
     assert "ix_market_graph_edges_source_stock_id" in upgraded_indexes
