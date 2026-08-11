@@ -29,6 +29,8 @@ var/
 data/cache/
 data/raw/
 data/processed/
+data/research/imports/
+data/research/snapshots/
 source_audit_export/
 logs/
 /reports/
