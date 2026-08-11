@@ -88,10 +88,16 @@ def test_incomplete_survivorship_evidence_is_not_certifiable(tmp_path) -> None:
 def test_approval_requires_exact_strategy_parameter_and_research_data_identity() -> None:
     artifact = certify_strategy(_evidence(), created_at=datetime(2026, 8, 11, tzinfo=UTC))
     identity = StrategyApprovalIdentity(
-        "strategy:1", "params", "pit-history-1", "data-hash-1", "manifest-hash-1"
+        "strategy:1",
+        "params",
+        "pit-history-1",
+        "universe-history-1",
+        "data-hash-1",
+        "manifest-hash-1",
     )
     assert approval_matches(artifact, identity)
     assert not approval_matches(artifact, replace(identity, parameter_hash="params-v2"))
+    assert not approval_matches(artifact, replace(identity, universe_version="new-policy"))
     assert not approval_matches(artifact, replace(identity, research_data_hash="changed"))
 
 

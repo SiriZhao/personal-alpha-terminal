@@ -649,14 +649,51 @@ def _research_data_command(args: argparse.Namespace) -> int:
     """Operate the isolated historical research-data store only."""
 
     from personal_alpha_terminal.application.research_data_service import (
+        acquire_available_historical_data,
         audit_local_live_inventory,
+        audited_provider_capabilities,
         import_and_certify_research_data,
+        read_latest_acquisition_manifest,
         read_latest_research_manifest,
         recertify_latest_research_data,
     )
 
     action = str(args.research_data_action)
     root = cast(Path, args.root)
+    if action == "providers":
+        table = Table(title="历史研究数据 Provider 能力（官方资料审计）")
+        for column in (
+            "Provider", "价格", "退市", "永久ID", "历史成员", "公司行动", "PIT/Vintage", "认证等级"
+        ):
+            table.add_column(column)
+        for item in audited_provider_capabilities():
+            table.add_row(
+                item.provider_id,
+                item.raw_ohlcv.value,
+                item.delisted_securities.value,
+                item.permanent_identifiers.value,
+                item.historical_membership.value,
+                item.corporate_actions.value,
+                item.pit_vintages.value,
+                item.certification_grade,
+            )
+        console.print(table)
+        return 0
+    if action == "acquire":
+        baseline, acquisition, baseline_path, acquisition_path = (
+            acquire_available_historical_data(
+                config_path=cast(Path, args.config),
+                database=cast(Path, args.database),
+                root=root,
+            )
+        )
+        console.print(
+            json.dumps(acquisition.document(), ensure_ascii=False, indent=2, sort_keys=True)
+        )
+        console.print(f"Research baseline: {baseline.research_baseline_id}")
+        console.print(f"Baseline: {baseline_path.resolve()}")
+        console.print(f"Manifest: {acquisition_path.resolve()}")
+        return 0 if acquisition.production_eligible else 3
     if action == "audit":
         audit = audit_local_live_inventory(cast(Path, args.database), datetime.now(UTC))
         console.print(json.dumps(audit.document(), ensure_ascii=False, indent=2, sort_keys=True))
@@ -684,8 +721,36 @@ def _research_data_command(args: argparse.Namespace) -> int:
         return 0 if manifest.certification_state.value == "CERTIFIED" else 3
     latest = read_latest_research_manifest(root)
     if latest is None:
-        console.print("NOT_CERTIFIABLE: no imported historical research dataset")
-        return 3
+        latest_acquisition = read_latest_acquisition_manifest(root)
+        if latest_acquisition is None:
+            console.print("NOT_CERTIFIABLE: no imported or acquired historical research dataset")
+            return 3
+        path, document = latest_acquisition
+        if action == "manifest":
+            console.print(json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True))
+            console.print(f"Manifest: {path.resolve()}")
+        else:
+            table = Table(title="历史研究数据状态")
+            table.add_column("字段")
+            table.add_column("值")
+            for key in (
+                "classification",
+                "actual_price_start",
+                "actual_price_end",
+                "current_directory_securities",
+                "historical_security_count",
+                "historical_membership_rows",
+                "delisted_count",
+                "calendar_sessions",
+                "benchmark_rows",
+                "research_dataset_content_hash",
+                "production_eligible",
+            ):
+                table.add_row(key, str(document.get(key)))
+            table.add_row("blockers", ", ".join(document.get("blockers", [])))
+            console.print(table)
+            console.print(f"Manifest: {path.resolve()}")
+        return 0 if document.get("production_eligible") is True else 3
     path, document = latest
     if action == "manifest":
         console.print(json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True))
@@ -830,6 +895,8 @@ def build_parser() -> argparse.ArgumentParser:
     research_data.add_argument("--database", type=Path, default=Path("var/personal_alpha.db"))
     research_actions = research_data.add_subparsers(dest="research_data_action", required=True)
     research_actions.add_parser("status")
+    research_actions.add_parser("providers")
+    research_actions.add_parser("acquire")
     research_actions.add_parser("audit")
     research_actions.add_parser("certify")
     research_actions.add_parser("manifest")

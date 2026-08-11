@@ -328,6 +328,54 @@ def certify_research_package(
     if not package.calendar:
         blockers.append("EXCHANGE_CALENDAR_INCOMPLETE")
 
+    _reject_duplicate_keys(
+        (
+            (item.permanent_security_id, item.ticker, item.ticker_valid_from, item.provider)
+            for item in package.securities
+        ),
+        "DUPLICATE_SECURITY_VINTAGE",
+        rejected,
+    )
+    _reject_duplicate_keys(
+        (
+            (
+                item.permanent_security_id,
+                item.universe_id,
+                item.effective_from,
+                item.provider,
+            )
+            for item in package.memberships
+        ),
+        "DUPLICATE_MEMBERSHIP_ROW",
+        rejected,
+    )
+    _reject_duplicate_keys(
+        (
+            (item.permanent_security_id, item.observation_date, item.provider)
+            for item in package.prices
+        ),
+        "DUPLICATE_PRICE_ROW",
+        rejected,
+    )
+    _reject_duplicate_keys(
+        (
+            (
+                item.permanent_security_id,
+                item.action_type,
+                item.effective_date,
+                item.provider,
+            )
+            for item in package.corporate_actions
+        ),
+        "DUPLICATE_CORPORATE_ACTION_ROW",
+        rejected,
+    )
+    _reject_duplicate_keys(
+        ((item.calendar_id, item.session_date, item.provider) for item in package.calendar),
+        "DUPLICATE_CALENDAR_ROW",
+        rejected,
+    )
+
     _validate_ticker_vintages(package.securities, rejected)
     for membership in package.memberships:
         if membership.permanent_security_id not in securities:
@@ -612,9 +660,15 @@ def generate_xnys_sessions(
 
     import exchange_calendars as xcals  # type: ignore[import-untyped]
 
-    calendar = xcals.get_calendar("XNYS")
+    # Pass the requested bounds explicitly.  exchange_calendars otherwise
+    # materializes only its moving default window, which made reproducible
+    # long-history manifests depend on the workstation's current date.
+    calendar = xcals.get_calendar("XNYS", start=start, end=end)
     version = importlib.metadata.version("exchange-calendars")
-    sessions = calendar.sessions_in_range(start, end)
+    # ``start`` or ``end`` may be a holiday.  The calendar was already built
+    # with those inclusive bounds, so its materialized sessions are the safe
+    # range and do not require both boundary dates themselves to be sessions.
+    sessions = calendar.sessions
     output: list[ExchangeSession] = []
     for session in sessions:
         opened = calendar.session_open(session).to_pydatetime()
@@ -645,6 +699,14 @@ def _validate_ticker_vintages(
         for left, right in zip(ordered, ordered[1:], strict=False):
             if left.ticker_valid_to is None or left.ticker_valid_to >= right.ticker_valid_from:
                 rejected.append("TICKER_VINTAGE_OVERLAP")
+
+
+def _reject_duplicate_keys(
+    keys: Iterable[tuple[object, ...]], code: str, rejected: list[str]
+) -> None:
+    material = tuple(keys)
+    if len(set(material)) != len(material):
+        rejected.append(code)
 
 
 def _validate_lifecycle(package: ResearchDatasetPackage, blockers: list[str]) -> None:

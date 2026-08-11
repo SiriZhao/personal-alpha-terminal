@@ -4,11 +4,23 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import subprocess
 from dataclasses import asdict, dataclass
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, cast
 
+from personal_alpha_terminal.core.effective_config import resolve_effective_runtime_config
+from personal_alpha_terminal.data.us_market.broad_universe import read_directory_snapshot
+from personal_alpha_terminal.quant_engine.historical_data_acquisition import (
+    HistoricalAcquisitionManifest,
+    ProviderCapabilityEvidence,
+    ResearchBaseline,
+    audit_available_historical_layers,
+    build_research_baseline,
+    persist_acquisition_evidence,
+    provider_capability_matrix,
+)
 from personal_alpha_terminal.quant_engine.research_data import (
     DataDomain,
     ResearchDataCapabilities,
@@ -177,6 +189,88 @@ def recertify_latest_research_data(
     if manifest.manifest_hash != document.get("manifest_hash"):
         raise ValueError("persisted research manifest does not reproduce")
     return manifest, path
+
+
+def audited_provider_capabilities() -> tuple[ProviderCapabilityEvidence, ...]:
+    """Return the dated official-source capability matrix used for decisions."""
+
+    return provider_capability_matrix()
+
+
+def acquire_available_historical_data(
+    *,
+    config_path: Path,
+    database: Path,
+    root: Path,
+) -> tuple[ResearchBaseline, HistoricalAcquisitionManifest, Path, Path]:
+    """Publish the real locally available layers without upgrading their scope."""
+
+    config = resolve_effective_runtime_config(config_path)
+    directory_path = config.cache_dir / "us-current-directory" / "latest.json"
+    if not directory_path.exists():
+        raise FileNotFoundError(
+            "current official directory cache is missing; run the normal live refresh first"
+        )
+    directory = read_directory_snapshot(directory_path)
+    git_head, git_commit_time = _git_identity(config_path.parent)
+    required_end = _latest_live_price_date(database) or directory.retrieved_at.date()
+    baseline = build_research_baseline(
+        config,
+        git_head=git_head,
+        git_commit_time=git_commit_time,
+        required_end=required_end,
+    )
+    acquisition = audit_available_historical_layers(
+        database=database,
+        directory=directory,
+        baseline=baseline,
+    )
+    baseline_path, acquisition_path = persist_acquisition_evidence(
+        baseline, acquisition, root
+    )
+    return baseline, acquisition, baseline_path, acquisition_path
+
+
+def read_latest_acquisition_manifest(root: Path) -> tuple[Path, dict[str, Any]] | None:
+    pointer_path = root / "latest-acquisition.json"
+    if not pointer_path.exists():
+        return None
+    pointer = cast(dict[str, Any], json.loads(pointer_path.read_text(encoding="utf-8")))
+    manifest_path = Path(str(pointer["manifest_path"]))
+    if not manifest_path.exists():
+        raise FileNotFoundError(f"acquisition manifest pointer is broken: {manifest_path}")
+    document = cast(
+        dict[str, Any], json.loads(manifest_path.read_text(encoding="utf-8"))
+    )
+    if document.get("manifest_hash") != pointer.get("manifest_hash"):
+        raise ValueError("latest acquisition pointer hash does not match manifest")
+    return manifest_path, document
+
+
+def _git_identity(root: Path) -> tuple[str, datetime]:
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    commit_time = subprocess.run(
+        ["git", "show", "-s", "--format=%cI", "HEAD"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    return head, datetime.fromisoformat(commit_time)
+
+
+def _latest_live_price_date(database: Path) -> date | None:
+    uri = f"file:{database.resolve().as_posix()}?mode=ro"
+    with sqlite3.connect(uri, uri=True) as connection:
+        row = connection.execute("SELECT max(trade_date) FROM prices").fetchone()
+    value = row[0] if row else None
+    return date.fromisoformat(str(value)) if value else None
 
 
 def _count(connection: sqlite3.Connection, table: str) -> int:

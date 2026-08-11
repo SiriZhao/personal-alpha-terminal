@@ -33,6 +33,10 @@ data/research/imports/
 data/research/snapshots/
 data/research/raw/
 data/research/certified/
+data/research/acquisition/
+data/research/checkpoints/
+*.checkpoint.json
+*.part
 source_audit_export/
 logs/
 /reports/

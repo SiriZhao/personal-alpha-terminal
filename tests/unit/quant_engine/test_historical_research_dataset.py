@@ -239,6 +239,34 @@ def test_content_hash_is_row_level_not_inventory_and_is_reproducible() -> None:
     assert changed.dataset_version != first.dataset_version
 
 
+def test_duplicate_provider_rows_are_rejected_deterministically() -> None:
+    package = _complete_package()
+    duplicated = replace(package, prices=(*package.prices, package.prices[0]))
+    first = certify_research_package(duplicated)
+    second = certify_research_package(duplicated)
+    assert first.certification_state is ResearchDatasetState.REJECTED
+    assert "DUPLICATE_PRICE_ROW" in first.blockers
+    assert first.manifest_hash == second.manifest_hash
+
+
+def test_ticker_reuse_does_not_merge_unrelated_permanent_ids() -> None:
+    package = _complete_package()
+    reused = replace(
+        package.securities[2],
+        permanent_security_id="SEC-REUSED-INDEPENDENT",
+        ticker="OLD",
+        ticker_valid_from=date(2025, 1, 1),
+        ticker_valid_to=None,
+        listing_date=date(2025, 1, 1),
+        delisting_date=None,
+        delisting_reason="UNKNOWN",
+    )
+    identities = {item.permanent_security_id for item in (*package.securities, reused)}
+    assert "SEC-ALPHA" in identities
+    assert "SEC-REUSED-INDEPENDENT" in identities
+    assert len(identities) == 3
+
+
 def test_incomplete_research_data_is_not_certifiable() -> None:
     package = _complete_package()
     manifest = certify_research_package(

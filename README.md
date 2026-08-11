@@ -85,12 +85,16 @@ Yahoo Finance 是当前 daily 主 provider；Twelve Data、Alpha Vantage、Stooq
 `LIVE_DAILY_DATA` 与历史研究数据严格隔离。当前 ticker list 不得倒填历史，今天下载的最终 adjusted series 不能冒充历史 PIT total-return vintage。研究导入独立运行：
 
 ```powershell
+python main.py research-data providers
 python main.py research-data audit
+python main.py research-data acquire
 python main.py research-data status
 python main.py research-data import <csv-parquet-or-sqlite>
 python main.py research-data certify
 python main.py research-data manifest
 ```
+
+`providers` 展示基于官方文档审计的 capability/license matrix；`acquire` 只盘点并哈希当前合法可得的数据层，不会自动购买数据、抓取多年历史或把 current directory 升级成 historical membership。大规模 raw import、checkpoint、cache、SQLite/Parquet 数据均保存在 Git ignored research storage；Git 只保存 schema、代码、小型 fixture 与机器 manifest。
 
 当前研究数据仍为 `NOT_CERTIFIABLE`：缺历史 membership、delisting、identifier history、PIT corporate actions、PIT total-return 和绑定数据集的完整 calendar。`USAdaptiveAlphaCoreV1:1.0.0` 因此保持 `DIAGNOSTIC_ONLY`，生产批准注册表为空。前向实际运行记录可以积累真实证据，但不替代 survivorship-safe 历史 locked OOS / walk-forward / after-cost 认证。
 
@@ -122,13 +126,16 @@ Probability Overlay 已有正式 consumer 链：Base expected excess return → 
 
 - `artifacts/latest/universe_certification.json`
 - `artifacts/latest/probability_overlay_certification.json`
+- `artifacts/latest/historical_research_baseline.json`
+- `artifacts/latest/historical_data_acquisition.json`
 
 它们由以下命令从真实 daily run/config/cache 派生并计算 hash：
 
 ```powershell
 python scripts/export_broad_universe_probability_certifications.py --config config.yaml
+python scripts/export_historical_data_acquisition.py --config config.yaml
 ```
 
 详细审计见 [Broad Universe 与 Probability Overlay 报告](docs/BROAD_UNIVERSE_PROBABILITY_OVERLAY_REPORT.md)。
 
-更多资料：[统一主链收口报告](docs/UNIFIED_LIVE_CLOSURE_REPORT.md)、[中文终端架构](docs/CHINESE_TERMINAL_ARCHITECTURE.md)、[历史数据基础报告](docs/RESEARCH_DATA_FOUNDATION_REPORT.md)、[Alpha 研究认证报告](docs/ALPHA_RESEARCH_CERTIFICATION_REPORT.md)。
+更多资料：[统一主链收口报告](docs/UNIFIED_LIVE_CLOSURE_REPORT.md)、[中文终端架构](docs/CHINESE_TERMINAL_ARCHITECTURE.md)、[历史数据基础报告](docs/RESEARCH_DATA_FOUNDATION_REPORT.md)、[历史数据获取与认证报告](docs/HISTORICAL_DATA_ACQUISITION_REPORT.md)、[Provider 决策](docs/DATA_PROVIDER_DECISION.md)、[Alpha 研究认证报告](docs/ALPHA_RESEARCH_CERTIFICATION_REPORT.md)。

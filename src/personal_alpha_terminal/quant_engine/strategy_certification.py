@@ -235,6 +235,7 @@ class StrategyApprovalIdentity:
     strategy_version: str
     parameter_hash: str
     data_version: str
+    universe_version: str
     research_data_hash: str
     research_manifest_hash: str
 
@@ -252,6 +253,7 @@ def persist_approval_artifact(
         strategy_version=evidence.strategy_version,
         parameter_hash=evidence.parameter_hash,
         data_version=evidence.data_version,
+        universe_version=evidence.universe_version,
         research_data_hash=evidence.research_data_hash,
         research_manifest_hash=evidence.research_manifest_hash,
     )
@@ -280,6 +282,7 @@ def approval_matches(
         and evidence.strategy_version == identity.strategy_version
         and evidence.parameter_hash == identity.parameter_hash
         and evidence.data_version == identity.data_version
+        and evidence.universe_version == identity.universe_version
         and evidence.research_data_hash == identity.research_data_hash
         and evidence.research_manifest_hash == identity.research_manifest_hash
     )
