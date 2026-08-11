@@ -69,6 +69,7 @@ class StrategyCertificationEvidence:
     spread_bps: float
     slippage_bps: float
     impact_bps: float
+    research_data_use_scope: str = "PRODUCTION"
 
 
 @dataclass(frozen=True)
@@ -116,6 +117,9 @@ def certify_strategy(
         not_certifiable = True
     if evidence.data_certification_state != "CERTIFIED":
         blockers.append("SURVIVORSHIP_DATA_INSUFFICIENT")
+        not_certifiable = True
+    if evidence.research_data_use_scope != "PRODUCTION":
+        blockers.append("RESEARCH_DATA_NOT_PRODUCTION_ELIGIBLE")
         not_certifiable = True
     if not evidence.research_data_hash:
         blockers.append("RESEARCH_DATA_CONTENT_HASH_MISSING")

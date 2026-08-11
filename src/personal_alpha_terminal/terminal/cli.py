@@ -611,6 +611,67 @@ def _research(config_path: Path) -> int:
     return 2 if result.status == "failed" else 0
 
 
+def _research_data_command(args: argparse.Namespace) -> int:
+    """Operate the isolated historical research-data store only."""
+
+    from personal_alpha_terminal.application.research_data_service import (
+        audit_local_live_inventory,
+        import_and_certify_research_data,
+        read_latest_research_manifest,
+        recertify_latest_research_data,
+    )
+
+    action = str(args.research_data_action)
+    root = cast(Path, args.root)
+    if action == "audit":
+        audit = audit_local_live_inventory(cast(Path, args.database), datetime.now(UTC))
+        console.print(json.dumps(audit.document(), ensure_ascii=False, indent=2, sort_keys=True))
+        return 3
+    if action == "import":
+        manifest, path = import_and_certify_research_data(
+            cast(Path, args.path),
+            root,
+            required_start=(
+                date.fromisoformat(args.required_start) if args.required_start else None
+            ),
+            required_end=(date.fromisoformat(args.required_end) if args.required_end else None),
+        )
+        console.print(json.dumps(manifest.document(), ensure_ascii=False, indent=2, sort_keys=True))
+        console.print(f"Manifest: {path.resolve()}")
+        return 0 if manifest.certification_state.value == "CERTIFIED" else 3
+    if action == "certify":
+        certified = recertify_latest_research_data(root)
+        if certified is None:
+            console.print("NOT_CERTIFIABLE: no imported historical research dataset")
+            return 3
+        manifest, path = certified
+        console.print(json.dumps(manifest.document(), ensure_ascii=False, indent=2, sort_keys=True))
+        console.print(f"Reproduced manifest: {path.resolve()}")
+        return 0 if manifest.certification_state.value == "CERTIFIED" else 3
+    latest = read_latest_research_manifest(root)
+    if latest is None:
+        console.print("NOT_CERTIFIABLE: no imported historical research dataset")
+        return 3
+    path, document = latest
+    if action == "manifest":
+        console.print(json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True))
+        console.print(f"Manifest: {path.resolve()}")
+    else:
+        table = Table(title="RESEARCH DATA STATUS")
+        table.add_column("Field")
+        table.add_column("Value")
+        for key in (
+            "certification_state", "date_start", "date_end", "security_count",
+            "membership_count", "delisted_count", "corporate_action_count",
+            "calendar_session_count", "content_hash", "production_eligible",
+        ):
+            table.add_row(key, str(document.get(key)))
+        table.add_row("blockers", ", ".join(document.get("blockers", [])))
+        console.print(table)
+        console.print(f"Manifest: {path.resolve()}")
+    return 0 if document.get("certification_state") == "CERTIFIED" else 3
+
+
 def _backtest_status(config_path: Path) -> int:
     from personal_alpha_terminal.application.backtest_service import BacktestService
 
@@ -726,6 +787,22 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("settings", help="Show the active terminal configuration path")
     subparsers.add_parser("version", help="Show application version")
     subparsers.add_parser("research", help="Run the audited local research pipeline")
+    research_data = subparsers.add_parser(
+        "research-data", help="Audit or import isolated historical research data"
+    )
+    research_data.add_argument("--root", type=Path, default=Path("var/research-data"))
+    research_data.add_argument("--database", type=Path, default=Path("var/personal_alpha.db"))
+    research_actions = research_data.add_subparsers(
+        dest="research_data_action", required=True
+    )
+    research_actions.add_parser("status")
+    research_actions.add_parser("audit")
+    research_actions.add_parser("certify")
+    research_actions.add_parser("manifest")
+    research_import = research_actions.add_parser("import")
+    research_import.add_argument("path", type=Path)
+    research_import.add_argument("--required-start", default=None)
+    research_import.add_argument("--required-end", default=None)
     subparsers.add_parser("backtest", help="Check the PIT backtest execution gate")
     subparsers.add_parser("init-config")
     data_provider = subparsers.add_parser(
@@ -834,6 +911,8 @@ def main(argv: list[str] | None = None) -> int:
             )
         if command == "research":
             return _research(args.config)
+        if command == "research-data":
+            return _research_data_command(args)
         if command == "backtest":
             return _backtest_status(args.config)
         if command == "explain":

@@ -19,8 +19,18 @@ from personal_alpha_terminal.core.fingerprints import fingerprint
 
 class ResearchDatasetState(StrEnum):
     CERTIFIED = "CERTIFIED"
+    PARTIAL = "PARTIAL"
     NOT_CERTIFIABLE = "NOT_CERTIFIABLE"
+    REJECTED = "REJECTED"
     DATA_NOT_AVAILABLE = "DATA_NOT_AVAILABLE"
+
+
+class DataDomain(StrEnum):
+    """Hard boundary between live observations and research evidence."""
+
+    LIVE_DAILY_DATA = "LIVE_DAILY_DATA"
+    RESEARCH_RAW_DATA = "RESEARCH_RAW_DATA"
+    RESEARCH_CERTIFIED_DATA = "RESEARCH_CERTIFIED_DATA"
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,6 +64,7 @@ class ResearchDataInventory:
     latest_universe_version: str | None
     latest_live_data_version: str | None
     capabilities: ResearchDataCapabilities
+    data_domain: DataDomain = DataDomain.LIVE_DAILY_DATA
 
     def __post_init__(self) -> None:
         if self.cutoff.tzinfo is None:
@@ -129,6 +140,7 @@ class ResearchDatasetManifest:
     blockers: tuple[str, ...]
     capabilities: ResearchDataCapabilities
     manifest_hash: str
+    data_domain: DataDomain = DataDomain.LIVE_DAILY_DATA
 
     def document(self) -> dict[str, object]:
         return cast(
@@ -173,17 +185,17 @@ def audit_research_inventory(inventory: ResearchDataInventory) -> ResearchDatase
         ResearchDatasetState.DATA_NOT_AVAILABLE
         if inventory.raw_price_rows == 0
         else ResearchDatasetState.NOT_CERTIFIABLE
-        if blockers
-        else ResearchDatasetState.CERTIFIED
+        if blockers or inventory.data_domain is not DataDomain.RESEARCH_CERTIFIED_DATA
+        else ResearchDatasetState.NOT_CERTIFIABLE
     )
+    if not blockers:
+        blockers.append("RESEARCH_DATA_CONTENT_HASH_MISSING")
     inventory_payload = asdict(inventory)
     inventory_hash = fingerprint(inventory_payload)
     # A content hash is intentionally absent until an adapter supplies and hashes
     # the complete row-level dataset.  Hashing an inventory is not a substitute.
-    content_hash = None if state is not ResearchDatasetState.CERTIFIED else inventory_hash
-    dataset_version = (
-        f"research-{inventory_hash}" if state is ResearchDatasetState.CERTIFIED else None
-    )
+    content_hash = None
+    dataset_version = None
     material: dict[str, object] = {
         "dataset_id": inventory.dataset_id,
         "dataset_version": dataset_version,
@@ -198,6 +210,7 @@ def audit_research_inventory(inventory: ResearchDataInventory) -> ResearchDatase
         "certification_state": state,
         "blockers": tuple(blockers),
         "capabilities": capabilities,
+        "data_domain": inventory.data_domain,
     }
     return ResearchDatasetManifest(
         dataset_id=inventory.dataset_id,
@@ -214,6 +227,7 @@ def audit_research_inventory(inventory: ResearchDataInventory) -> ResearchDatase
         blockers=tuple(blockers),
         capabilities=capabilities,
         manifest_hash=fingerprint(material),
+        data_domain=inventory.data_domain,
     )
 
 

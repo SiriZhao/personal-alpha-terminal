@@ -31,6 +31,8 @@ data/raw/
 data/processed/
 data/research/imports/
 data/research/snapshots/
+data/research/raw/
+data/research/certified/
 source_audit_export/
 logs/
 /reports/
