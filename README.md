@@ -45,7 +45,21 @@ python main.py doctor
 
 Read the top-level `ACTIONABLE` / `NON_ACTIONABLE` classification and primary blockers first. Evidence is stored under the configured `reports/daily-runs/<run_id>/` as a result snapshot and run certificate with canonical input/result hashes. Runtime reports, databases, caches, `.env`, credentials, and real portfolio data are ignored by Git.
 
-Strategy production approval requires chronological train/validation/locked-OOS or walk-forward evidence, identical PIT convention for SPY and QQQ, survivorship and corporate-action controls, commissions/spread/slippage/impact, and acceptable turnover, drawdown, concentration, benchmark alpha, and stability. `quant_engine.strategy_certification` evaluates and hashes that evidence; failing evidence produces `BLOCKED`, never an approval artifact.
+Strategy production approval requires chronological train/validation/locked-OOS or walk-forward evidence, identical PIT convention for SPY and QQQ, survivorship and corporate-action controls, commissions/spread/slippage/impact, and acceptable turnover, drawdown, concentration, benchmark alpha, and stability. `quant_engine.strategy_certification` evaluates and hashes that evidence; insufficient data produces `NOT_CERTIFIABLE`, failed alpha/risk gates produce `REJECTED`, and neither can create an approval artifact.
+
+Historical research uses a separate provider-neutral contract in
+`quant_engine.research_data`; `LIVE_DAILY_DATA` is never silently reclassified as
+`RESEARCH_CERTIFIED_DATA`. Audit local capability without downloading data or
+changing portfolio state:
+
+```powershell
+python scripts/run_alpha_research_certification.py --cutoff 2026-08-11T09:58:57.456915+00:00
+```
+
+Exit code 3 with `NOT_CERTIFIABLE` is expected when historical membership,
+delistings, PIT corporate actions, or locked OOS evidence is absent. Large imported
+research rows belong under ignored `data/research/`; only versioned manifests,
+content hashes, and concise research reports belong in Git.
 
 ## Configuration
 
