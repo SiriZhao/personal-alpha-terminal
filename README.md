@@ -45,6 +45,36 @@ python main.py doctor
 
 Read the top-level `ACTIONABLE` / `NON_ACTIONABLE` classification and primary blockers first. Evidence is stored under the configured `reports/daily-runs/<run_id>/` as a result snapshot and run certificate with canonical input/result hashes. Runtime reports, databases, caches, `.env`, credentials, and real portfolio data are ignored by Git.
 
+## Paper trading and forward validation
+
+Paper trading is a separate, append-only simulation domain. It does not use the real portfolio database,
+place broker orders, create a production approval, or turn a diagnostic candidate into a real action.
+Initialize the fixed USD 100,000 cash-only portfolio and frozen experiment with:
+
+```powershell
+python main.py portfolio-init --portfolio-id paper-100k --mode paper --cash 100000 --currency USD
+python main.py paper-status --portfolio-id paper-100k
+python main.py paper-run --portfolio-id paper-100k
+python main.py paper-actions --portfolio-id paper-100k
+```
+
+`paper-run` records immutable `PAPER_SIGNAL` observations from the latest persisted deterministic daily
+certificate. Missing paper risk, price, or ADV evidence produces zero actions. A proposed action never changes
+holdings. Manual paper decisions are explicit:
+
+```powershell
+python main.py paper-confirm <action-id> --portfolio-id paper-100k --decision accept
+python main.py paper-confirm <action-id> --portfolio-id paper-100k --decision reject
+python main.py paper-performance --portfolio-id paper-100k
+```
+
+An accepted action still is not filled automatically. The simulator requires the exact next valid XNYS
+session raw open, available after the decision, plus commission, half-spread, slippage, and impact. Missing or
+mistimed prices produce no fill. `python main.py --paper-portfolio-id paper-100k daily` displays the independent
+paper ledger while production remains `NON_ACTIONABLE` until formally approved. Every paper BUY/SELL is
+simulation-only, not investment advice or a real trading instruction. Forward observations complement but do
+not replace survivorship-safe locked-OOS and walk-forward certification.
+
 Strategy production approval requires chronological train/validation/locked-OOS or walk-forward evidence, identical PIT convention for SPY and QQQ, survivorship and corporate-action controls, commissions/spread/slippage/impact, and acceptable turnover, drawdown, concentration, benchmark alpha, and stability. `quant_engine.strategy_certification` evaluates and hashes that evidence; insufficient data produces `NOT_CERTIFIABLE`, failed alpha/risk gates produce `REJECTED`, and neither can create an approval artifact.
 
 Historical research uses provider-neutral contracts in `quant_engine.research_data`
