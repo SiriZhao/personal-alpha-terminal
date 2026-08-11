@@ -110,4 +110,25 @@ python -m venv .venv
 .\.venv\Scripts\pytest.exe -q
 ```
 
+## Broad US Equity Universe 与 Probability Overlay
+
+正式 Alpha 股票池不再由 18 个 bootstrap symbol 定义。Daily run 先读取 Nasdaq Trader 当前上市目录，再依次执行证券类型、PIT 可见性、价格历史、数据覆盖、公司行动完整性、t-1 ADV/median dollar volume 与特征可用性门禁。ETF、指数和 benchmark 不参与普通股横截面排名；SPY/QQQ 只用于同 PIT 基准，其他 ETF 只可作为风险参考或现有持仓。
+
+当前目录只证明“当时可见的 current listings”，不能倒填历史或证明 survivorship-safe。若历史 membership、delisting、identifier history、PIT corporate actions 或 PIT total-return vintages 不完整，历史认证继续 `NOT_CERTIFIABLE`。股票数量永远服从数据正确性；当前真实 factor-eligible 数量由运行证书动态给出，不以配置硬编码。
+
+Probability Overlay 已有正式 consumer 链：Base expected excess return → gated residual overlay → portfolio expected returns → target weight → recommendation。但只有 exact-version、locked-OOS、walk-forward、after-cost、multiple-testing-controlled 且 calibration 合格的 `PRODUCTION_APPROVED` artifact 才能改变结果。artifact 缺失、未批准、失配或退化时安全回退 Base Alpha，不会阻塞 deterministic core，也不会伪造概率。
+
+最新机器证书：
+
+- `artifacts/latest/universe_certification.json`
+- `artifacts/latest/probability_overlay_certification.json`
+
+它们由以下命令从真实 daily run/config/cache 派生并计算 hash：
+
+```powershell
+python scripts/export_broad_universe_probability_certifications.py --config config.yaml
+```
+
+详细审计见 [Broad Universe 与 Probability Overlay 报告](docs/BROAD_UNIVERSE_PROBABILITY_OVERLAY_REPORT.md)。
+
 更多资料：[统一主链收口报告](docs/UNIFIED_LIVE_CLOSURE_REPORT.md)、[中文终端架构](docs/CHINESE_TERMINAL_ARCHITECTURE.md)、[历史数据基础报告](docs/RESEARCH_DATA_FOUNDATION_REPORT.md)、[Alpha 研究认证报告](docs/ALPHA_RESEARCH_CERTIFICATION_REPORT.md)。
