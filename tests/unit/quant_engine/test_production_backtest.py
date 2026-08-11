@@ -163,6 +163,32 @@ def test_raw_price_split_dividend_and_accounting_reconcile() -> None:
     assert result.alpha_source_contribution
 
 
+def test_transaction_costs_reduce_net_return_and_are_booked_in_pnl() -> None:
+    dataset = _dataset()
+    config = ProductionBacktestConfig(
+        initial_capital=100_000,
+        benchmark_returns=tuple((session, 0.0) for session in dataset.calendar[1:]),
+        minimum_sessions=20,
+        git_commit="fixture",
+    )
+    zero_cost = _engine().run(dataset, (_target(dataset),), config, sectors={1: "Technology"})
+    costly = ProductionBacktestEngine(
+        TransactionCostModel(
+            TransactionCostConfig(
+                commission_bps=5,
+                spread_bps=10,
+                slippage_bps=10,
+                impact_coefficient_bps=20,
+                maximum_adv_participation=1,
+            )
+        )
+    ).run(dataset, (_target(dataset),), config, sectors={1: "Technology"})
+    assert costly.transaction_costs > 0
+    assert costly.metrics.transaction_cost == pytest.approx(costly.transaction_costs)
+    assert costly.metrics.net_return < zero_cost.metrics.net_return
+    assert costly.metrics.gross_return > costly.metrics.net_return
+
+
 def test_exit_trade_realized_pnl_and_holding_period_reconcile() -> None:
     dataset = _dataset()
     exit_signal_date = dataset.calendar[17]
