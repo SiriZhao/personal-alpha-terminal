@@ -1,7 +1,7 @@
 {
   "adv_cutoff_convention": "STRICTLY_BEFORE_UNIVERSE_DATE",
   "analysis_date": "2026-08-10",
-  "artifact_hash": "6391b31a40ea583b1e6cc4ce9a17fea3f0504f8b30bf5f1d9e62b4e018b2d5bd",
+  "artifact_hash": "b88938d429e006e3db40fbce58a2af22d985f030c37f7a87478731696d7a8f9b",
   "artifact_id": "broad-us-current-2026-08-10-50106330e837",
   "blockers": [
     "HISTORICAL_MEMBERSHIP_INCOMPLETE",
@@ -39,7 +39,7 @@
   "eligibility_content_hash": "50106330e837e47b4fd6afbb2bb0d8d33bcbe7acf4f08cd5cb6a49a88ace476b",
   "eligible_for_strategy_production_approval": false,
   "fixed_bootstrap_list_is_alpha_universe": false,
-  "generated_at": "2026-08-11T17:30:42.435966+00:00",
+  "generated_at": "2026-08-11T17:43:29.373641+00:00",
   "historical_research_status": "NOT_CERTIFIABLE",
   "historical_use_allowed": false,
   "pit_status": "CURRENT_PIT_ONLY",
@@ -72,7 +72,8 @@
     "macro_regime": "OPTIONAL_UNAVAILABLE",
     "risk_reference": "ETF_OR_CURRENT_HOLDING_NOT_ALPHA_RANKED"
   },
-  "source_run_certificate": "reports/daily-runs/daily-1354936235354e9fb22570952d71379b/run_certificate.json",
-  "source_run_id": "daily-1354936235354e9fb22570952d71379b",
+  "source_git_commit": "678b877a4a51e1da866ef216a0f7ed5b062e9381",
+  "source_run_certificate": "reports/daily-runs/daily-fd0d8ad42f6b48ea9f60be834d8d11d7/run_certificate.json",
+  "source_run_id": "daily-fd0d8ad42f6b48ea9f60be834d8d11d7",
   "survivorship_status": "UNVERIFIED"
 }

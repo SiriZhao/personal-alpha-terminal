@@ -80,6 +80,7 @@ def export(config_path: Path, output_root: Path) -> tuple[Path, Path]:
         f"{str(universe['eligibility_hash'])[:12]}",
         "generated_at": certificate["finished_at"],
         "source_run_id": certificate["run_id"],
+        "source_git_commit": certificate["git_commit"],
         "source_run_certificate": certificate["_path"],
         "analysis_date": certificate["analysis_date"],
         "decision_cutoff": certificate["data_cutoff"],
@@ -147,6 +148,7 @@ def export(config_path: Path, output_root: Path) -> tuple[Path, Path]:
         f"{str(certificate['canonical_result_hash'])[:12]}",
         "generated_at": certificate["finished_at"],
         "source_run_id": certificate["run_id"],
+        "source_git_commit": certificate["git_commit"],
         "source_run_certificate": certificate["_path"],
         "strategy_version": provenance["strategy_version"],
         "strategy_parameter_hash": certificate["identity_hashes"][
