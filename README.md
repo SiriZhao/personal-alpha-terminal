@@ -1,133 +1,113 @@
 # Personal Alpha Terminal
 
-Personal, medium/low-frequency, long-only U.S. equity decision support. It runs daily, produces a manual action list or HOLD, and never places an order. Charles Schwab execution is manual. This is not investment advice.
+个人使用、中低频、美股、long-only、每日运行一次的专业量化决策终端。系统只生成经门禁批准的操作建议和外部券商手工执行计划，不连接券商自动下单，不使用 AI/LLM 选股，也不构成投资建议。
 
-## Architecture and safety boundary
+## 唯一正式流程
 
-The deterministic chain is `DATA -> PIT -> FEATURE -> FACTOR -> CANDIDATE -> APPROVED SIGNAL -> PORTFOLIO -> RISK -> DECISION -> MANUAL EXECUTION`. A candidate is research output; a signal has passed signal validity; an approved signal also has an immutable production certification; only a risk-approved decision can become a proposed manual trade.
+程序只有一套业务流程：
 
-The system fails closed on future rows, stale/incomplete data, missing PIT or survivorship evidence, missing strategy approval, an unselected portfolio, or risk failure. No stage is renamed or bypassed to produce a trade. Optional probability and market-regime overlays may be `UNCALIBRATED` / `OPTIONAL_UNAVAILABLE`; they do not change deterministic alpha. LLM use is optional and explanation-only—never stock selection, alpha, sizing, risk, or execution.
+`CALENDAR → DATA → PIT → FEATURE → FACTOR → ALPHA CANDIDATE → SIGNAL → PORTFOLIO → RISK → DECISION → EXECUTION PLAN → PERSISTENCE`
 
-## Data and PIT
+候选不等于信号，信号不等于批准信号，批准信号也必须通过组合与风险门禁才能成为操作建议。任何未来数据、数据认证、策略认证、组合或风险失败都会 fail closed，最终输出 `NO_ACTION / BLOCKED`，不会为了产生 BUY/SELL 降低标准。
 
-Yahoo Finance is the default daily provider. Twelve Data, Alpha Vantage, and Stooq are optional adapters subject to the same certification. Each run records cutoff, snapshot/version ID, provider, counts, coverage, quality status, certification state, and content hash. Features and SPY/QQQ benchmarks use the same completed-session PIT convention. Free current-universe data is not accepted as historical survivorship-safe evidence.
+系统只有一个用户维护的正式组合，默认外部标识为 `main`。券商账户属于外部执行环境；程序内部不设置第二套交易模式。测试只能使用隔离的 `TEST_FIXTURE` 数据库，不能进入正式账户或批准注册表。
 
-## Portfolio initialization
+## 初始化与维护组合
 
-Holdings are never inferred. Create a persistent, auditable manual ledger (cash-only is valid):
+现金和持仓从不推测。首次初始化一个可审计的纯现金组合：
 
 ```powershell
-python main.py portfolio-init --name "My Portfolio" --cash 100000
-python main.py portfolio-init --name "My Portfolio" --cash 50000 --position "AAPL=10:180" --position "MSFT=5"
+python main.py portfolio-init --portfolio-id main --cash 100000 --currency USD
+python main.py portfolio-show --portfolio-id main
 python main.py portfolio-list
 ```
 
-Then verify the returned ID and set it explicitly in local `config.yaml`:
-
-```yaml
-portfolio_id: 1
-```
-
-An existing but unselected ledger remains `PORTFOLIO_NOT_SELECTED`; zero ledgers is `PORTFOLIO_NOT_INITIALIZED`. A Schwab CSV can be previewed and then committed explicitly:
+初始化现金会同时写入不可变 `deposit` 账本事件。可在初始化时录入持仓：
 
 ```powershell
-python main.py portfolio-import schwab.csv --portfolio-id 1 --as-of 2026-08-11
-python main.py portfolio-import schwab.csv --portfolio-id 1 --as-of 2026-08-11 --commit --cash 25000
+python main.py portfolio-init --portfolio-id main --cash 50000 --position "AAPL=10:180" --position "MSFT=5"
 ```
 
-## Daily workflow
+手工更新一个日期的持仓快照：
+
+```powershell
+python main.py portfolio-update --portfolio-id main --as-of 2026-08-11 --cash 75000 --position "AAPL=10:180"
+```
+
+Charles Schwab 或通用 CSV 先预览、再显式提交：
+
+```powershell
+python main.py portfolio-import schwab.csv --portfolio-id main --as-of 2026-08-11
+python main.py portfolio-import schwab.csv --portfolio-id main --as-of 2026-08-11 --commit --cash 25000
+```
+
+`config.yaml` 使用稳定的外部组合标识：
+
+```yaml
+portfolio_id: main
+```
+
+## 每日工作流与中文终端
+
+默认 `zh-CN`；英文仅改变展示，不改变同一个不可变结果：
 
 ```powershell
 python main.py daily
-python main.py data-provider status
+python main.py --locale zh-CN daily
+python main.py --locale en-US daily
 python main.py doctor
 ```
 
-Read the top-level `ACTIONABLE` / `NON_ACTIONABLE` classification and primary blockers first. Evidence is stored under the configured `reports/daily-runs/<run_id>/` as a result snapshot and run certificate with canonical input/result hashes. Runtime reports, databases, caches, `.env`, credentials, and real portfolio data are ignored by Git.
+第一屏先回答今天能否操作、操作什么、为何阻塞；随后依次展示组合、同起点基准/前向记录、数据认证、PIT 股票池、因子候选、条件概率、风险、执行计划、阻塞优先级和运行证书。终端宽度不足时表格自动折行；文本图以数字为准，并兼容 Windows Terminal、PowerShell 和 CMD 的旧代码页。
 
-## Paper trading and forward validation
+## 人工确认与实际成交同步
 
-Paper trading is a separate, append-only simulation domain. It does not use the real portfolio database,
-place broker orders, create a production approval, or turn a diagnostic candidate into a real action.
-Initialize the fixed USD 100,000 cash-only portfolio and frozen experiment with:
+只有运行证书中真实存在的正式 recommendation 才能确认：
 
 ```powershell
-python main.py portfolio-init --portfolio-id paper-100k --mode paper --cash 100000 --currency USD
-python main.py paper-status --portfolio-id paper-100k
-python main.py paper-run --portfolio-id paper-100k
-python main.py paper-actions --portfolio-id paper-100k
+python main.py accept <recommendation-id> --run-id <run-id> --reason "manual review"
+python main.py reject <recommendation-id> --run-id <run-id> --reason "operator veto"
+python main.py watch <recommendation-id> --run-id <run-id> --reason "observe"
 ```
 
-`paper-run` records immutable `PAPER_SIGNAL` observations from the latest persisted deterministic daily
-certificate. Missing paper risk, price, or ADV evidence produces zero actions. A proposed action never changes
-holdings. Manual paper decisions are explicit:
+接受只创建待人工执行记录，不改变持仓。用户在 Charles Schwab 或其他外部券商手工成交后再同步真实 fill：
 
 ```powershell
-python main.py paper-confirm <action-id> --portfolio-id paper-100k --decision accept
-python main.py paper-confirm <action-id> --portfolio-id paper-100k --decision reject
-python main.py paper-performance --portfolio-id paper-100k
+python main.py mark-executed <recommendation-id> --run-id <run-id> --price 190.25 --quantity 5 --fees 0.50 --timestamp 2026-08-12T14:31:00+00:00 --fill-id schwab-fill-001
 ```
 
-An accepted action still is not filled automatically. The simulator requires the exact next valid XNYS
-session raw open, available after the decision, plus commission, half-spread, slippage, and impact. Missing or
-mistimed prices produce no fill. `python main.py --paper-portfolio-id paper-100k daily` displays the independent
-paper ledger while production remains `NON_ACTIONABLE` until formally approved. Every paper BUY/SELL is
-simulation-only, not investment advice or a real trading instruction. Forward observations complement but do
-not replace survivorship-safe locked-OOS and walk-forward certification.
+成交必须不早于 T 日收盘决策后的下一个合法 XNYS 执行窗口。数量、现金、持仓、费用和重复 fill ID 均有 fail-closed 校验。
 
-Strategy production approval requires chronological train/validation/locked-OOS or walk-forward evidence, identical PIT convention for SPY and QQQ, survivorship and corporate-action controls, commissions/spread/slippage/impact, and acceptable turnover, drawdown, concentration, benchmark alpha, and stability. `quant_engine.strategy_certification` evaluates and hashes that evidence; insufficient data produces `NOT_CERTIFIABLE`, failed alpha/risk gates produce `REJECTED`, and neither can create an approval artifact.
+## 数据、PIT 与研究认证
 
-Historical research uses provider-neutral contracts in `quant_engine.research_data`
-and `quant_engine.research_dataset`. The domains are explicit:
+Yahoo Finance 是当前 daily 主 provider；Twelve Data、Alpha Vantage、Stooq 是可选适配器。每次运行保存 cutoff、snapshot/version、provider、覆盖率、质量状态、content hash 和 certification state。SPY/QQQ 与策略使用相同 completed-session PIT convention。
 
-- `LIVE_DAILY_DATA`: today's analysis inputs; never historical backtest evidence.
-- `RESEARCH_RAW_DATA`: imported rows that are normalized and audited but not approved.
-- `RESEARCH_CERTIFIED_DATA`: rows whose membership, identity, lifecycle, corporate-action,
-  total-return, calendar, provenance, period coverage, and content hash all pass.
-
-The current ticker list is never backfilled into history. A final adjusted series downloaded
-today is not a PIT total-return vintage. ETF, equity, and benchmark memberships use separate
-`US_ETF`, `US_EQUITY`, and `BENCHMARK` classifications.
-
-Research ingest is separate from `daily` and never runs automatically:
+`LIVE_DAILY_DATA` 与历史研究数据严格隔离。当前 ticker list 不得倒填历史，今天下载的最终 adjusted series 不能冒充历史 PIT total-return vintage。研究导入独立运行：
 
 ```powershell
 python main.py research-data audit
-python main.py research-data --root var/research-data status
-python main.py research-data --root var/research-data import data/research/imports/package.csv --required-start 2015-01-02 --required-end 2026-06-30
-python main.py research-data --root var/research-data certify
-python main.py research-data --root var/research-data manifest
+python main.py research-data status
+python main.py research-data import <csv-parquet-or-sqlite>
+python main.py research-data certify
+python main.py research-data manifest
 ```
 
-`import` accepts long-form CSV or Parquet and SQLite. Every row carries the common fields
-`dataset_id`, `schema_version`, `dataset_provider`, `dataset_source`, `retrieved_at`,
-`as_of`, `cutoff`, `use_scope`, `record_type`, `source`, and `provider`. Record types are:
+当前研究数据仍为 `NOT_CERTIFIABLE`：缺历史 membership、delisting、identifier history、PIT corporate actions、PIT total-return 和绑定数据集的完整 calendar。`USAdaptiveAlphaCoreV1:1.0.0` 因此保持 `DIAGNOSTIC_ONLY`，生产批准注册表为空。前向实际运行记录可以积累真实证据，但不替代 survivorship-safe 历史 locked OOS / walk-forward / after-cost 认证。
 
-- `SECURITY`: permanent ID, ticker validity, exchange, listing/delisting, security type.
-- `MEMBERSHIP`: universe ID/type, effective interval, availability and source timestamp.
-- `PRICE`: raw OHLCV plus explicit adjustment kind and optional PIT total-return vintage.
-- `CORPORATE_ACTION`: effective/announcement/available dates and supplied lifecycle terms.
-- `CALENDAR`: calendar ID, session, open/close, and early-close flag.
+## Probability、Regime 与风险
 
-SQLite may use one `research_rows` table or the named tables `securities`, `memberships`,
-`prices`, `corporate_actions`, and `calendar_sessions`. Parquet support is in the `research`
-dependency group. Unknown fields remain unknown; an unavailable delisting return is never
-zero. `TEST_FIXTURE` packages can prove plumbing but always have `production_eligible=false`.
-Exit code 3 with `NOT_CERTIFIABLE` is expected when critical evidence is absent. Large raw,
-normalized, and certified research rows stay under ignored `data/research/` or `var/`; only
-source, schemas, small fixtures, tests, and concise non-private reports belong in Git.
+条件概率没有足够 OOS 样本时显示“未校准 / 样本不足”，不输出假置信度，也不修改 deterministic alpha。Market Regime 当前为 optional unavailable，不阻塞核心数据/因子分析。正式信号存在时，组合构建继续检查波动率、敞口、现金、最大持仓、换手、HHI、流动性、相关性、压力与回撤；缺合法 signal 时明确显示由 SIGNAL 阻塞，而不是伪造风险结果。
 
-## Configuration
+## Evidence、配置和测试
 
-Copy `config.example.yaml` and `.env.example`; keep secrets only in the environment or local untracked files. Optional provider keys are `TWELVE_DATA_API_KEY` and `ALPHA_VANTAGE_API_KEY`. See [LLM configuration](docs/LLM_CONFIGURATION.md), [architecture](docs/ARCHITECTURE.md), [terminal guide](docs/TERMINAL_GUIDE.md), and [production closure report](docs/PRODUCTION_CLOSURE_REPORT.md).
-
-## Development and tests
+运行证据写入 `reports/daily-runs/<run_id>/`，包含 stage manifests、run certificate、data/config/strategy/parameter/portfolio identities、成本假设、blockers 与 canonical hashes。数据库、运行报告、cache、`.env`、凭证和个人交易数据均由 Git 忽略。
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
-.\.venv\Scripts\python.exe -m ruff check src tests
-.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\ruff.exe check src tests
+.\.venv\Scripts\mypy.exe src/personal_alpha_terminal --strict
+.\.venv\Scripts\pytest.exe -q
 ```
 
-Fixture approval artifacts prove plumbing only; they are not real investment evidence. Historical results do not guarantee future performance.
+更多资料：[统一主链收口报告](docs/UNIFIED_LIVE_CLOSURE_REPORT.md)、[中文终端架构](docs/CHINESE_TERMINAL_ARCHITECTURE.md)、[历史数据基础报告](docs/RESEARCH_DATA_FOUNDATION_REPORT.md)、[Alpha 研究认证报告](docs/ALPHA_RESEARCH_CERTIFICATION_REPORT.md)。

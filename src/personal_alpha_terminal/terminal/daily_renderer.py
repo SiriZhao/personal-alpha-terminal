@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import unicodedata
+from contextvars import ContextVar
 from io import StringIO
 
 from rich.console import Console
@@ -12,38 +14,55 @@ from personal_alpha_terminal.application.daily_result import (
     StageStatus,
 )
 
+_ACTIVE_LOCALE: ContextVar[str] = ContextVar("daily_renderer_locale", default="zh-CN")
 
-def render_daily_quant_result(result: DailyQuantResult, console: Console) -> None:
+
+def render_daily_quant_result(
+    result: DailyQuantResult, console: Console, *, locale: str = "zh-CN"
+) -> None:
     """Render one immutable result. No model, gate or trade calculation lives here."""
 
-    console.print(
-        Panel(
-            _header(result),
-            title="PERSONAL ALPHA TERMINAL · TODAY QUANT REPORT",
-            border_style="cyan",
+    if locale not in {"zh-CN", "en-US"}:
+        raise ValueError("locale must be zh-CN or en-US")
+    token = _ACTIVE_LOCALE.set(locale)
+    try:
+        console.print(
+            Panel(
+                _header(result),
+                title=_t(
+                    "PERSONAL ALPHA TERMINAL · 个人量化交易终端",
+                    "PERSONAL ALPHA TERMINAL · DAILY QUANT REPORT",
+                ),
+                border_style="cyan",
+            )
         )
-    )
-    _pipeline(result, console)
-    _data_certification(result, console)
-    _pit_universe(result, console)
-    _data_health(result, console)
-    _market(result, console)
-    _portfolio(result, console)
-    _factors(result, console)
-    _probability(result, console)
-    _risk(result, console)
-    _decisions(result, console)
-    _rejected(result, console)
-    _execution(result, console)
-    _benchmark(result, console)
-    _run_certificate(result, console)
-    _summary(result, console)
+        _today_actions(result, console)
+        _portfolio(result, console)
+        _benchmark(result, console)
+        _market(result, console)
+        _data_certification(result, console)
+        _pit_universe(result, console)
+        _data_health(result, console)
+        _factors(result, console)
+        _probability(result, console)
+        _risk(result, console)
+        _decisions(result, console)
+        _execution(result, console)
+        _rejected(result, console)
+        _blocker_center(result, console)
+        _pipeline(result, console)
+        _run_certificate(result, console)
+        _summary(result, console)
+    finally:
+        _ACTIVE_LOCALE.reset(token)
 
 
-def capture_daily_quant_result(result: DailyQuantResult, *, width: int = 120) -> str:
+def capture_daily_quant_result(
+    result: DailyQuantResult, *, width: int = 120, locale: str = "en-US"
+) -> str:
     stream = StringIO()
     console = Console(file=stream, width=width, color_system=None, force_terminal=False)
-    render_daily_quant_result(result, console)
+    render_daily_quant_result(result, console, locale=locale)
     return stream.getvalue()
 
 
@@ -57,13 +76,21 @@ def _layered_status(result: DailyQuantResult) -> str:
     portfolio_ready = result.portfolio.status != "NOT_INITIALIZED"
     risk_ready = result.risk.status == "PASS"
     trading_actionable = result.actionable
+    if _is_zh():
+        return (
+            f"数据 {'●通过' if data_ready else '●阻塞'}   "
+            f"量化 {'●完成' if quant_ready else '○未完成'}   "
+            f"组合 {'●就绪' if portfolio_ready else '●需初始化'}   "
+            f"风险 {'●通过' if risk_ready else '○待运行'}   "
+            f"交易建议 {'●可执行' if trading_actionable else '●当前不可执行'}   "
+            f"LLM {result.llm_status}"
+        )
     return (
-        f"DATA {'READY' if data_ready else 'BLOCKED'}   "
-        f"QUANT ANALYSIS {'READY' if quant_ready else 'NOT READY'}   "
-        f"PORTFOLIO {'READY' if portfolio_ready else 'REQUIRED'}   "
-        f"RISK {'READY' if risk_ready else 'BLOCKED'}   "
-        f"TRADING {'ACTIONABLE' if trading_actionable else 'BLOCKED'}   "
-        f"LLM {result.llm_status}"
+        f"DATA {'READY' if data_ready else 'BLOCKED'}   QUANT "
+        f"{'READY' if quant_ready else 'NOT READY'}   PORTFOLIO "
+        f"{'READY' if portfolio_ready else 'REQUIRED'}   RISK "
+        f"{'READY' if risk_ready else 'NOT RUN'}   TRADING "
+        f"{'ACTIONABLE' if trading_actionable else 'BLOCKED'}   LLM {result.llm_status}"
     )
 
 
@@ -72,8 +99,7 @@ def _header(result: DailyQuantResult) -> str:
         "CERTIFIED_ACTIONABLE": "ACTIONABLE TRADING PLAN · MANUAL EXECUTION ONLY",
         "CERTIFIED_NO_ACTION": "CERTIFIED NO-ACTION RUN",
         "VALID_ANALYSIS_NON_ACTIONABLE": (
-            "VALID QUANT ANALYSIS / NON-ACTIONABLE\n"
-            "FORMAL TRADING DECISION NOT AVAILABLE"
+            "VALID QUANT ANALYSIS / NON-ACTIONABLE\nFORMAL TRADING DECISION NOT AVAILABLE"
         ),
         "INVALID_NON_ACTIONABLE": "INVALID / NON-ACTIONABLE QUANT RUN\nDO NOT USE FOR TRADING",
     }[result.run_classification]
@@ -84,12 +110,23 @@ def _header(result: DailyQuantResult) -> str:
     data_through = (
         result.data_cutoff.isoformat()
         if result.data_cutoff
-        else (
-            f"{raw_latest} (raw only; PIT cutoff unavailable)"
-            if raw_latest
-            else "UNAVAILABLE"
-        )
+        else (f"{raw_latest} (raw only; PIT cutoff unavailable)" if raw_latest else "UNAVAILABLE")
     )
+    if _is_zh():
+        classification = {
+            "CERTIFIED_ACTIONABLE": "可执行 · 仅生成外部券商手动执行计划",
+            "CERTIFIED_NO_ACTION": "无需操作 · 全部正式门禁已通过",
+            "VALID_ANALYSIS_NON_ACTIONABLE": "量化分析有效 · 当前不可生成正式交易建议",
+            "INVALID_NON_ACTIONABLE": "运行无效 · 不得用于交易",
+        }[result.run_classification]
+        return (
+            f"{classification}\n\n日期 {result.started_at.date()}   "
+            f"分析日 {result.analysis_date}   "
+            f"交易日 {result.trade_date}\n市场 {result.market_session}   "
+            f"数据截止 {data_through}\nRun ID {result.run_id}   "
+            f"耗时 {result.duration_seconds:.2f}s\n"
+            f"{_layered_status(result)}"
+        )
     return (
         f"{classification}\n\nVersion {result.version}   Run {result.run_id}\n"
         f"ET/Market session {result.market_session}   Analysis {result.analysis_date}   "
@@ -100,12 +137,80 @@ def _header(result: DailyQuantResult) -> str:
     )
 
 
+def _today_actions(result: DailyQuantResult, console: Console) -> None:
+    title = _t("【今日操作清单】", "TODAY ACTION LIST")
+    if not result.final_decisions:
+        headline = (
+            _t("今日无需操作", "NO ACTION TODAY")
+            if result.actionable
+            else _t("今日无法生成正式建议", "FORMAL RECOMMENDATION UNAVAILABLE")
+        )
+        reason = _primary_blocker(result)
+        console.print(
+            Panel(
+                f"{headline}\n\n{_t('主要原因', 'Primary reason')}: {reason}\n"
+                + _t(
+                    "候选不等于正式信号；正式建议仅在策略、组合与风险门禁全部通过后生成。",
+                    "A candidate is not a formal signal; strategy, portfolio and "
+                    "risk gates must pass.",
+                ),
+                title=title,
+                border_style="green" if result.actionable else "red",
+            )
+        )
+        return
+    table = Table(title=title)
+    columns = (
+        (
+            "代码",
+            "操作",
+            "当前权重",
+            "目标权重",
+            "调整",
+            "预计金额",
+            "数量",
+            "Alpha",
+            "风险",
+            "最早执行",
+        )
+        if _is_zh()
+        else (
+            "Ticker",
+            "Action",
+            "Current",
+            "Target",
+            "Delta",
+            "Value",
+            "Qty",
+            "Alpha",
+            "Risk",
+            "Earliest",
+        )
+    )
+    for column in columns:
+        table.add_column(column, overflow="fold")
+    for item in result.final_decisions:
+        table.add_row(
+            item.symbol,
+            _action(item.action),
+            _percent(item.current_weight),
+            _percent(item.target_weight),
+            _signed_percent(item.delta_weight),
+            _money(item.estimated_value),
+            str(item.estimated_quantity),
+            _signed_percent(item.expected_alpha),
+            _t("通过", "PASS"),
+            item.earliest_execution_time.isoformat(),
+        )
+    console.print(table)
+
+
 def _pipeline(result: DailyQuantResult, console: Console) -> None:
-    table = Table(title="PIPELINE · FAIL CLOSED", show_lines=False)
-    table.add_column("Stage", style="bold")
-    table.add_column("Status")
-    table.add_column("Time", justify="right")
-    table.add_column("Message", overflow="fold")
+    table = Table(title=_t("正式流水线 · 严格关闭", "PIPELINE · FAIL CLOSED"), show_lines=False)
+    table.add_column(_t("阶段", "Stage"), style="bold")
+    table.add_column(_t("状态", "Status"))
+    table.add_column(_t("耗时", "Time"), justify="right")
+    table.add_column(_t("说明", "Message"), overflow="fold")
     for stage in result.stages:
         table.add_row(
             stage.name,
@@ -164,7 +269,7 @@ def _data_certification(result: DailyQuantResult, console: Console) -> None:
     console.print(
         Panel(
             body,
-            title="DATA CERTIFICATION",
+            title=_t("数据认证", "DATA CERTIFICATION"),
             border_style=(
                 "green"
                 if stage and stage.status is StageStatus.PASS
@@ -175,11 +280,11 @@ def _data_certification(result: DailyQuantResult, console: Console) -> None:
         )
     )
     matrix = evidence.get("symbol_matrix", ())
-    rejected = [
-        item
-        for item in matrix
-        if isinstance(item, dict) and item.get("final") != "CERTIFIED"
-    ] if isinstance(matrix, (list, tuple)) else []
+    rejected = (
+        [item for item in matrix if isinstance(item, dict) and item.get("final") != "CERTIFIED"]
+        if isinstance(matrix, (list, tuple))
+        else []
+    )
     if rejected:
         table = Table(title="REJECTED DATA")
         table.add_column("Ticker")
@@ -218,7 +323,7 @@ def _pit_universe(result: DailyQuantResult, console: Console) -> None:
             "Decision convention "
             f"{data_evidence.get('decision_timestamp_convention', 'UNAVAILABLE')}\n"
             f"Message: {stage.message if stage else 'PIT stage was not created'}",
-            title="PIT / UNIVERSE",
+            title=_t("PIT / 股票池", "PIT / UNIVERSE"),
             border_style=(
                 "green"
                 if stage and stage.status is StageStatus.PASS
@@ -231,7 +336,7 @@ def _pit_universe(result: DailyQuantResult, console: Console) -> None:
 
 
 def _data_health(result: DailyQuantResult, console: Console) -> None:
-    table = Table(title="DATA HEALTH · STRATEGY INPUTS ONLY")
+    table = Table(title=_t("数据健康 · 仅限策略输入", "DATA HEALTH · STRATEGY INPUTS ONLY"))
     narrow = console.width < 100
     columns = (
         ("Dataset", "Latest / Expected", "Source", "Status", "Detail")
@@ -298,7 +403,7 @@ def _market(result: DailyQuantResult, console: Console) -> None:
         Panel(
             f"State: {result.market_regime}\n{result.market_regime_detail}\n"
             f"Structure: {result.market_structure}",
-            title="MARKET REGIME",
+            title=_t("市场状态（可选）", "MARKET REGIME"),
         )
     )
 
@@ -313,17 +418,24 @@ def _portfolio(result: DailyQuantResult, console: Console) -> None:
     )
     console.print(
         Panel(
-            f"Status {summary.status}   NAV {_money(summary.nav)}   Cash {_money(summary.cash)}   "
+            f"{_t('组合 ID', 'Portfolio ID')} "
+            f"{result.provenance.get('portfolio_id', 'UNSELECTED')}   "
+            f"Status {summary.status}\nNAV {_money(summary.nav)}   Cash {_money(summary.cash)}   "
             f"Invested {_percent(summary.invested_weight)}   "
             f"Cash weight {_percent(summary.cash_weight)}{onboarding}",
-            title="REAL PORTFOLIO · MANUAL LEDGER",
+            title=_t("【投资组合】· 手工维护账本", "LIVE PORTFOLIO · MANUAL LEDGER"),
         )
     )
     table = Table()
-    for column in ("Ticker", "Shares", "Price", "Current", "Target", "Delta"):
+    columns = (
+        ("代码", "股数", "价格", "当前权重", "目标权重", "调整")
+        if _is_zh()
+        else ("Ticker", "Shares", "Price", "Current", "Target", "Delta")
+    )
+    for column in columns:
         table.add_column(column, justify="right" if column != "Ticker" else "left")
     if not summary.positions:
-        table.add_row("PORTFOLIO NOT INITIALIZED", "--", "--", "--", "--", "--")
+        table.add_row(_t("当前无持仓", "NO POSITIONS"), "--", "--", "0.00%", "--", "--")
     for item in summary.positions:
         table.add_row(
             item.symbol,
@@ -334,10 +446,13 @@ def _portfolio(result: DailyQuantResult, console: Console) -> None:
             _signed_percent(item.delta_weight),
         )
     console.print(table)
+    if summary.cash_weight is not None:
+        console.print(f"{_t('现金', 'Cash'):8} {_bar(summary.cash_weight, 20)}")
+        console.print(f"{_t('股票', 'Equity'):8} {_bar(summary.invested_weight or 0.0, 20)}")
 
 
 def _factors(result: DailyQuantResult, console: Console) -> None:
-    table = Table(title="FACTOR / ALPHA · CANDIDATE ≠ TRADE")
+    table = Table(title=_t("因子 / Alpha · 候选 ≠ 交易", "FACTOR / ALPHA · CANDIDATE ≠ TRADE"))
     component_names = (
         []
         if console.width < 100
@@ -372,10 +487,18 @@ def _factors(result: DailyQuantResult, console: Console) -> None:
             row.status,
         )
     console.print(table)
+    for row in result.candidates[:8]:
+        normalized = max(0.0, min(1.0, (row.composite + 3.0) / 6.0))
+        console.print(f"{row.symbol:7} {_bar(normalized, 16)}  {row.composite:+.2f}")
 
 
 def _probability(result: DailyQuantResult, console: Console) -> None:
-    table = Table(title="CONDITIONAL PROBABILITY · SUPPORTING EVIDENCE ONLY")
+    table = Table(
+        title=_t(
+            "条件概率 · 仅作支持证据 · 未校准时不可调整仓位",
+            "CONDITIONAL PROBABILITY · SUPPORTING EVIDENCE ONLY",
+        )
+    )
     narrow = console.width < 100
     columns = (
         ("Condition", "N", "P(cond)", "Lift", "Reliability / OOS")
@@ -452,7 +575,9 @@ def _risk(result: DailyQuantResult, console: Console) -> None:
                 if stress_notes
                 else "Stress evidence: no veto or warning"
             ),
-            title="RISK EVIDENCE - CAUSAL CORRELATION / SIZE / STRESS",
+            title=_t(
+                "风险证据 · 相关性 / 规模 / 压力", "RISK EVIDENCE · CORRELATION / SIZE / STRESS"
+            ),
             border_style="yellow" if risk.stress_status != "PASS" else "green",
         )
     )
@@ -464,10 +589,25 @@ def _risk(result: DailyQuantResult, console: Console) -> None:
             f"Gross {_percent(risk.gross_exposure)} → Cash {_percent(risk.cash_target)}   "
             f"Turnover {_percent(risk.turnover)}\n"
             + ("Reasons: " + "; ".join(risk.reasons) if risk.reasons else "Reasons: none"),
-            title="RISK · RAW TARGET → RISK-ADJUSTED TARGET",
+            title=_t(
+                "【风险控制】· 原始目标 → 风险调整目标", "RISK · RAW TARGET → RISK-ADJUSTED TARGET"
+            ),
             border_style="yellow" if risk.status != "PASS" else "green",
         )
     )
+    gauges = (
+        (_t("总仓位", "Gross"), risk.gross_exposure, 0.90),
+        (_t("最大单票", "Largest"), risk.largest_target_weight, 0.12),
+        (_t("换手率", "Turnover"), risk.turnover, 0.30),
+    )
+    for label, value, limit in gauges:
+        if value is None:
+            console.print(f"{label:8} -- / {_percent(limit)}")
+        else:
+            console.print(
+                f"{label:8} {_bar(value / limit if limit else 0.0, 14)}  "
+                f"{_percent(value)} / {_percent(limit)}"
+            )
 
 
 def _decisions(result: DailyQuantResult, console: Console) -> None:
@@ -560,16 +700,70 @@ def _rejected(result: DailyQuantResult, console: Console) -> None:
     console.print(table)
 
 
+def _blocker_center(result: DailyQuantResult, console: Console) -> None:
+    primary, secondary, optional = _classified_blockers(result)
+    body = "\n".join(
+        (
+            f"{_t('主要', 'Primary')}: " + ("; ".join(primary) or _t("无", "None")),
+            f"{_t('次要', 'Secondary')}: " + ("; ".join(secondary) or _t("无", "None")),
+            f"{_t('可选缺失', 'Optional')}: " + ("; ".join(optional) or _t("无", "None")),
+        )
+    )
+    console.print(
+        Panel(
+            body,
+            title=_t("阻塞与拒绝原因", "BLOCKERS AND REJECTIONS"),
+            border_style="red" if primary else "yellow" if secondary or optional else "green",
+        )
+    )
+
+
+def _classified_blockers(
+    result: DailyQuantResult,
+) -> tuple[list[str], list[str], list[str]]:
+    primary: list[str] = []
+    secondary: list[str] = []
+    optional: list[str] = []
+    values = list(dict.fromkeys((*result.blockers, *result.warnings)))
+    for value in values:
+        upper = value.upper()
+        if "OPTIONAL" in upper or "REGIME" in upper:
+            optional.append(value)
+        elif "PROBABILITY" in upper or "INSUFFICIENT_SAMPLE" in upper or "UNCALIBRATED" in upper:
+            secondary.append(value)
+        else:
+            primary.append(value)
+    return primary, secondary, optional
+
+
+def _primary_blocker(result: DailyQuantResult) -> str:
+    primary, secondary, optional = _classified_blockers(result)
+    values = primary or secondary or optional
+    return (
+        values[0]
+        if values
+        else _t("无；正式门禁通过但无需调仓", "None; gates passed with no rebalance")
+    )
+
+
 def _execution(result: DailyQuantResult, console: Console) -> None:
     plan = result.execution_plan
-    table = Table(title=f"EXECUTION PLAN · {plan.status} · {plan.broker}")
+    table = Table(
+        title=_t(
+            f"执行计划 · {plan.status} · {plan.broker} · 外部券商手动执行",
+            f"EXECUTION PLAN · {plan.status} · {plan.broker} · MANUAL",
+        )
+    )
     for column in ("#", "Ticker", "Action", "Est Value", "Qty", "Est Cost", "Earliest"):
         table.add_column(column, overflow="fold")
     if not plan.legs:
         table.add_row("--", "--", "NO EXECUTION", "--", "--", "--", "--")
     for leg in plan.legs:
         table.add_row(
-            str(leg.sequence), leg.symbol, leg.action, _money(leg.estimated_value),
+            str(leg.sequence),
+            leg.symbol,
+            leg.action,
+            _money(leg.estimated_value),
             str(leg.estimated_quantity),
             _money(leg.estimated_cost),
             leg.earliest_execution_time.isoformat(),
@@ -584,7 +778,26 @@ def _execution(result: DailyQuantResult, console: Console) -> None:
 
 
 def _benchmark(result: DailyQuantResult, console: Console) -> None:
-    table = Table(title="BENCHMARK · SAME PIT DATA CONVENTION AS STRATEGY")
+    console.print(
+        Panel(
+            _t(
+                "前向实际运行记录：main 组合已建立 T0 账本；首个同步收盘观察尚未完成。\n"
+                "Portfolio / SPY / QQQ 同起点曲线：待首个合法观察点。Sharpe、CAGR、"
+                "Sortino、年化 Alpha：样本不足。",
+                "FORWARD LIVE TRACK: the main ledger has a T0; the first synchronized "
+                "close observation is pending. Portfolio/SPY/QQQ normalized curves and "
+                "annualized statistics: INSUFFICIENT_SAMPLE.",
+            ),
+            title=_t("前向实际运行记录", "FORWARD LIVE TRACK RECORD"),
+            border_style="yellow",
+        )
+    )
+    table = Table(
+        title=_t(
+            "市场与基准 · 与策略使用相同 PIT 约定",
+            "BENCHMARK · SAME PIT DATA CONVENTION AS STRATEGY",
+        )
+    )
     for column in (
         "Benchmark",
         "Status",
@@ -599,7 +812,14 @@ def _benchmark(result: DailyQuantResult, console: Console) -> None:
         table.add_column(column, overflow="fold")
     if not result.benchmarks:
         table.add_row(
-            "--", "UNAVAILABLE", "--", "--", "0", "--", "--", "--",
+            "--",
+            "UNAVAILABLE",
+            "--",
+            "--",
+            "0",
+            "--",
+            "--",
+            "--",
             "No certified comparable sample",
         )
     for item in result.benchmarks:
@@ -614,6 +834,11 @@ def _benchmark(result: DailyQuantResult, console: Console) -> None:
             _signed_percent(item.max_drawdown),
             item.note,
         )
+        if item.period_return is not None:
+            console.print(
+                f"{item.name:10} {_bar((item.period_return + 0.10) / 0.20, 16)} "
+                f"{_signed_percent(item.period_return)}"
+            )
     console.print(table)
     cost = result.provenance.get("transaction_cost_assumption")
     if isinstance(cost, str) and cost:
@@ -629,7 +854,7 @@ def _run_certificate(result: DailyQuantResult, console: Console) -> None:
             f"Config hash: {result.config_hash}\n"
             f"Models: {', '.join(result.model_versions) or 'UNAVAILABLE'}\n"
             f"Certificate: {result.certificate_path or 'UNAVAILABLE'}",
-            title="RUN CERTIFICATE",
+            title=_t("运行证书 · 专业审计信息", "RUN CERTIFICATE"),
             border_style="green" if result.actionable else "red",
         )
     )
@@ -650,14 +875,19 @@ def _summary(result: DailyQuantResult, console: Console) -> None:
             if valid_analysis
             else "INVALID / NON-ACTIONABLE QUANT RUN - DO NOT USE FOR TRADING"
         )
+        narrative = _t(
+            "今日数据认证通过，但策略尚未满足生产认证要求，因此未生成正式交易操作。"
+            if result.diagnostic_analysis_complete
+            else "今日正式流水线未通过，未生成任何交易操作。",
+            conclusion,
+        )
         console.print(
             Panel(
                 f"Run {result.run_classification}   Pipeline {result.decision_readiness.value}   "
                 f"Data {data_status}   Portfolio {result.portfolio.status}   "
                 f"Risk {result.risk.status}\n"
-                f"Actions 0   Blockers: {blockers}\n\n"
-                + conclusion,
-                title="TODAY SUMMARY",
+                f"Actions 0   Blockers: {blockers}\n\n" + narrative,
+                title=_t("今日总结", "TODAY SUMMARY"),
                 border_style="yellow" if valid_analysis else "red",
             )
         )
@@ -671,7 +901,7 @@ def _summary(result: DailyQuantResult, console: Console) -> None:
             f"Turnover {_percent(result.execution_plan.turnover)}   "
             f"Cash after {_money(result.execution_plan.estimated_cash_after)}\n"
             f"Blockers: {blockers}\n\nMANUAL EXECUTION REQUIRED · CHARLES SCHWAB · NO BROKER API",
-            title="TODAY SUMMARY",
+            title=_t("今日总结", "TODAY SUMMARY"),
             border_style="green" if result.actionable else "red",
         )
     )
@@ -681,16 +911,59 @@ def _status_text(status: StageStatus) -> Text:
     style = {
         StageStatus.PASS: "green",
         StageStatus.PASS_DEGRADED: "yellow",
+        StageStatus.OPTIONAL_UNAVAILABLE: "yellow",
         StageStatus.FAIL_BLOCKING: "red bold",
         StageStatus.NOT_RUN: "dim",
     }[status]
-    return Text(status.value, style=style)
+    label = {
+        StageStatus.PASS: _t("通过（PASS）", "PASS"),
+        StageStatus.PASS_DEGRADED: _t("降级通过（PASS_DEGRADED）", "PASS_DEGRADED"),
+        StageStatus.OPTIONAL_UNAVAILABLE: _t("可选不可用", "OPTIONAL_UNAVAILABLE"),
+        StageStatus.FAIL_BLOCKING: _t("阻塞（FAIL_BLOCKING）", "FAIL_BLOCKING"),
+        StageStatus.NOT_RUN: _t("未运行（NOT_RUN）", "NOT_RUN"),
+    }[status]
+    return Text(label, style=style)
 
 
 def _bar(value: float, width: int = 30) -> str:
     bounded = max(0.0, min(1.0, value))
     filled = round(bounded * width)
-    return "█" * filled + "░" * (width - filled) + f" {bounded:.1%}"
+    # U+2591 is not encodable on legacy Windows GBK terminals. Keep the filled
+    # Unicode block and use an ASCII remainder so CMD/PowerShell fail gracefully.
+    return "█" * filled + "-" * (width - filled) + f" {bounded:.1%}"
+
+
+def display_width(value: str) -> int:
+    """Return terminal cell width for mixed CJK/Latin text."""
+
+    width = 0
+    for character in value:
+        if unicodedata.combining(character):
+            continue
+        width += 2 if unicodedata.east_asian_width(character) in {"W", "F"} else 1
+    return width
+
+
+def _is_zh() -> bool:
+    return _ACTIVE_LOCALE.get() == "zh-CN"
+
+
+def _t(zh: str, en: str) -> str:
+    return zh if _is_zh() else en
+
+
+def _action(value: str) -> str:
+    if not _is_zh():
+        return value
+    return {
+        "BUY": "买入",
+        "ADD": "增持",
+        "INCREASE": "增持",
+        "SELL": "卖出",
+        "REDUCE": "减持",
+        "HOLD": "持有",
+        "NO_ACTION": "无需操作",
+    }.get(value, value)
 
 
 def _percent(value: float | None) -> str:

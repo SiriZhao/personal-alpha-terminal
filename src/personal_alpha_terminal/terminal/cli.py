@@ -33,7 +33,7 @@ def run_daily(
     *,
     refresh: bool = True,
     wait: bool = True,
-    paper_portfolio_id: str | None = None,
+    locale: str = "zh-CN",
 ) -> int:
     """Run the canonical orchestrator and render exactly its persisted result."""
 
@@ -55,28 +55,10 @@ def run_daily(
             )
         )
         return 2
-    render_daily_quant_result(result, console)
-    if paper_portfolio_id:
-        from personal_alpha_terminal.paper_trading import PaperTradingService
-
-        paper_service = PaperTradingService()
-        paper_state = paper_service.current_state(paper_portfolio_id)
-        paper_nav = (
-            f"${Decimal(str(paper_state['nav'])):,.2f}"
-            if paper_state["nav"] is not None
-            else "UNAVAILABLE (POSITIONS REQUIRE MARKS)"
-        )
-        console.print(
-            Panel(
-                f"Portfolio {paper_portfolio_id}\nMode PAPER\n"
-                f"NAV {paper_nav}\n"
-                f"Cash ${Decimal(str(paper_state['cash'])):,.2f}\n"
-                "Production signal remains independently gated.\n"
-                "PAPER / SIMULATION ONLY",
-                title="PAPER PORTFOLIO READY / FORWARD TEST AVAILABLE",
-                border_style="yellow",
-            )
-        )
+    if locale == "zh-CN":
+        render_daily_quant_result(result, console)
+    else:
+        render_daily_quant_result(result, console, locale=locale)
     console.print(f"\nRun snapshot directory: {(config.report_dir / 'daily-runs').resolve()}")
     if wait and sys.stdin.isatty() and os.environ.get("PAT_NONINTERACTIVE") != "1":
         try:
@@ -202,7 +184,7 @@ def _portfolio_init_wizard(service: ApplicationService, args: argparse.Namespace
         return answer
 
     try:
-        name = args.name
+        name = args.portfolio_id
         while True:
             entered = prompt(f"Portfolio name [{name}]:")
             if entered:
@@ -277,44 +259,6 @@ def _portfolio_init_wizard(service: ApplicationService, args: argparse.Namespace
 
 
 def _portfolio_command(args: argparse.Namespace) -> int:
-    if args.command == "portfolio-init" and getattr(args, "mode", "real") == "paper":
-        from personal_alpha_terminal.paper_trading import PaperTradingService
-
-        if getattr(args, "position", None):
-            console.print("ERROR: a paper portfolio must start cash-only with zero positions")
-            return 2
-        if getattr(args, "cash", None) is None:
-            console.print("ERROR: --cash is required; paper cash is never assumed")
-            return 2
-        if not getattr(args, "portfolio_id", None):
-            console.print("ERROR: --portfolio-id is required in paper mode")
-            return 2
-        paper = PaperTradingService(cast(Path, args.paper_root))
-        portfolio = paper.initialize_portfolio(
-            portfolio_id=str(args.portfolio_id),
-            cash=Decimal(str(args.cash)),
-            currency=str(args.currency),
-        )
-        experiment_id = str(
-            args.experiment_id or f"paper-usadaptive-v1-{datetime.now(UTC).date():%Y%m%d}"
-        )
-        experiment = paper.freeze_experiment(
-            portfolio_id=str(args.portfolio_id), experiment_id=experiment_id
-        )
-        console.print(
-            Panel(
-                f"Portfolio {portfolio['portfolio_id']}\n"
-                "Mode PAPER\n"
-                f"NAV ${Decimal(str(portfolio['starting_nav'])):,.2f}\n"
-                f"Cash ${Decimal(str(portfolio['initial_cash'])):,.2f}\n"
-                "Invested $0.00\nCash Weight 100%\nPositions NONE\n\n"
-                f"Experiment {experiment['paper_experiment_id']}\n"
-                "PAPER / SIMULATION ONLY",
-                title="PAPER PORTFOLIO READY",
-                border_style="yellow",
-            )
-        )
-        return 0
     service = _service_for_args(args)
     if args.command == "portfolio-init":
         interactive = (
@@ -349,7 +293,7 @@ def _portfolio_command(args: argparse.Namespace) -> int:
             return 2
         try:
             portfolio_id, warnings = service.create_portfolio_with_positions(
-                name=args.name,
+                name=args.portfolio_id,
                 cash_balance=cash,
                 currency=args.currency,
                 positions=positions,
@@ -358,7 +302,12 @@ def _portfolio_command(args: argparse.Namespace) -> int:
         except ValueError as error:
             console.print(f"ERROR: {error}")
             return 2
-        console.print(f"Created portfolio id={portfolio_id}; broker connection: NONE")
+        status = service.get_portfolio_status(args.portfolio_id)
+        console.print(
+            f"Portfolio {status['portfolio_id']} | NAV ${status['nav']:,.2f} | "
+            f"Cash ${status['cash']:,.2f} | Invested $0.00 | Cash Weight 100% | Positions NONE\n"
+            f"Internal id={portfolio_id}; broker connection: NONE; manual execution only"
+        )
         for warning in warnings:
             console.print(f"WARNING: {warning}")
         return 0
@@ -421,11 +370,32 @@ def _portfolio_command(args: argparse.Namespace) -> int:
         for warning in result.warnings:
             console.print(f"WARNING: {warning}")
         return 0
-    if args.command == "portfolio-show":
-        status = service.get_portfolio_status(int(args.portfolio_id))
+    if args.command == "portfolio-update":
+        from personal_alpha_terminal.portfolio.portfolio_validation import validate_positions
+
+        raw_rows = []
+        for spec in args.position or ():
+            ticker, shares, cost = _parse_position_spec(spec)
+            raw_rows.append((ticker, shares, cost))
+        result = service.update_portfolio_snapshot(
+            portfolio_id=args.portfolio_id,
+            as_of_date=date.fromisoformat(args.as_of),
+            positions=validate_positions(raw_rows),
+            cash_balance=(Decimal(str(args.cash)) if args.cash is not None else None),
+        )
         console.print(
-            f"id={status['id']} name={status['name']} currency={status['currency']} "
-            f"cash={status['cash']} as_of={status['as_of']}"
+            f"Updated {args.portfolio_id}: positions={result.imported_count}; "
+            f"cash={'updated' if result.cash_balance_updated else 'unchanged'}; "
+            f"as_of={result.as_of_date}"
+        )
+        return 0
+    if args.command == "portfolio-show":
+        status = service.get_portfolio_status(args.portfolio_id)
+        console.print(
+            f"portfolio_id={status['portfolio_id']} internal_id={status['id']} "
+            f"currency={status['currency']} NAV={status['nav']} "
+            f"cash={status['cash']} invested={status['invested']} "
+            f"cash_weight={status['cash_weight']} as_of={status['as_of']}"
         )
         table = Table(title="REAL PORTFOLIO / MANUAL SCHWAB LEDGER")
         table.add_column("Ticker")
@@ -449,158 +419,11 @@ def _portfolio_command(args: argparse.Namespace) -> int:
         return 3
     for item in portfolios:
         console.print(
-            f"id={item['id']} name={item['name']} currency={item['base_currency']} "
+            f"portfolio_id={item['portfolio_id']} internal_id={item['id']} "
+            f"currency={item['base_currency']} "
             f"cash={item['cash_balance']}"
         )
     return 0
-
-
-def _paper_command(args: argparse.Namespace) -> int:
-    from personal_alpha_terminal.paper_trading import PaperTradingService
-    from personal_alpha_terminal.paper_trading.service import (
-        PaperDecisionChoice,
-        PaperExecutionBar,
-        PaperSignalInput,
-    )
-
-    service = PaperTradingService(cast(Path, args.paper_root))
-    portfolio_id = str(args.portfolio_id)
-    if args.command == "paper-status":
-        state = service.current_state(portfolio_id)
-        experiment = service.experiment(portfolio_id)
-        nav_text = (
-            f"${Decimal(str(state['nav'])):,.2f}"
-            if state["nav"] is not None
-            else "UNAVAILABLE (POSITIONS REQUIRE MARKS)"
-        )
-        console.print(
-            Panel(
-                f"Portfolio {portfolio_id}\nMode PAPER\n"
-                f"NAV {nav_text}\n"
-                f"Cash ${Decimal(str(state['cash'])):,.2f}\n"
-                f"Positions {len(cast(dict[str, str], state['positions']))}\n"
-                f"Experiment {experiment['paper_experiment_id']}\n"
-                "Production approved FALSE\nPAPER / SIMULATION ONLY",
-                title="PAPER FORWARD TEST READY",
-                border_style="yellow",
-            )
-        )
-        return 0
-    if args.command == "paper-actions":
-        actions = service.actions(portfolio_id)
-        if not actions:
-            console.print("PAPER / SIMULATION ONLY: no proposed paper actions")
-            return 0
-        table = Table(title="PROPOSED PAPER ACTIONS / NOT FOR REAL TRADING")
-        for column in ("Action ID", "Side", "Ticker", "Qty", "User decision", "Fill"):
-            table.add_column(column)
-        for item in actions:
-            table.add_row(
-                str(item["action_id"]),
-                str(item["side"]),
-                str(item["ticker"]),
-                str(item["quantity"]),
-                str(item["user_paper_decision"]),
-                str(item["simulated_fill"]),
-            )
-        console.print(table)
-        return 0
-    if args.command == "paper-confirm":
-        result = service.confirm_action(
-            portfolio_id=portfolio_id,
-            action_id=str(args.action_id),
-            choice=PaperDecisionChoice(str(args.decision).upper()),
-            reason=str(args.reason),
-        )
-        console.print(
-            f"PAPER decision recorded: {result['action_id']} "
-            f"{result['user_paper_decision']} (no automatic fill)"
-        )
-        return 0
-    if args.command == "paper-fill":
-        result = service.simulate_fill(
-            portfolio_id=portfolio_id,
-            action_id=str(args.action_id),
-            bar=PaperExecutionBar(
-                ticker=str(args.ticker).upper(),
-                session_date=date.fromisoformat(str(args.session_date)),
-                open_price=Decimal(str(args.open)),
-                available_at=datetime.fromisoformat(str(args.available_at)),
-                average_daily_dollar_volume=Decimal(str(args.adv)),
-                source=str(args.source),
-                data_hash=str(args.data_hash),
-            ),
-            fill_time=datetime.fromisoformat(str(args.fill_time)),
-        )
-        console.print(
-            f"SIMULATED PAPER FILL {result['fill_id']} at {result['fill_price']}; "
-            "no broker order was sent"
-        )
-        return 0
-    if args.command == "paper-performance":
-        console.print(json.dumps(service.performance(portfolio_id), indent=2, sort_keys=True))
-        return 0
-    if args.command == "paper-run":
-        experiment = service.experiment(portfolio_id)
-        config = load_config(args.config)
-        certificates = sorted(
-            (config.report_dir / "daily-runs").glob("*/run_certificate.json"),
-            key=lambda item: item.stat().st_mtime,
-            reverse=True,
-        )
-        if not certificates:
-            raise ValueError("NO_PERSISTED_RUN; run daily first")
-        certificate = json.loads(certificates[0].read_text(encoding="utf-8"))
-        analysis_date = date.fromisoformat(str(certificate["analysis_date"]))
-        as_of = datetime.combine(analysis_date, datetime.min.time(), tzinfo=UTC) + timedelta(
-            hours=21
-        )
-        cutoff = datetime.fromisoformat(str(certificate["data_cutoff"]))
-        traces = cast(dict[str, dict[str, object]], certificate.get("decision_traces", {}))
-        inputs = tuple(
-            PaperSignalInput(
-                ticker=ticker,
-                security_id=ticker,
-                composite=float(str(trace["composite_alpha"])),
-                expected_alpha=float(str(trace["expected_alpha"])),
-                rank=int(str(trace["cross_sectional_rank"])),
-                factor_values=cast(dict[str, float], trace["factor_neutralized_values"]),
-            )
-            for ticker, trace in traces.items()
-        )
-        provenance = cast(dict[str, object], certificate["provenance"])
-        signals = service.record_signals(
-            portfolio_id=portfolio_id,
-            experiment_id=str(experiment["paper_experiment_id"]),
-            as_of=as_of,
-            cutoff=cutoff,
-            trade_date=date.fromisoformat(str(certificate["trade_date"])),
-            data_hash=str(provenance["data_hash"]),
-            universe_version=str(provenance["universe_version"]),
-            signals=inputs,
-        )
-        actions = service.propose_actions(
-            portfolio_id=portfolio_id,
-            experiment_id=str(experiment["paper_experiment_id"]),
-            signal_ids=tuple(str(item["signal_id"]) for item in signals),
-            prices={},
-            sectors={},
-            average_daily_dollar_volume={},
-            risk_validated=False,
-            decision_time=datetime.now(UTC),
-        )
-        console.print(
-            Panel(
-                f"Recorded {len(signals)} immutable PAPER_SIGNAL observations.\n"
-                f"Proposed actions: {len(actions)}\n"
-                "PAPER_RISK_INPUT_NOT_VALIDATED: no action manufactured.\n"
-                "Production approval remains FALSE.",
-                title="PAPER / SIMULATION ONLY",
-                border_style="yellow",
-            )
-        )
-        return 0
-    raise ValueError(f"unsupported paper command: {args.command}")
 
 
 def _doctor(config_path: Path) -> int:
@@ -982,7 +805,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="PersonalAlphaTerminal")
     parser.add_argument("--config", type=Path, default=Path("config.yaml"))
     parser.add_argument("--no-refresh", action="store_true")
-    parser.add_argument("--paper-portfolio-id", default=None)
+    parser.add_argument("--locale", choices=("zh-CN", "en-US"), default="zh-CN")
     subparsers = parser.add_subparsers(dest="command")
     subparsers.add_parser("daily", help="Run and render the complete daily quant chain")
     subparsers.add_parser("refresh", help="Refresh data, then run the daily quant chain")
@@ -1052,13 +875,9 @@ def build_parser() -> argparse.ArgumentParser:
     modify_execution.add_argument("--quantity", type=float, required=True)
     modify_execution.add_argument("--reason", required=True)
     portfolio_init = subparsers.add_parser("portfolio-init")
-    portfolio_init.add_argument("--name", default="My Portfolio")
+    portfolio_init.add_argument("--portfolio-id", default="main")
     portfolio_init.add_argument("--cash", type=float, default=None)
     portfolio_init.add_argument("--currency", default="USD")
-    portfolio_init.add_argument("--portfolio-id", default=None)
-    portfolio_init.add_argument("--mode", choices=("real", "paper"), default="real")
-    portfolio_init.add_argument("--paper-root", type=Path, default=Path("var/paper-trading"))
-    portfolio_init.add_argument("--experiment-id", default=None)
     portfolio_init.add_argument(
         "--position",
         action="append",
@@ -1067,7 +886,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     portfolio_import = subparsers.add_parser("portfolio-import")
     portfolio_import.add_argument("csv", type=Path)
-    portfolio_import.add_argument("--portfolio-id", type=int, required=True)
+    portfolio_import.add_argument("--portfolio-id", required=True)
     portfolio_import.add_argument("--as-of", required=True)
     portfolio_import.add_argument("--commit", action="store_true")
     portfolio_import.add_argument(
@@ -1080,28 +899,16 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("portfolio", help="Alias for portfolio-list")
     portfolio_show = subparsers.add_parser("portfolio-show")
     portfolio_show.add_argument("--portfolio-id", required=True)
-    for paper_name in ("paper-status", "paper-run", "paper-actions", "paper-performance"):
-        paper_parser = subparsers.add_parser(paper_name)
-        paper_parser.add_argument("--portfolio-id", default="paper-100k")
-        paper_parser.add_argument("--paper-root", type=Path, default=Path("var/paper-trading"))
-    paper_confirm = subparsers.add_parser("paper-confirm")
-    paper_confirm.add_argument("action_id")
-    paper_confirm.add_argument("--portfolio-id", default="paper-100k")
-    paper_confirm.add_argument("--paper-root", type=Path, default=Path("var/paper-trading"))
-    paper_confirm.add_argument("--decision", choices=("accept", "reject", "skip"), required=True)
-    paper_confirm.add_argument("--reason", default="")
-    paper_fill = subparsers.add_parser("paper-fill")
-    paper_fill.add_argument("action_id")
-    paper_fill.add_argument("--portfolio-id", default="paper-100k")
-    paper_fill.add_argument("--paper-root", type=Path, default=Path("var/paper-trading"))
-    paper_fill.add_argument("--ticker", required=True)
-    paper_fill.add_argument("--session-date", required=True)
-    paper_fill.add_argument("--open", type=float, required=True)
-    paper_fill.add_argument("--adv", type=float, required=True)
-    paper_fill.add_argument("--available-at", required=True)
-    paper_fill.add_argument("--fill-time", required=True)
-    paper_fill.add_argument("--source", required=True)
-    paper_fill.add_argument("--data-hash", required=True)
+    portfolio_update = subparsers.add_parser("portfolio-update")
+    portfolio_update.add_argument("--portfolio-id", default="main")
+    portfolio_update.add_argument("--as-of", required=True)
+    portfolio_update.add_argument("--cash", type=float, default=None)
+    portfolio_update.add_argument(
+        "--position",
+        action="append",
+        default=None,
+        help="TICKER=SHARES[:AVERAGE_COST]; repeat for each current position",
+    )
     explain = subparsers.add_parser("explain")
     explain.add_argument("symbol")
     explain.add_argument("--run-id", default=None)
@@ -1171,29 +978,21 @@ def main(argv: list[str] | None = None) -> int:
             "portfolio-import",
             "portfolio-list",
             "portfolio-show",
+            "portfolio-update",
         }:
             return _portfolio_command(args)
-        if command in {
-            "paper-status",
-            "paper-run",
-            "paper-actions",
-            "paper-confirm",
-            "paper-fill",
-            "paper-performance",
-        }:
-            return _paper_command(args)
         if command == "refresh":
             return run_daily(
                 args.config,
                 refresh=True,
-                paper_portfolio_id=args.paper_portfolio_id,
+                locale=args.locale,
             )
         if command in {"data", "factors", "probability", "risk", "decisions"}:
             return _render_persisted_section(args.config, command, args.run_id)
         return run_daily(
             args.config,
             refresh=not args.no_refresh,
-            paper_portfolio_id=args.paper_portfolio_id,
+            locale=args.locale,
         )
     except (FileNotFoundError, OSError, RuntimeError, ValueError) as error:
         logger.exception("Command failed")

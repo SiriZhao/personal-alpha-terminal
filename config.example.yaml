@@ -6,8 +6,8 @@ vix_symbol: ^VIX
 history_start: 2015-01-01
 cache_dir: data/cache
 report_dir: reports
-# Select only after verifying a locally initialized manual ledger.
-# portfolio_id: 1
+# Stable external identity of the manually maintained ledger.
+portfolio_id: main
 provider_priority:
   - yahoo
   - stooq

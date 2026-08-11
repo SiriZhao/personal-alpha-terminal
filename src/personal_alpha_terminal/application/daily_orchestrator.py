@@ -533,12 +533,19 @@ class DailyQuantOrchestrator:
             )
             for symbol in sorted(set(current) | set(target_weights))
         )
+        actual_cash_weight = (
+            workflow.cash_balance / workflow.portfolio_value
+            if workflow.cash_balance is not None
+            and workflow.portfolio_value is not None
+            and workflow.portfolio_value > 0
+            else None
+        )
         portfolio = PortfolioSummary(
             workflow.portfolio_status,
             workflow.portfolio_value,
             workflow.cash_balance,
-            workflow.cash_target,
-            workflow.gross_target,
+            actual_cash_weight,
+            (1.0 - actual_cash_weight if actual_cash_weight is not None else None),
             positions,
         )
         target = workflow.target
@@ -736,6 +743,7 @@ class DailyQuantOrchestrator:
                     workflow.portfolio_validation_artifact_id
                 ),
                 "probability_artifact_id": workflow.probability_artifact_id,
+                "portfolio_id": self._effective_config.portfolio_id or "UNSELECTED",
                 "portfolio_snapshot_id": workflow.portfolio_snapshot_id,
                 "deterministic_core_model": workflow.strategy_version,
                 "ml_model": "NOT_REQUIRED",

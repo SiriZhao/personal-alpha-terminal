@@ -30,6 +30,7 @@ nasdaq_23h_enabled: false
 night_execution_enabled: false
 default_execution_session: REGULAR
 allow_calendar_fallback: false
+portfolio_id: main
 stress_maximum_cvar_loss: 0.06
 stress_maximum_liquidation_days: 5.0
 stress_maximum_correlation_spike_loss: 0.08
@@ -40,4 +41,4 @@ stress_maximum_single_name_loss: 0.05
 stress_maximum_sector_loss: 0.10
 stress_warning_ratio: 0.80
 # Holdings and cash are intentionally absent. The real portfolio ledger is the
-# only source of truth; select it with portfolio_id after portfolio-init/import.
+# only source of truth. ``main`` is the stable external ledger identity.

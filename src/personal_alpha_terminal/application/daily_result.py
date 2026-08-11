@@ -283,15 +283,11 @@ class DailyQuantResult:
         probability evidence without suggesting that a trading decision exists.
         """
 
-        required = {
-            "CALENDAR",
-            "DATA",
-            "PIT",
-            "FEATURE",
-            "FACTOR",
-            "SIGNAL",
-            "PROBABILITY",
-        }
+        # A strategy-approval failure does not invalidate the completed data and
+        # alpha-candidate analysis. It remains non-actionable because ``actionable``
+        # still requires SIGNAL through EXECUTION; this property only classifies
+        # the portfolio-independent diagnostic core.
+        required = {"CALENDAR", "DATA", "PIT", "FEATURE", "FACTOR"}
         completed = {
             item.name
             for item in self.stages

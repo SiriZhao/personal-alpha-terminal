@@ -26,15 +26,18 @@ Each run certificate includes run/analysis/trade dates, PIT cutoff, config hash,
 ## Test and E2E result
 
 - Static lint: `ruff check src tests` passed.
-- Full suite: **586 passed** in 68.24 seconds; no skip/xpass was added to manufacture success.
+- Historical closure baseline: **586 passed**. Current unified-live closure supersedes this
+  count with **617 passed**; no skip/xpass was added to manufacture success.
 - E2E A: uninitialized/unselected portfolio completes the data/research chain, produces zero trades, and blocks at strategy/portfolio as applicable.
 - E2E B: isolated cash/portfolio fixture proves approved-artifact plumbing through portfolio, risk, and decision; removing approval fails closed. Fixture approval is not real production evidence.
-- Reproducibility: two equivalent real local runs produced identical canonical input hash `245ad85f...c5b6` and result hash `611cfc27...ef32`; both classified `INVALID_NON_ACTIONABLE` with zero actions.
+- Current reproducibility: fixed-time runs using `main` produced identical canonical input
+  hash `9e87711e...8ac7` and result hash `f0ef0aaa...b574`; both are correctly classified
+  `VALID_ANALYSIS_NON_ACTIONABLE` with zero actions.
 
 ## Remaining blockers
 
 1. Acquire and certify survivorship-safe historical universe membership, delistings, corporate actions, and PIT total-return history.
 2. Run the locked OOS/walk-forward certification using real data and only register its artifact if every gate passes.
-3. The user must verify/create a manual ledger and explicitly select `portfolio_id`.
+3. Resolved in the unified-live closure: `main` is selected and initialized at USD 100,000.
 
 The documentation commit and remote branch are recorded in the final handoff after push.

@@ -17,8 +17,24 @@ from personal_alpha_terminal.quant_engine.strategies.us_adaptive_alpha_core impo
 )
 
 DEFAULT_SYMBOLS = (
-    "SPY", "QQQ", "IWM", "VTI", "TLT", "GLD", "SHY", "^VIX",
-    "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "AVGO", "JPM", "XOM", "UNH",
+    "SPY",
+    "QQQ",
+    "IWM",
+    "VTI",
+    "TLT",
+    "GLD",
+    "SHY",
+    "^VIX",
+    "AAPL",
+    "MSFT",
+    "NVDA",
+    "GOOGL",
+    "AMZN",
+    "META",
+    "AVGO",
+    "JPM",
+    "XOM",
+    "UNH",
 )
 DEFAULT_REQUIRED_SYMBOLS = DEFAULT_SYMBOLS
 
@@ -60,7 +76,9 @@ class EffectiveRuntimeConfig:
     night_execution_enabled: bool = False
     default_execution_session: str = "REGULAR"
     allow_calendar_fallback: bool = False
-    portfolio_id: int | None = None
+    # Stable external portfolio key. Database foreign keys remain integers, while
+    # operators select the unique ledger name (normally ``main``).
+    portfolio_id: int | str | None = None
     required_symbols: tuple[str, ...] = DEFAULT_REQUIRED_SYMBOLS
     strategy: USAdaptiveAlphaCoreV1Config = field(default_factory=USAdaptiveAlphaCoreV1Config)
     portfolio_constraints: PortfolioConstraints = field(default_factory=PortfolioConstraints)
@@ -80,9 +98,7 @@ class EffectiveRuntimeConfig:
         if unsupported:
             names = ", ".join(sorted(unsupported))
             raise ValueError(f"unsupported independent provider(s): {names}")
-        if len(set(self.independent_provider_priority)) != len(
-            self.independent_provider_priority
-        ):
+        if len(set(self.independent_provider_priority)) != len(self.independent_provider_priority):
             raise ValueError("independent provider priority contains duplicates")
         if self.night_execution_enabled:
             raise ValueError("night execution is disabled for manual execution")
@@ -109,9 +125,7 @@ class EffectiveRuntimeConfig:
         stress_parameters = asdict(self.stress_risk)
         stress_parameters.pop("production_validated")
         stress_parameters.pop("validation_id")
-        return fingerprint(
-            {"risk_model": self.risk_model, "stress_risk": stress_parameters}
-        )
+        return fingerprint({"risk_model": self.risk_model, "stress_risk": stress_parameters})
 
     @property
     def cost_model_hash(self) -> str:
@@ -179,9 +193,7 @@ def resolve_effective_runtime_config(
     environment = os.environ if environment is None else environment
     scalar, lists, holdings = _read_restricted_yaml(path)
     if holdings:
-        raise ValueError(
-            "holdings in config.yaml are forbidden; use the real portfolio ledger"
-        )
+        raise ValueError("holdings in config.yaml are forbidden; use the real portfolio ledger")
     settings = Settings(_env_file=None)
     config = EffectiveRuntimeConfig(
         market=scalar.get("market", "US").upper(),
@@ -251,37 +263,27 @@ def resolve_effective_runtime_config(
             "reconciliation_preferred_overlap_sessions",
             settings.market_data_reconciliation_preferred_overlap_sessions,
         ),
-        nasdaq_23h_enabled=_boolean(
-            scalar, "nasdaq_23h_enabled", settings.nasdaq_23h_enabled
-        ),
+        nasdaq_23h_enabled=_boolean(scalar, "nasdaq_23h_enabled", settings.nasdaq_23h_enabled),
         nasdaq_23h_effective_date=_optional_date(scalar.get("nasdaq_23h_effective_date")),
         night_execution_enabled=_boolean(
             scalar, "night_execution_enabled", settings.night_execution_enabled
         ),
         default_execution_session=scalar.get("default_execution_session", "REGULAR").upper(),
         allow_calendar_fallback=_boolean(scalar, "allow_calendar_fallback", False),
-        portfolio_id=(int(scalar["portfolio_id"]) if "portfolio_id" in scalar else None),
+        portfolio_id=_portfolio_key(scalar.get("portfolio_id")),
         stress_risk=StressRiskConfig(
             maximum_cvar_loss=_number(scalar, "stress_maximum_cvar_loss", 0.06),
-            maximum_liquidation_days=_number(
-                scalar, "stress_maximum_liquidation_days", 5.0
-            ),
+            maximum_liquidation_days=_number(scalar, "stress_maximum_liquidation_days", 5.0),
             maximum_correlation_spike_loss=_number(
                 scalar, "stress_maximum_correlation_spike_loss", 0.08
             ),
             maximum_gap_loss=_number(scalar, "stress_maximum_gap_loss", 0.08),
-            maximum_stressed_volatility=_number(
-                scalar, "stress_maximum_stressed_volatility", 0.30
-            ),
+            maximum_stressed_volatility=_number(scalar, "stress_maximum_stressed_volatility", 0.30),
             maximum_benchmark_crash_loss=_number(
                 scalar, "stress_maximum_benchmark_crash_loss", 0.25
             ),
-            maximum_single_name_loss=_number(
-                scalar, "stress_maximum_single_name_loss", 0.05
-            ),
-            maximum_sector_loss=_number(
-                scalar, "stress_maximum_sector_loss", 0.10
-            ),
+            maximum_single_name_loss=_number(scalar, "stress_maximum_single_name_loss", 0.05),
+            maximum_sector_loss=_number(scalar, "stress_maximum_sector_loss", 0.10),
             warning_ratio=_number(scalar, "stress_warning_ratio", 0.80),
         ),
         settings=settings,
@@ -338,9 +340,7 @@ def effective_config_from_settings(settings: Settings) -> EffectiveRuntimeConfig
         timeout_seconds=settings.market_data_timeout_seconds,
         max_retries=settings.market_data_max_retries,
         retry_backoff_seconds=settings.market_data_retry_backoff_seconds,
-        reconciliation_minimum_coverage=(
-            settings.market_data_reconciliation_minimum_coverage
-        ),
+        reconciliation_minimum_coverage=(settings.market_data_reconciliation_minimum_coverage),
         reconciliation_warning_tolerance=(
             settings.market_data_reconciliation_warning_return_tolerance
         ),
@@ -372,15 +372,11 @@ def _apply_environment(
             timeout_seconds=int(environment["PAT_MARKET_DATA_TIMEOUT_SECONDS"]),
         )
     if "PAT_MARKET_DATA_MAX_RETRIES" in environment:
-        config = replace(
-            config, max_retries=int(environment["PAT_MARKET_DATA_MAX_RETRIES"])
-        )
+        config = replace(config, max_retries=int(environment["PAT_MARKET_DATA_MAX_RETRIES"]))
     if "PAT_MARKET_DATA_RETRY_BACKOFF_SECONDS" in environment:
         config = replace(
             config,
-            retry_backoff_seconds=float(
-                environment["PAT_MARKET_DATA_RETRY_BACKOFF_SECONDS"]
-            ),
+            retry_backoff_seconds=float(environment["PAT_MARKET_DATA_RETRY_BACKOFF_SECONDS"]),
         )
     if "PAT_NASDAQ_23H_ENABLED" in environment:
         config = replace(
@@ -390,9 +386,7 @@ def _apply_environment(
     if "PAT_NIGHT_EXECUTION_ENABLED" in environment:
         config = replace(
             config,
-            night_execution_enabled=_parse_bool(
-                environment["PAT_NIGHT_EXECUTION_ENABLED"]
-            ),
+            night_execution_enabled=_parse_bool(environment["PAT_NIGHT_EXECUTION_ENABLED"]),
         )
     return config
 
@@ -406,8 +400,10 @@ def _apply_cli_overrides(
         raise ValueError(f"unsupported CLI configuration override: {sorted(unknown)}")
     portfolio_id = overrides.get("portfolio_id")
     if portfolio_id is not None:
-        if not isinstance(portfolio_id, int):
-            raise ValueError("portfolio_id CLI override must be an integer")
+        if not isinstance(portfolio_id, (int, str)):
+            raise ValueError("portfolio_id CLI override must be an integer or ledger name")
+        if isinstance(portfolio_id, str) and not portfolio_id.strip():
+            raise ValueError("portfolio_id CLI override must not be empty")
         config = replace(config, portfolio_id=portfolio_id)
     report_dir = overrides.get("report_dir")
     if report_dir is not None:
@@ -416,6 +412,15 @@ def _apply_cli_overrides(
     if cache_dir is not None:
         config = replace(config, cache_dir=Path(str(cache_dir)))
     return config
+
+
+def _portfolio_key(value: str | None) -> int | str | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    return int(normalized) if normalized.isdigit() else normalized
 
 
 def _read_restricted_yaml(
@@ -537,8 +542,8 @@ stress_warning_ratio: 0.80
 
 
 def user_config_text(root: Path) -> str:
-    return default_config_text().replace(
-        "cache_dir: data/cache", f"cache_dir: {(root / 'cache').resolve().as_posix()}"
-    ).replace(
-        "report_dir: reports", f"report_dir: {(root / 'reports').resolve().as_posix()}"
+    return (
+        default_config_text()
+        .replace("cache_dir: data/cache", f"cache_dir: {(root / 'cache').resolve().as_posix()}")
+        .replace("report_dir: reports", f"report_dir: {(root / 'reports').resolve().as_posix()}")
     )

@@ -65,10 +65,10 @@ and four verified XNYS sessions. CSV, Parquet, and SQLite imports normalize to t
 hash. It receives `CERTIFIED` only within `TEST_FIXTURE` scope and
 `production_eligible=false`; strategy certification explicitly rejects that scope.
 
-Full quality gates pass: Ruff, strict mypy over 357 project source files, and 608 pytest tests. A normal
-no-refresh daily run also retained `DATA/PIT/FEATURE/FACTOR = PASS`, produced zero actionable
-trades, and remained blocked by the genuine missing strategy approval and uninitialized
-portfolio.
+The research-data phase baseline passed 608 tests. The current unified-live closure passes
+Ruff, strict mypy over 357 project source files, and 617 pytest tests. A normal no-refresh
+daily run retains `DATA/PIT/FEATURE/FACTOR = PASS`, loads the initialized `main` ledger, produces
+zero actionable trades, and remains blocked only by the genuine missing strategy approval.
 
 ## Remaining blockers and next gate
 

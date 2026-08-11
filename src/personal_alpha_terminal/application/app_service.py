@@ -49,6 +49,7 @@ from personal_alpha_terminal.models import (
     DailyPipelineRun,
     Portfolio,
     PortfolioPosition,
+    PortfolioTransaction,
     QuantDecisionRun,
     Stock,
 )
@@ -60,6 +61,7 @@ from personal_alpha_terminal.portfolio.portfolio_validation import (
 from personal_alpha_terminal.portfolio.position_import import (
     ParsedPositionFile,
     PositionImportResult,
+    PositionImportRow,
     PositionImportService,
     parse_position_csv,
 )
@@ -69,8 +71,8 @@ from personal_alpha_terminal.terminal.market_sessions import MarketSessionCalend
 class ApplicationService:
     """Headless facade for research, backtests, diagnostics, and manual review.
 
-    Paper trading was deliberately removed. Accepting a candidate creates only
-    a pending manual-execution record; it never contacts a broker or changes holdings.
+    There is no second trading domain. Accepting a candidate creates only a
+    pending manual-execution record; it never contacts a broker or changes holdings.
     """
 
     def __init__(
@@ -86,9 +88,7 @@ class ApplicationService:
         self._settings = settings or get_settings()
         self._snapshot_root = snapshot_root
         self._sync_runner = sync_runner
-        self._effective_config = effective_config or effective_config_from_settings(
-            self._settings
-        )
+        self._effective_config = effective_config or effective_config_from_settings(self._settings)
 
     def get_system_health(self) -> SystemReadiness:
         try:
@@ -106,8 +106,7 @@ class ApplicationService:
                 model = self._model_status(session, data.allow_research)
                 program_code = (
                     ProgramStatus.DEGRADED
-                    if data.code in {"PARTIAL", "STALE", "PROVIDER_ERROR"}
-                    or model.code == "FAILED"
+                    if data.code in {"PARTIAL", "STALE", "PROVIDER_ERROR"} or model.code == "FAILED"
                     else ProgramStatus.READY
                 )
                 program = StatusDetail.build(
@@ -176,37 +175,40 @@ class ApplicationService:
     def run_quant_daily(
         self,
         *,
-        portfolio_id: int,
+        portfolio_id: int | str,
         decision_time: datetime | None = None,
     ) -> TodayResult:
         """Run the gated DB -> alpha -> portfolio -> action production chain."""
 
         with self._factory.begin() as session:
+            resolved_id = self._resolve_portfolio_id(session, portfolio_id)
             return ProductionDailyWorkflow(session, self._effective_config).run(
-                portfolio_id=portfolio_id,
+                portfolio_id=resolved_id,
                 decision_time=decision_time or datetime.now(UTC),
             )
 
     def run_daily_quant_report(
         self,
         *,
-        portfolio_id: int | None = None,
+        portfolio_id: int | str | None = None,
         decision_time: datetime | None = None,
         refresh: bool = True,
     ) -> DailyQuantResult:
         """Run the only production daily orchestrator consumed by terminals."""
 
+        resolved_id: int | None = None
+        if portfolio_id is not None:
+            with self._factory() as session:
+                resolved_id = self._resolve_portfolio_id(session, portfolio_id)
         return DailyQuantOrchestrator(
             self._factory,
             self._effective_config,
             snapshot_root=(
-                self._snapshot_root / "daily-runs"
-                if self._snapshot_root is not None
-                else None
+                self._snapshot_root / "daily-runs" if self._snapshot_root is not None else None
             ),
             sync_runner=self._sync_runner,
         ).run(
-            portfolio_id=portfolio_id,
+            portfolio_id=resolved_id,
             decision_time=decision_time,
             refresh=refresh,
         )
@@ -306,6 +308,25 @@ class ApplicationService:
             )
             session.add(model)
             session.flush()
+            event_time = datetime.combine(snapshot_date, datetime.min.time(), tzinfo=UTC)
+            if cash > 0:
+                session.add(
+                    PortfolioTransaction(
+                        portfolio_id=model.id,
+                        transaction_type="deposit",
+                        trade_date=snapshot_date,
+                        settlement_date=snapshot_date,
+                        cash_amount=cash,
+                        fee_amount=Decimal("0"),
+                        currency=normalized_currency,
+                        fx_rate_to_base=Decimal("1"),
+                        source="portfolio_initialization",
+                        external_id=f"initial-cash:{normalized}",
+                        notes="Initial cash recorded by manual portfolio initialization",
+                        event_time=event_time,
+                        available_time=event_time,
+                    )
+                )
             warnings: list[str] = []
             seen: set[str] = set()
             for item in positions:
@@ -340,7 +361,7 @@ class ApplicationService:
     def import_portfolio_csv(
         self,
         *,
-        portfolio_id: int,
+        portfolio_id: int | str,
         source: Path,
         as_of_date: date,
         cash_override: Decimal | None = None,
@@ -356,8 +377,9 @@ class ApplicationService:
                 warnings=parsed.warnings,
             )
         with self._factory.begin() as session:
+            resolved_id = self._resolve_portfolio_id(session, portfolio_id)
             return PositionImportService(session).import_snapshot(
-                portfolio_id=portfolio_id,
+                portfolio_id=resolved_id,
                 as_of_date=as_of_date,
                 parsed=parsed,
             )
@@ -367,12 +389,66 @@ class ApplicationService:
 
         return parse_position_csv(source.read_bytes())
 
+    def update_portfolio_snapshot(
+        self,
+        *,
+        portfolio_id: int | str,
+        as_of_date: date,
+        positions: tuple[ValidatedPosition, ...],
+        cash_balance: Decimal | None = None,
+    ) -> PositionImportResult:
+        """Atomically replace one dated manual snapshot; no broker action is implied."""
+
+        if as_of_date > datetime.now(UTC).date():
+            raise ValueError("portfolio as_of date cannot be in the future")
+        parsed = ParsedPositionFile(
+            format_name="manual_cli_snapshot",
+            rows=tuple(
+                PositionImportRow(item.ticker, item.shares, item.average_cost) for item in positions
+            ),
+            cash_balance=(validate_cash(cash_balance) if cash_balance is not None else None),
+            warnings=(),
+        )
+        with self._factory.begin() as session:
+            resolved_id = self._resolve_portfolio_id(session, portfolio_id)
+            portfolio = session.get(Portfolio, resolved_id)
+            assert portfolio is not None
+            if parsed.cash_balance is not None and parsed.cash_balance != portfolio.cash_balance:
+                delta = parsed.cash_balance - portfolio.cash_balance
+                event_time = datetime.combine(as_of_date, datetime.min.time(), tzinfo=UTC)
+                session.add(
+                    PortfolioTransaction(
+                        portfolio_id=resolved_id,
+                        transaction_type="deposit" if delta > 0 else "withdrawal",
+                        trade_date=as_of_date,
+                        settlement_date=as_of_date,
+                        cash_amount=abs(delta),
+                        fee_amount=Decimal("0"),
+                        currency=portfolio.base_currency,
+                        fx_rate_to_base=Decimal("1"),
+                        source="portfolio_manual_update",
+                        external_id=(
+                            f"cash-update:{portfolio.name}:{as_of_date}:"
+                            f"{parsed.cash_balance.normalize()}"
+                        ),
+                        notes="Manual cash balance reconciliation",
+                        event_time=event_time,
+                        available_time=event_time,
+                    )
+                )
+            return PositionImportService(session).import_snapshot(
+                portfolio_id=resolved_id,
+                as_of_date=as_of_date,
+                parsed=parsed,
+            )
+
     def list_portfolios(self) -> tuple[dict[str, object], ...]:
         with self._factory() as session:
             portfolios = session.scalars(select(Portfolio).order_by(Portfolio.id))
             return tuple(
                 {
                     "id": item.id,
+                    "portfolio_id": item.name,
                     "name": item.name,
                     "base_currency": item.base_currency,
                     "cash_balance": float(item.cash_balance),
@@ -380,14 +456,14 @@ class ApplicationService:
                 for item in portfolios
             )
 
-    def get_portfolio_status(self, portfolio_id: int) -> dict[str, object]:
+    def get_portfolio_status(self, portfolio_id: int | str) -> dict[str, object]:
         with self._factory() as session:
-            portfolio = session.get(Portfolio, portfolio_id)
-            if portfolio is None:
-                raise ValueError("portfolio does not exist")
+            resolved_id = self._resolve_portfolio_id(session, portfolio_id)
+            portfolio = session.get(Portfolio, resolved_id)
+            assert portfolio is not None
             latest_date = session.scalar(
                 select(func.max(PortfolioPosition.as_of_date)).where(
-                    PortfolioPosition.portfolio_id == portfolio_id
+                    PortfolioPosition.portfolio_id == resolved_id
                 )
             )
             positions = (
@@ -395,7 +471,7 @@ class ApplicationService:
                     session.scalars(
                         select(PortfolioPosition)
                         .where(
-                            PortfolioPosition.portfolio_id == portfolio_id,
+                            PortfolioPosition.portfolio_id == resolved_id,
                             PortfolioPosition.as_of_date == latest_date,
                         )
                         .order_by(PortfolioPosition.stock_id)
@@ -406,9 +482,13 @@ class ApplicationService:
             )
             return {
                 "id": portfolio.id,
+                "portfolio_id": portfolio.name,
                 "name": portfolio.name,
                 "currency": portfolio.base_currency,
                 "cash": float(portfolio.cash_balance),
+                "nav": float(portfolio.cash_balance) if not positions else None,
+                "invested": 0.0 if not positions else None,
+                "cash_weight": 1.0 if not positions and portfolio.cash_balance > 0 else None,
                 "as_of": latest_date,
                 "positions": tuple(
                     {
@@ -421,6 +501,17 @@ class ApplicationService:
                     for item in positions
                 ),
             }
+
+    @staticmethod
+    def _resolve_portfolio_id(session: Session, portfolio_id: int | str) -> int:
+        portfolio = (
+            session.get(Portfolio, portfolio_id)
+            if isinstance(portfolio_id, int)
+            else session.scalar(select(Portfolio).where(Portfolio.name == portfolio_id.strip()))
+        )
+        if portfolio is None:
+            raise ValueError(f"portfolio does not exist: {portfolio_id}")
+        return portfolio.id
 
     def get_action_candidates(self) -> tuple[CandidateView, ...]:
         with self._factory() as session:

@@ -582,7 +582,9 @@ def test_a_production_no_portfolio_blocks_trading_without_signals(
     assert result.execution_plan.status == "BLOCKED"
     assert result.execution_plan.legs == ()
     assert result.actionable is False
-    assert result.run_classification == "INVALID_NON_ACTIONABLE"
+    # Completed PIT factor diagnostics stay valid even though SIGNAL and the
+    # missing manual ledger keep the run strictly non-actionable.
+    assert result.run_classification == "VALID_ANALYSIS_NON_ACTIONABLE"
     assert any("PORTFOLIO NOT INITIALIZED" in item for item in result.blockers)
 
     # Data certification invariants must not regress.
