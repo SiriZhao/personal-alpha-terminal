@@ -93,3 +93,9 @@ def test_approval_requires_exact_strategy_parameter_and_research_data_identity()
     assert approval_matches(artifact, identity)
     assert not approval_matches(artifact, replace(identity, parameter_hash="params-v2"))
     assert not approval_matches(artifact, replace(identity, research_data_hash="changed"))
+
+
+def test_certified_test_fixture_cannot_create_strategy_approval() -> None:
+    artifact = certify_strategy(replace(_evidence(), research_data_use_scope="TEST_FIXTURE"))
+    assert artifact.status is StrategyCertificationStatus.NOT_CERTIFIABLE
+    assert "RESEARCH_DATA_NOT_PRODUCTION_ELIGIBLE" in artifact.blockers

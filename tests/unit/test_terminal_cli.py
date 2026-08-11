@@ -124,3 +124,13 @@ def test_provider_status_is_preflight_only_and_redacts_credentials(
     output = capsys.readouterr().out
     assert result == 0
     assert "daily readiness is unaffected" in output
+
+
+def test_research_data_cli_exposes_isolated_lifecycle_commands() -> None:
+    parser = terminal_cli.build_parser()
+    for action in ("status", "audit", "certify", "manifest"):
+        args = parser.parse_args(["research-data", action])
+        assert args.command == "research-data"
+        assert args.research_data_action == action
+    imported = parser.parse_args(["research-data", "import", "fixture.csv"])
+    assert imported.path == Path("fixture.csv")
