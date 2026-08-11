@@ -39,4 +39,4 @@ run ID 属于每次运行身份，按设计不同。
 生产认证门槛未修改；没有创建 approval artifact、没有推荐 BUY/SELL、没有连接 broker、没有伪造概率或 regime。Charles Schwab / 外部券商仅手动执行。
 
 验证：Ruff PASS；strict mypy PASS（357 source files）；full pytest **617 passed in
-57.42s**；repository secret scan PASS。Git/GitHub push 证据在最终交付中记录。
+62.77s**；repository secret scan PASS。Git/GitHub push 证据在最终交付中记录。

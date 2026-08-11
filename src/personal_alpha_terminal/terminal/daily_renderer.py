@@ -834,12 +834,20 @@ def _benchmark(result: DailyQuantResult, console: Console) -> None:
             _signed_percent(item.max_drawdown),
             item.note,
         )
+    console.print(table)
+    comparable = [
+        abs(item.period_return)
+        for item in result.benchmarks
+        if item.period_return is not None
+    ]
+    scale = max(comparable, default=0.0)
+    for item in result.benchmarks:
         if item.period_return is not None:
+            normalized = abs(item.period_return) / scale if scale > 0 else 0.0
             console.print(
-                f"{item.name:10} {_bar((item.period_return + 0.10) / 0.20, 16)} "
+                f"{item.name:10} {_bar(normalized, 16)} "
                 f"{_signed_percent(item.period_return)}"
             )
-    console.print(table)
     cost = result.provenance.get("transaction_cost_assumption")
     if isinstance(cost, str) and cost:
         console.print(f"Cost assumption: {cost}")
