@@ -49,7 +49,7 @@ def test_forward_ledger_appends_outcome_without_mutating_prediction(tmp_path) ->
     predictions, outcomes = load_forward_ledger(path)
     assert predictions["rec-1"].target_weight == 0.12
     assert predictions["rec-1"].probability == 0.65
-    assert outcomes["rec-1"].realized_return == 0.03
+    assert outcomes["rec-1::HORIZON"].realized_return == 0.03
     with pytest.raises(ValueError, match="unknown prediction"):
         append_outcome(
             ForwardOutcome(
@@ -64,3 +64,75 @@ def test_forward_ledger_appends_outcome_without_mutating_prediction(tmp_path) ->
             ),
             path,
         )
+
+
+def test_forward_outcome_records_are_immutable_per_horizon(tmp_path) -> None:
+    path = tmp_path / "forward.jsonl"
+    append_prediction(_prediction(), path)
+    first = ForwardOutcome(
+        recommendation_id="rec-1",
+        observed_at=datetime(2026, 9, 15, 20, 30, tzinfo=UTC),
+        observed_price=190.0,
+        benchmark_price=550.0,
+        realized_return=0.03,
+        benchmark_return=0.01,
+        realized_benchmark_relative_return=0.02,
+        outcome_source="DB_RAW_OHLCV",
+        horizon="1D",
+        return_1d=0.03,
+    )
+    append_outcome(first, path)
+    with pytest.raises(ValueError, match="refusing to overwrite"):
+        append_outcome(
+            ForwardOutcome(
+                recommendation_id="rec-1",
+                observed_at=datetime(2026, 9, 15, 20, 30, tzinfo=UTC),
+                observed_price=191.0,
+                benchmark_price=551.0,
+                realized_return=0.04,
+                benchmark_return=0.02,
+                realized_benchmark_relative_return=0.02,
+                outcome_source="DB_RAW_OHLCV",
+                horizon="1D",
+                return_1d=0.04,
+            ),
+            path,
+        )
+    second = ForwardOutcome(
+        recommendation_id="rec-1",
+        observed_at=datetime(2026, 9, 22, 20, 30, tzinfo=UTC),
+        observed_price=195.0,
+        benchmark_price=560.0,
+        realized_return=0.05,
+        benchmark_return=0.02,
+        realized_benchmark_relative_return=0.03,
+        outcome_source="DB_RAW_OHLCV",
+        horizon="5D",
+        return_5d=0.05,
+    )
+    append_outcome(second, path)
+    predictions, outcomes = load_forward_ledger(path)
+    assert outcomes["rec-1::1D"].return_1d == 0.03
+    assert outcomes["rec-1::5D"].return_5d == 0.05
+    assert predictions["rec-1"].target_weight == 0.12
+
+
+def test_forward_ledger_rejects_mutation_of_prediction(tmp_path) -> None:
+    path = tmp_path / "forward.jsonl"
+    append_prediction(_prediction(), path)
+    mutated = ForwardPrediction(
+        recommendation_id="rec-1",
+        run_id="run-1",
+        symbol="AAPL",
+        as_of=datetime(2026, 8, 11, 20, 30, tzinfo=UTC),
+        decision_time=datetime(2026, 8, 12, 12, tzinfo=UTC),
+        target_weight=0.99,
+        expected_alpha=0.02,
+        probability=0.65,
+        risk_contribution=0.3,
+        benchmark="SPY",
+        data_hash="abc123",
+        created_at=datetime(2026, 8, 12, 12, tzinfo=UTC),
+    )
+    with pytest.raises(ValueError, match="refusing to mutate"):
+        append_prediction(mutated, path)

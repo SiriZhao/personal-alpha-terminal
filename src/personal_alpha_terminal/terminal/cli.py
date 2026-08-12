@@ -19,6 +19,7 @@ from rich.table import Table
 from personal_alpha_terminal.terminal.broad_universe_cli import broad_universe_command
 from personal_alpha_terminal.terminal.config import default_config_text, load_config
 from personal_alpha_terminal.terminal.daily_renderer import render_daily_quant_result
+from personal_alpha_terminal.terminal.forward_track_cli import forward_track_command
 from personal_alpha_terminal.terminal.market_sessions import MarketSessionCalendar
 
 if TYPE_CHECKING:
@@ -1201,6 +1202,35 @@ def build_parser() -> argparse.ArgumentParser:
         "funnel", help="Report the per-layer tradable universe funnel"
     )
     broad_universe_funnel.add_argument("--as-of", default=None)
+    forward_track = subparsers.add_parser(
+        "forward-track",
+        help="Inspect and append the immutable forward prediction/outcome ledger",
+    )
+    forward_track.add_argument("--database", type=Path, default=Path("var/personal_alpha.db"))
+    forward_track_actions = forward_track.add_subparsers(
+        dest="forward_track_action", required=True
+    )
+    forward_track_actions.add_parser("report", help="Summarize predictions and outcomes")
+    append_outcome = forward_track_actions.add_parser(
+        "append-outcome", help="Append an immutable outcome for one recommendation"
+    )
+    append_outcome.add_argument("recommendation_id")
+    append_outcome.add_argument("--horizon", default="HORIZON")
+    append_outcome.add_argument("--observed-at", required=True)
+    append_outcome.add_argument("--observed-price", type=float, required=True)
+    append_outcome.add_argument("--benchmark-price", type=float, required=True)
+    append_outcome.add_argument("--realized-return", type=float, required=True)
+    append_outcome.add_argument("--benchmark-return", type=float, required=True)
+    append_outcome.add_argument("--relative-return", type=float, required=True)
+    append_outcome.add_argument("--source", default="DB_RAW_OHLCV")
+    append_outcome.add_argument("--return-1d", type=float, default=None)
+    append_outcome.add_argument("--return-5d", type=float, default=None)
+    append_outcome.add_argument("--return-10d", type=float, default=None)
+    append_outcome.add_argument("--return-horizon", type=float, default=None)
+    append_outcome.add_argument("--spy-relative", type=float, default=None)
+    append_outcome.add_argument("--qqq-relative", type=float, default=None)
+    append_outcome.add_argument("--max-adverse-excursion", type=float, default=None)
+    append_outcome.add_argument("--max-favorable-excursion", type=float, default=None)
     round4_research = subparsers.add_parser(
         "round4-research",
         help="Run ROUND 4 broad cross-section, calibration and OOS research",
@@ -1337,6 +1367,8 @@ def main(argv: list[str] | None = None) -> int:
             return _research_data_command(args)
         if command == "broad-universe":
             return broad_universe_command(args)
+        if command == "forward-track":
+            return forward_track_command(args)
         if command == "round4-research":
             return _round4_research_command(args)
         if command == "backtest":

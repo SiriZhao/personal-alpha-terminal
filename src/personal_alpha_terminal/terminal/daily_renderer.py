@@ -417,27 +417,80 @@ def _pit_universe(result: DailyQuantResult, console: Console) -> None:
     data_evidence = data_stage.metadata if data_stage is not None else {}
     universe = result.provenance.get("universe_evidence", {})
     universe = universe if isinstance(universe, dict) else {}
-    price_based = universe.get("price_based")
-    price_based = price_based if isinstance(price_based, dict) else {}
-    broad_lines = ""
-    if price_based:
-        broad_lines = (
-            "截面排名池 (价格基准, PRICE_BASED_RANKING)\n"
-            f"Data eligible {price_based.get('data_eligible', 'UNAVAILABLE')}   "
-            f"Liquidity eligible {price_based.get('liquidity_eligible', 'UNAVAILABLE')}   "
-            f"Factor eligible {price_based.get('factor_eligible', 'UNAVAILABLE')}\n"
+    funnel = universe.get("funnel")
+    funnel = funnel if isinstance(funnel, dict) else {}
+    historical = universe.get("historical_research")
+    historical = historical if isinstance(historical, dict) else {}
+    collapse = universe.get("collapse")
+    collapse = collapse if isinstance(collapse, dict) else {}
+    candidates = universe.get("candidate_compression")
+    candidates = candidates if isinstance(candidates, dict) else {}
+    qualification = universe.get("qualification", "UNAVAILABLE")
+    quarantine_count = universe.get("quarantine_count", "UNAVAILABLE")
+    collapse_text = (
+        f"COLLAPSE DETECTED: {collapse.get('reason', '')}"
+        if collapse.get("detected")
+        else "no collapse detected"
+    )
+    candidate_lines = ""
+    steps = candidates.get("steps", [])
+    if isinstance(steps, list) and steps:
+        step_text = "  ".join(
+            f"{step.get('name')}={step.get('count')}"
+            for step in steps
+            if isinstance(step, dict)
         )
+        candidate_lines = (
+            "Candidate funnel\n"
+            f"{step_text}\n"
+            f"Candidates into optimizer {universe.get('candidate_count', 'UNAVAILABLE')}   "
+            f"Full factor rows {universe.get('full_factor_count', 'UNAVAILABLE')}\n"
+        )
+    historical_lines = ""
+    if historical:
+        historical_lines = (
+            "Historical research tier (HISTORICAL_RESEARCH_PIT)\n"
+            f"Security type {historical.get('security_type_eligible', 0)}   "
+            f"Data {historical.get('data_eligible', 0)}   "
+            f"Liquidity {historical.get('liquidity_eligible', 0)}   "
+            f"Factor {historical.get('factor_eligible', 0)}\n"
+        )
+    listed = funnel.get(
+        "listed_securities",
+        universe.get("raw_listed_securities", "UNAVAILABLE"),
+    )
+    equities = funnel.get(
+        "listed_equities",
+        universe.get("raw_listed_equities", "UNAVAILABLE"),
+    )
+    security_ok = funnel.get(
+        "security_type_eligible", universe.get("security_type_eligible", 0)
+    )
+    data_ok = funnel.get("data_eligible", universe.get("data_eligible", 0))
+    liq_ok = funnel.get(
+        "liquidity_eligible", universe.get("liquidity_eligible", 0)
+    )
+    factor_ok = funnel.get(
+        "factor_eligible", universe.get("factor_eligible", 0)
+    )
+    tradable_ok = funnel.get(
+        "signal_eligible", universe.get("signal_eligible", 0)
+    )
     console.print(
         Panel(
             f"Status {stage.status.value if stage else 'NOT_RUN'}   "
             f"Rows {evidence.get('output_row_count', 0)}\n"
-            f"US listed securities {universe.get('raw_listed_securities', 'UNAVAILABLE')}   "
-            f"Listed equities {universe.get('raw_listed_equities', 'UNAVAILABLE')}\n"
-            f"Security type eligible {universe.get('security_type_eligible', 0)}   "
-            f"Data eligible {universe.get('data_eligible', 0)}   "
-            f"Liquidity eligible {universe.get('liquidity_eligible', 0)}   "
-            f"Factor eligible {universe.get('factor_eligible', 0)}\n"
-            + broad_lines
+            f"Qualification {qualification}   "
+            f"Survivorship {universe.get('survivorship_status', 'UNVERIFIED')}\n"
+            "Current operational universe funnel\n"
+            f"US listed securities {listed}   Listed equities {equities}\n"
+            f"Security type {security_ok}   Data {data_ok}   "
+            f"Liquidity {liq_ok}\n"
+            f"Factor eligible {factor_ok}   Operational tradable {tradable_ok}   "
+            f"Quarantine {quarantine_count}\n"
+            + candidate_lines
+            + historical_lines
+            + f"Coverage guard: {collapse_text}\n"
             + "As-of cutoff "
             f"{result.data_cutoff.isoformat() if result.data_cutoff else 'UNAVAILABLE'}\n"
             "Latest completed session "
@@ -445,9 +498,8 @@ def _pit_universe(result: DailyQuantResult, console: Console) -> None:
             "Decision convention "
             f"{data_evidence.get('decision_timestamp_convention', 'UNAVAILABLE')}\n"
             f"PIT status {universe.get('pit_status', 'UNAVAILABLE')}   "
-            f"Survivorship {universe.get('survivorship_status', 'UNVERIFIED')}\n"
             f"Message: {stage.message if stage else 'PIT stage was not created'}",
-            title=_t("PIT / 股票池", "PIT / UNIVERSE"),
+            title=_t("PIT / \u80a1\u7968\u6c60", "PIT / UNIVERSE"),
             border_style=(
                 "green"
                 if stage and stage.status is StageStatus.PASS

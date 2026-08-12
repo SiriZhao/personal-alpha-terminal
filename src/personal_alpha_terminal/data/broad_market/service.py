@@ -29,7 +29,7 @@ from personal_alpha_terminal.data.us_market.broad_universe import (
     EligibilityRules,
     read_directory_snapshot,
 )
-from personal_alpha_terminal.models import Price, SecurityMaster, Stock
+from personal_alpha_terminal.models import Price, SecurityMaster, Stock, TradingStatus
 
 
 class QuarantineReason:
@@ -110,6 +110,8 @@ class BroadUniverseFunnelReport:
     price_based_factor_eligible: int
     price_based_symbols: tuple[str, ...]
     price_based_pit_status: str
+    qualification: str = "HISTORICAL_RESEARCH_PIT"
+    quarantine_count: int = 0
 
     def document(self) -> dict[str, object]:
         return {
@@ -127,6 +129,8 @@ class BroadUniverseFunnelReport:
             "price_based_factor_eligible": self.price_based_factor_eligible,
             "price_based_symbols": list(self.price_based_symbols),
             "price_based_pit_status": self.price_based_pit_status,
+            "qualification": self.qualification,
+            "quarantine_count": self.quarantine_count,
         }
 
 
@@ -481,8 +485,39 @@ class BroadUniverseDataService:
             .on_conflict_do_nothing(index_elements=["stock_id", "trade_date", "source"])
         )
         result = self.session.execute(statement)
+        self._ensure_tradable(stock)
         rowcount = getattr(result, "rowcount", None)
         return int(rowcount) if isinstance(rowcount, int) and rowcount >= 0 else 0
+
+    def _ensure_tradable(self, stock: SecurityMaster) -> None:
+        """Record TRADABLE status once current operational price evidence exists.
+
+        Broad CURRENT_OPERATIONAL_PIT members are not part of the strict
+        certified research snapshot, but they must still satisfy the same
+        current tradability gate before portfolio construction.
+        """
+        self.session.flush()
+        latest = self.session.scalar(
+            select(TradingStatus)
+            .where(TradingStatus.stock_id == stock.id)
+            .order_by(TradingStatus.effective_time.desc(), TradingStatus.id.desc())
+            .limit(1)
+        )
+        if latest is not None and latest.status == "TRADABLE":
+            return
+        now = datetime.now(UTC)
+        self.session.add(
+            TradingStatus(
+                stock_id=stock.id,
+                status="TRADABLE",
+                effective_time=now,
+                available_time=now,
+                ingested_time=now,
+                reason="current operational price evidence; no known delisting record",
+                source="broad_universe_sync",
+                provider="broad_market_sync",
+            )
+        )
 
     # ------------------------------------------------------------------
     # Quarantine
@@ -547,6 +582,7 @@ class BroadUniverseDataService:
         return self._funnel_from_eligibility(
             eligibility,
             price_eligibility=price_eligibility,
+            quarantine_count=len(service._load_quarantine()),
         )
 
     def _funnel_from_eligibility(
@@ -554,6 +590,7 @@ class BroadUniverseDataService:
         eligibility: BroadUniverseEligibility,
         *,
         price_eligibility: BroadUniverseEligibility | None = None,
+        quarantine_count: int = 0,
     ) -> BroadUniverseFunnelReport:
         layers: list[FunnelLayer] = []
         current = eligibility.raw_listed_securities
@@ -658,6 +695,8 @@ class BroadUniverseDataService:
             price_based_pit_status=(
                 price_eligibility.pit_status if price_eligibility is not None else "UNAVAILABLE"
             ),
+            qualification=eligibility.qualification.value,
+            quarantine_count=quarantine_count,
         )
 
     @staticmethod

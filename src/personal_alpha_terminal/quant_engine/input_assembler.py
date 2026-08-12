@@ -19,7 +19,10 @@ from personal_alpha_terminal.application.operational_readiness import (
     build_operational_identity,
 )
 from personal_alpha_terminal.core.effective_config import EffectiveRuntimeConfig
-from personal_alpha_terminal.data.us_market.broad_universe import EligibilityRules
+from personal_alpha_terminal.data.us_market.broad_universe import (
+    BroadUniverseEligibility,
+    EligibilityRules,
+)
 from personal_alpha_terminal.data.us_market.repository import USPointInTimeRepository
 from personal_alpha_terminal.models import Portfolio, PortfolioPosition, Price, SecurityMaster
 from personal_alpha_terminal.quant_engine.alpha import AlphaSignal
@@ -27,7 +30,14 @@ from personal_alpha_terminal.quant_engine.benchmark import (
     BenchmarkEvidence,
     benchmark_evidence_from_returns,
 )
+from personal_alpha_terminal.quant_engine.candidates import compress_candidates
 from personal_alpha_terminal.quant_engine.model_registry import ModelRegistryService
+from personal_alpha_terminal.quant_engine.operational_baseline import (
+    OperationalBaselineRecord,
+    append_record,
+    detect_collapse,
+    load_baseline,
+)
 from personal_alpha_terminal.quant_engine.probability_overlay import (
     ConditionalProbabilityEvidence,
     ProbabilityOverlayEffect,
@@ -89,6 +99,7 @@ class AssembledDailyInput:
     model_approval_data_version: str = 'NOT_APPROVED'
     probability_artifact_id: str = 'OPTIONAL_UNAVAILABLE'
     alpha_symbols: tuple[str, ...] = ()
+    candidate_symbols: tuple[str, ...] = ()
     universe_evidence: dict[str, object] = field(default_factory=dict)
     probability_overlay_active: bool = False
     probability_overlay_state: str = "RESEARCH_ONLY"
@@ -124,6 +135,7 @@ class AssembledResearchInput:
     model_approval_data_version: str = 'NOT_APPROVED'
     probability_artifact_id: str = 'OPTIONAL_UNAVAILABLE'
     alpha_symbols: tuple[str, ...] = ()
+    candidate_symbols: tuple[str, ...] = ()
     universe_evidence: dict[str, object] = field(default_factory=dict)
     probability_overlay_active: bool = False
     probability_overlay_state: str = "RESEARCH_ONLY"
@@ -131,6 +143,19 @@ class AssembledResearchInput:
     probability_overlay_effects: tuple[ProbabilityOverlayEffect, ...] = ()
     operational_policy_id: str = "NOT_CONFIGURED"
     operational_policy_decision: str = "BLOCK"
+
+
+def _funnel_counts(eligibility: BroadUniverseEligibility) -> dict[str, int]:
+    """Per-layer current operational universe funnel counts."""
+    return {
+        "listed_securities": eligibility.raw_listed_securities,
+        "listed_equities": eligibility.raw_listed_equities,
+        "security_type_eligible": len(eligibility.security_type_eligible),
+        "data_eligible": len(eligibility.data_eligible),
+        "liquidity_eligible": len(eligibility.liquidity_eligible),
+        "factor_eligible": len(eligibility.factor_eligible),
+        "signal_eligible": len(eligibility.signal_eligible),
+    }
 
 
 class ProductionDailyQuantInputAssembler:
@@ -219,9 +244,19 @@ class ProductionDailyQuantInputAssembler:
             }.values()
         )
         start_time = decision_time - timedelta(days=history_days)
-        price_frame, _versions = self.repository.total_return_frame(
-            price_securities, as_of=decision_time, start_date=start_time
-        )
+        if self.effective_config.broad_universe.require_pit_total_return:
+            price_frame, _versions = self.repository.total_return_frame(
+                price_securities, as_of=decision_time, start_date=start_time
+            )
+        else:
+            # CURRENT_OPERATIONAL_PIT tier: factors are computed from the real
+            # PIT-filtered raw price series available at decision_time.  This
+            # is current forward-operational data, never a certified total
+            # return vintage, so historical research certification is not
+            # claimed.
+            price_frame = self.repository.raw_price_frame(
+                price_securities, as_of=decision_time, start_date=start_time
+            )
         alpha_symbols = tuple(item.symbol for item in alpha_securities)
         alpha_price_frame = price_frame[price_frame["ticker"].isin(alpha_symbols)].copy()
         metadata = self.repository.metadata_frame(alpha_securities, as_of=decision_time)
@@ -342,6 +377,37 @@ class ProductionDailyQuantInputAssembler:
             strategy_result.factors,
             overlay_application.effects,
         )
+        # Candidate compression: the full operational cross-section is already
+        # factor-ranked and normalized above.  Only a bounded, deterministic
+        # candidate pool proceeds to portfolio optimization; every rejection
+        # step is recorded and reported.
+        candidate_compression = compress_candidates(
+            tuple(overlay_application.signals),
+            candidate_max=self.effective_config.broad_universe.candidate_max,
+            candidate_min_alpha=self.effective_config.broad_universe.candidate_min_alpha,
+            adv_by_symbol=(
+                {
+                    str(row.ticker): float(row.average_daily_dollar_volume)
+                    for row in risk_metadata_frame.itertuples(index=False)
+                }
+                if not risk_metadata_frame.empty
+                else None
+            ),
+            minimum_adv=(
+                self.effective_config.broad_universe.minimum_average_dollar_volume
+            ),
+        )
+        candidate_symbols = candidate_compression.candidate_symbols
+        candidate_set = set(candidate_symbols)
+        candidate_signals = tuple(
+            item for item in overlay_application.signals if item.symbol in candidate_set
+        )
+        candidate_evidence = {
+            "candidate_compression": candidate_compression.document(),
+            "candidate_count": len(candidate_symbols),
+            "full_factor_count": len(strategy_result.factors),
+        }
+        universe_evidence = {**universe_evidence, **candidate_evidence}
         levels = price_frame.pivot(
             index="trade_date", columns="ticker", values="close"
         ).sort_index()
@@ -393,7 +459,7 @@ class ProductionDailyQuantInputAssembler:
         return AssembledResearchInput(
             authorization,
             decision_time,
-            overlay_application.signals,
+            candidate_signals,
             returns,
             benchmark_returns,
             risk_metadata,
@@ -436,6 +502,7 @@ class ProductionDailyQuantInputAssembler:
             approval_data_version,
             overlay_application.artifact_id,
             alpha_symbols,
+            candidate_symbols,
             universe_evidence,
             overlay_application.active,
             overlay_application.state.value,
@@ -478,7 +545,8 @@ class ProductionDailyQuantInputAssembler:
             as_of=research.decision_time,
             snapshot_id=int(research.universe_snapshot_id),
         )
-        alpha_symbol_set = set(research.alpha_symbols)
+        alpha_symbol_set = set(research.candidate_symbols or research.alpha_symbols)
+        universe_by_symbol = {item.symbol: item for item in universe.securities}
         if any(
             self.repository.tradability(item.id, as_of=research.decision_time) != "TRADABLE"
             for item in universe.securities
@@ -487,6 +555,32 @@ class ProductionDailyQuantInputAssembler:
             raise ValueError(
                 "formal portfolio construction requires certified TRADABLE status"
             )
+        # Broad CURRENT_OPERATIONAL_PIT candidates are usually not members of the
+        # certified research snapshot.  They must still satisfy the current
+        # tradability gate before they can enter portfolio construction.
+        missing_symbols = sorted(alpha_symbol_set - set(universe_by_symbol))
+        if missing_symbols:
+            extra_securities = tuple(
+                self.session.scalars(
+                    select(SecurityMaster).where(
+                        SecurityMaster.symbol.in_(missing_symbols)
+                    )
+                )
+            )
+            if {item.symbol for item in extra_securities} != set(missing_symbols):
+                raise ValueError(
+                    "candidate securities are missing from the security master"
+                )
+            if any(
+                self.repository.tradability(
+                    item.id, as_of=research.decision_time
+                )
+                != "TRADABLE"
+                for item in extra_securities
+            ):
+                raise ValueError(
+                    "formal portfolio construction requires certified TRADABLE status"
+                )
         decision_authorization = ResearchDataGateService(self.session).authorize(
             replace(research.authorization.request, purpose=ResearchPurpose.PORTFOLIO_DECISION)
         )
@@ -498,7 +592,7 @@ class ProductionDailyQuantInputAssembler:
         ) = self._portfolio_state(
             portfolio_id=portfolio_id, decision_time=research.decision_time
         )
-        decision_symbols = set(research.alpha_symbols) | set(current_weights)
+        decision_symbols = alpha_symbol_set | set(current_weights)
         decision_returns = research.returns.loc[
             :, [symbol for symbol in research.returns.columns if symbol in decision_symbols]
         ]
@@ -551,6 +645,7 @@ class ProductionDailyQuantInputAssembler:
             research.model_approval_data_version,
             research.probability_artifact_id,
             research.alpha_symbols,
+            research.candidate_symbols,
             research.universe_evidence,
             research.probability_overlay_active,
             research.probability_overlay_state,
@@ -573,63 +668,119 @@ class ProductionDailyQuantInputAssembler:
         dict[str, object],
         bool,
     ]:
+        rules = EligibilityRules(**asdict(self.effective_config.broad_universe))
         service = BroadUSUniverseService(
             self.session,
             cache_root=self.effective_config.cache_dir / "us-current-directory",
-            rules=EligibilityRules(**asdict(self.effective_config.broad_universe)),
+            rules=rules,
         )
+        # CURRENT_OPERATIONAL_PIT tier.  With ``require_pit_total_return`` from
+        # config (False on the broad operational path) this selects the broad
+        # current-directory universe; with True it stays on the strict certified
+        # total-return tier.
         selection = service.select(
             universe_date=universe_date,
             decision_time=decision_time,
             reference_symbols=reference_symbols,
         )
-        official = (
-            selection.directory.provider
-            == "nasdaq_trader_symbol_directory"
-        )
+        official = selection.directory.provider == "nasdaq_trader_symbol_directory"
         if official:
             if not selection.alpha_securities:
                 raise ValueError("official broad universe has no factor eligible equities")
-            official_evidence = selection.evidence()
-            # The broad *price-based* ranking layer (explicitly labeled, no PIT
-            # total-return certification claim) reports the real cross-sectional
-            # factor pool over the current directory.  The strict production
-            # alpha universe above remains PIT-total-return gated.
+            evidence = selection.evidence()
+            operational = selection.eligibility
+            evidence["qualification"] = operational.qualification.value
+            evidence["pit_status"] = operational.pit_status
+            evidence["funnel"] = _funnel_counts(operational)
+            # HISTORICAL_RESEARCH_PIT tier is evaluated independently.  A
+            # degraded historical certification must never collapse the current
+            # operational universe by itself.
             try:
-                price_based = BroadUSUniverseService(
+                historical = BroadUSUniverseService(
                     self.session,
                     cache_root=self.effective_config.cache_dir / "us-current-directory",
-                    rules=EligibilityRules(
-                        **asdict(self.effective_config.broad_universe)
-                    ),
+                    rules=EligibilityRules(**asdict(self.effective_config.broad_universe)),
                 ).select(
                     universe_date=universe_date,
                     decision_time=decision_time,
                     reference_symbols=reference_symbols,
-                    require_pit_total_return=False,
+                    require_pit_total_return=True,
                 )
-                official_evidence["price_based"] = {
-                    "listed_securities": price_based.eligibility.raw_listed_securities,
-                    "listed_equities": price_based.eligibility.raw_listed_equities,
+                historical_eligibility = historical.eligibility
+                evidence["historical_research"] = {
                     "security_type_eligible": len(
-                        price_based.eligibility.security_type_eligible
+                        historical_eligibility.security_type_eligible
                     ),
-                    "data_eligible": len(price_based.eligibility.data_eligible),
-                    "liquidity_eligible": len(price_based.eligibility.liquidity_eligible),
-                    "factor_eligible": len(price_based.eligibility.factor_eligible),
-                    "signal_eligible": len(price_based.eligibility.signal_eligible),
-                    "pit_status": price_based.eligibility.pit_status,
+                    "data_eligible": len(historical_eligibility.data_eligible),
+                    "liquidity_eligible": len(historical_eligibility.liquidity_eligible),
+                    "factor_eligible": len(historical_eligibility.factor_eligible),
+                    "signal_eligible": len(historical_eligibility.signal_eligible),
+                    "pit_status": historical_eligibility.pit_status,
+                    "qualification": historical_eligibility.qualification.value,
+                    "survivorship_status": (
+                        historical_eligibility.survivorship_status.value
+                    ),
                     "symbols": sorted(
-                        item.symbol for item in price_based.eligibility.factor_eligible
+                        item.symbol for item in historical_eligibility.factor_eligible
                     ),
-                    "survivorship_status": price_based.eligibility.survivorship_status.value,
                 }
             except (KeyError, OSError, TypeError, ValueError):
-                official_evidence["price_based"] = {"status": "UNAVAILABLE"}
+                evidence["historical_research"] = {"status": "UNAVAILABLE"}
+            # Quarantine: symbols on a blocking issue are not part of the current
+            # operational universe.  The quarantine store lives beside the
+            # broad-universe cache and is populated by the batch downloader.
+            quarantine = self._quarantine()
+            evidence["quarantine_count"] = len(quarantine)
+            evidence["quarantine_symbols"] = sorted(quarantine)[:200]
+            # Coverage-collapse guard applies to the broad current operational
+            # universe only.  The strict certified tier is intentionally small
+            # and must never trip a broad-universe threshold.
+            if not rules.require_pit_total_return:
+                record = OperationalBaselineRecord(
+                    decision_date=universe_date,
+                    factor_eligible=len(operational.factor_eligible),
+                    operational_eligible=len(operational.signal_eligible),
+                    quarantine_count=len(quarantine),
+                )
+                baseline_path = self.effective_config.operational_universe_baseline_path
+                prior = load_baseline(baseline_path)
+                collapsed, collapse_reason = detect_collapse(
+                    prior,
+                    current_factor_eligible=record.factor_eligible,
+                    minimum_operational_universe=rules.minimum_operational_universe,
+                    coverage_collapse_ratio=rules.coverage_collapse_ratio,
+                )
+                append_record(baseline_path, record)
+                evidence["collapse"] = {
+                    "detected": collapsed,
+                    "reason": collapse_reason,
+                    "minimum_operational_universe": (
+                        rules.minimum_operational_universe
+                    ),
+                    "coverage_collapse_ratio": rules.coverage_collapse_ratio,
+                    "recent_factor_eligible": [
+                        item.factor_eligible for item in prior[-6:]
+                    ],
+                }
+                if collapsed:
+                    return (
+                        selection.alpha_securities,
+                        selection.reference_securities,
+                        evidence,
+                        False,
+                    )
+            else:
+                evidence["collapse"] = {
+                    "detected": False,
+                    "reason": "collapse guard applies to CURRENT_OPERATIONAL_PIT only",
+                    "minimum_operational_universe": rules.minimum_operational_universe,
+                    "coverage_collapse_ratio": rules.coverage_collapse_ratio,
+                    "recent_factor_eligible": [],
+                }
             return (
                 selection.alpha_securities,
                 selection.reference_securities,
-                official_evidence,
+                evidence,
                 True,
             )
 
@@ -642,7 +793,7 @@ class ProductionDailyQuantInputAssembler:
             if item.symbol in set(reference_symbols)
             and item.asset_type in {"etf", "index"}
         )
-        evidence: dict[str, object] = {
+        fallback_evidence: dict[str, object] = {
             "listed_equities": "UNAVAILABLE",
             "security_type_eligible": 0,
             "data_eligible": 0,
@@ -658,7 +809,17 @@ class ProductionDailyQuantInputAssembler:
             "historical_use_allowed": False,
             "warnings": list(selection.warnings),
         }
-        return alpha, references, evidence, False
+        return alpha, references, fallback_evidence, False
+
+    def _quarantine(self) -> dict[str, str]:
+        path = self.effective_config.cache_dir / "broad-universe" / "quarantine.json"
+        if not path.exists():
+            return {}
+        try:
+            payload = __import__("json").loads(path.read_text(encoding="utf-8"))
+        except (OSError, TypeError, ValueError):
+            return {}
+        return {str(key): str(value) for key, value in payload.items()}
 
     def _portfolio_state(
         self, *, portfolio_id: int, decision_time: datetime

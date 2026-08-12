@@ -26,6 +26,16 @@ universe_minimum_valid_bar_coverage: 0.98
 universe_maximum_missing_ratio: 0.02
 universe_include_adr: false
 universe_include_reit: false
+# ROUND 5: the production daily path uses the broad current
+# operational universe (CURRENT_OPERATIONAL_PIT).  Setting this False
+# keeps the strict certified total-return tier (HISTORICAL_RESEARCH_PIT)
+# available for research only; a degraded historical tier never collapses
+# the current operational universe.
+universe_require_pit_total_return: false
+universe_minimum_operational_universe: 50
+universe_coverage_collapse_ratio: 0.5
+universe_candidate_max: 100
+universe_candidate_min_alpha: 0.0
 data_safe_threshold: 80
 data_watch_threshold: 65
 reconciliation_minimum_coverage: 0.95

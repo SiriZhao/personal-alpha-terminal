@@ -203,6 +203,51 @@ class USPointInTimeRepository:
             raise ValueError("certified PIT total-return points are unavailable")
         return frame, versions
 
+    def raw_price_frame(
+        self,
+        securities: tuple[SecurityMaster, ...],
+        *,
+        as_of: datetime,
+        start_date: datetime,
+    ) -> pd.DataFrame:
+        """PIT-safe raw unadjusted OHLCV close frame for CURRENT_OPERATIONAL_PIT.
+
+        Only rows truly available at ``as_of`` are returned; future rows are
+        never visible.  This is current forward-operational data, not a certified
+        total-return vintage, so it never claims historical research
+        certification.
+        """
+        if as_of.tzinfo is None:
+            raise ValueError("raw price as_of must be timezone-aware")
+        rows: list[dict[str, object]] = []
+        for security in securities:
+            points = self.session.scalars(
+                select(Price)
+                .where(
+                    Price.stock_id == security.id,
+                    Price.price_type == "unadjusted_ohlcv",
+                    Price.trade_date >= start_date.date(),
+                    Price.trade_date <= as_of.date(),
+                    Price.available_time.is_not(None),
+                    Price.available_time <= as_of,
+                )
+                .order_by(Price.trade_date)
+            )
+            for point in points:
+                rows.append(
+                    {
+                        "permanent_security_id": security.canonical_code,
+                        "ticker": security.symbol,
+                        "trade_date": point.trade_date,
+                        "available_time": point.available_time,
+                        "close": float(point.close),
+                    }
+                )
+        frame = pd.DataFrame(rows)
+        if frame.empty:
+            raise ValueError("current operational raw price points are unavailable")
+        return frame
+
     def metadata_frame(
         self, securities: tuple[SecurityMaster, ...], *, as_of: datetime
     ) -> pd.DataFrame:

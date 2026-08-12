@@ -53,6 +53,22 @@ class SurvivorshipStatus(StrEnum):
     UNVERIFIED = "UNVERIFIED"
 
 
+class PitQualification(StrEnum):
+    """Whether a universe tier may support current forward operation.
+
+    ``CURRENT_OPERATIONAL_PIT`` means the current data is correct for producing a
+    recommendation toward the next tradable session (current identity, exchange,
+    OHLCV PIT, freshness, history length, liquidity, factor computability, risk
+    inputs and current-run corporate-action continuity).  ``HISTORICAL_RESEARCH_PIT``
+    additionally proves survivorship-safe historical research certification.
+    A degraded historical tier must never collapse the current operational
+    universe by itself; the two tiers are evaluated independently.
+    """
+
+    CURRENT_OPERATIONAL_PIT = "CURRENT_OPERATIONAL_PIT"
+    HISTORICAL_RESEARCH_PIT = "HISTORICAL_RESEARCH_PIT"
+
+
 @dataclass(frozen=True, slots=True)
 class CurrentSecurityMasterRecord:
     security_id: str
@@ -160,6 +176,15 @@ class EligibilityRules:
     # certification.
     require_pit_total_return: bool = True
     allowed_exchanges: tuple[str, ...] = ("XNAS", "XNYS", "XASE")
+    # Operational universe safety thresholds.  These are not data-quality
+    # relaxations: they decide when a *current* broad universe is too small to
+    # run cross-sectionally (fail-closed) or has collapsed versus recent runs.
+    minimum_operational_universe: int = 50
+    coverage_collapse_ratio: float = 0.5
+    # Candidate compression feeds the portfolio optimizer a bounded, ranked
+    # pool instead of the full operational cross-section.
+    candidate_max: int = 100
+    candidate_min_alpha: float = 0.0
 
     def __post_init__(self) -> None:
         if self.minimum_price <= 0 or self.minimum_trading_sessions < 1:
@@ -170,6 +195,12 @@ class EligibilityRules:
             raise ValueError("maximum_missing_ratio must be in [0, 1]")
         if not 0 <= self.minimum_valid_bar_coverage <= 1:
             raise ValueError("minimum_valid_bar_coverage must be in [0, 1]")
+        if self.minimum_operational_universe < 1:
+            raise ValueError("minimum_operational_universe must be positive")
+        if not 0 < self.coverage_collapse_ratio <= 1:
+            raise ValueError("coverage_collapse_ratio must be in (0, 1]")
+        if self.candidate_max < 1:
+            raise ValueError("candidate_max must be positive")
 
     @property
     def fingerprint(self) -> str:
@@ -212,6 +243,7 @@ class BroadUniverseEligibility:
     snapshot_hash: str
     pit_status: str
     survivorship_status: SurvivorshipStatus
+    qualification: PitQualification = PitQualification.HISTORICAL_RESEARCH_PIT
 
     def counts(self) -> dict[str, int]:
         return {
@@ -372,12 +404,18 @@ def evaluate_broad_universe(
     universe_date: date,
     decision_time: datetime,
     rules: EligibilityRules | None = None,
+    quarantined: frozenset[str] = frozenset(),
 ) -> BroadUniverseEligibility:
     """Apply PIT-safe security, data and liquidity gates to a current directory."""
 
     if decision_time.tzinfo is None:
         raise ValueError("universe decision_time must be timezone-aware")
     configured = rules or EligibilityRules()
+    qualification = (
+        PitQualification.HISTORICAL_RESEARCH_PIT
+        if configured.require_pit_total_return
+        else PitQualification.CURRENT_OPERATIONAL_PIT
+    )
     observed = {item.security_id: item for item in observations}
     security_type_eligible: list[CurrentSecurityMasterRecord] = []
     data_eligible: list[CurrentSecurityMasterRecord] = []
@@ -394,6 +432,8 @@ def evaluate_broad_universe(
     )
     for security in visible:
         reasons: list[str] = []
+        if security.security_id in quarantined:
+            reasons.append("QUARANTINED")
         if security.test_issue:
             reasons.append("TEST_ISSUE")
         if security.exchange not in configured.allowed_exchanges:
@@ -472,6 +512,8 @@ def evaluate_broad_universe(
             [_record_document(item) for item in sorted(visible, key=lambda row: row.security_id)]
         ),
         "rules_fingerprint": configured.fingerprint,
+        "qualification": qualification.value,
+        "quarantined": sorted(quarantined),
         "factor_eligible_ids": [item.security_id for item in factor_eligible],
         "exclusions": exclusions,
     }
@@ -491,11 +533,12 @@ def evaluate_broad_universe(
         rules_fingerprint=configured.fingerprint,
         snapshot_hash=_hash(payload),
         pit_status=(
-            "CURRENT_PIT_ONLY"
+            "HISTORICAL_RESEARCH_PIT"
             if configured.require_pit_total_return
-            else "PRICE_BASED_RANKING"
+            else "CURRENT_OPERATIONAL_PIT"
         ),
         survivorship_status=snapshot.survivorship_status,
+        qualification=qualification,
     )
 
 

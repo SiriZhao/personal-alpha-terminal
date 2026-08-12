@@ -177,13 +177,15 @@ def _broad_funnel(service: BroadUniverseDataService, args: Namespace) -> int:
         table.add_row(layer.name, str(layer.count), str(layer.excluded), top)
     console.print(table)
     console.print(
-        "Price-based ranking (PRICE_BASED_RANKING, no PIT corporate-action claim): "
+        "Current operational tier (CURRENT_OPERATIONAL_PIT, price-based): "
         f"data {report.price_based_data_eligible}, "
         f"liquidity {report.price_based_liquidity_eligible}, "
         f"factor {report.price_based_factor_eligible}"
     )
     console.print(f"Survivorship status: {report.survivorship_status}")
     console.print(f"PIT status: {report.pit_status}")
+    console.print(f"Qualification: {report.qualification}")
+    console.print(f"Quarantined symbols: {report.quarantine_count}")
     console.print(f"Eligible symbols ({len(report.eligible_symbols)}):")
     console.print(", ".join(report.eligible_symbols[:60]))
     if args.json:

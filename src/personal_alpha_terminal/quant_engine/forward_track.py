@@ -56,6 +56,18 @@ class ForwardOutcome:
     benchmark_return: float
     realized_benchmark_relative_return: float
     outcome_source: str
+    # One outcome record per recommendation per horizon.  ``horizon`` names the
+    # observation window (for example 1D, 5D, 10D, H21, SPY_REL, QQQ_REL, MAE,
+    # MFE).  Records are immutable once appended.
+    horizon: str = "HORIZON"
+    return_1d: float | None = None
+    return_5d: float | None = None
+    return_10d: float | None = None
+    return_horizon: float | None = None
+    spy_relative_return: float | None = None
+    qqq_relative_return: float | None = None
+    max_adverse_excursion: float | None = None
+    max_favorable_excursion: float | None = None
 
     def __post_init__(self) -> None:
         if self.observed_at.tzinfo is None:
@@ -64,6 +76,12 @@ class ForwardOutcome:
             raise ValueError("outcome prices must be positive")
         if not self.outcome_source.strip():
             raise ValueError("outcome source is required")
+        if not self.horizon.strip():
+            raise ValueError("outcome horizon is required")
+
+    @property
+    def outcome_key(self) -> str:
+        return f"{self.recommendation_id}::{self.horizon}"
 
 
 def load_forward_ledger(
@@ -83,7 +101,7 @@ def load_forward_ledger(
             predictions[prediction.recommendation_id] = prediction
         elif kind == "outcome":
             outcome = _outcome_from_document(cast(dict[str, Any], payload))
-            outcomes[outcome.recommendation_id] = outcome
+            outcomes[outcome.outcome_key] = outcome
         else:
             raise ValueError(f"unsupported forward ledger kind: {kind}")
     return predictions, outcomes
@@ -117,8 +135,8 @@ def append_outcome(
     predictions, existing = load_forward_ledger(path)
     if outcome.recommendation_id not in predictions:
         raise ValueError("outcome cannot reference an unknown prediction")
-    if outcome.recommendation_id in existing:
-        if existing[outcome.recommendation_id] != outcome:
+    if outcome.outcome_key in existing:
+        if existing[outcome.outcome_key] != outcome:
             raise ValueError("refusing to overwrite an immutable forward outcome")
         return
     _append_line(path, {"kind": "outcome", **asdict(outcome)})

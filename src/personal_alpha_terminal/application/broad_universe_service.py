@@ -130,12 +130,18 @@ class BroadUSUniverseService:
             )
             if observation is not None:
                 observations.append(observation)
+        quarantined_ids = frozenset(
+            item.security_id
+            for item in directory.records
+            if item.symbol in self._load_quarantine()
+        )
         eligibility = evaluate_broad_universe(
             directory,
             tuple(observations),
             universe_date=universe_date,
             decision_time=decision_time,
             rules=rules,
+            quarantined=quarantined_ids,
         )
         eligible_keys = {(item.exchange, item.symbol) for item in eligibility.factor_eligible}
         alpha_securities = tuple(
@@ -159,6 +165,17 @@ class BroadUSUniverseService:
             references,
             tuple(dict.fromkeys(warnings)),
         )
+
+    def _load_quarantine(self) -> dict[str, str]:
+        """Read the batch-downloader quarantine store beside the broad cache."""
+        path = self.cache_root.parent / "broad-universe" / "quarantine.json"
+        if not path.exists():
+            return {}
+        try:
+            payload = __import__("json").loads(path.read_text(encoding="utf-8"))
+        except (OSError, TypeError, ValueError):
+            return {}
+        return {str(key): str(value) for key, value in payload.items()}
 
     def _directory_or_fallback(
         self,

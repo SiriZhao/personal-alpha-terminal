@@ -49,6 +49,16 @@ class BroadUniverseConfig:
     maximum_missing_ratio: float = 0.02
     include_adr: bool = False
     include_reit: bool = False
+    # When False, the production daily path uses the broad current operational
+    # universe (CURRENT_OPERATIONAL_PIT).  When True, it stays on the strict
+    # certified total-return tier (HISTORICAL_RESEARCH_PIT).
+    require_pit_total_return: bool = True
+    # Fail-closed guards for the current operational universe.
+    minimum_operational_universe: int = 50
+    coverage_collapse_ratio: float = 0.5
+    # Candidate compression bound feeding the portfolio optimizer.
+    candidate_max: int = 100
+    candidate_min_alpha: float = 0.0
 
     def __post_init__(self) -> None:
         if self.minimum_price <= 0 or self.minimum_trading_sessions < 1:
@@ -65,6 +75,12 @@ class BroadUniverseConfig:
             raise ValueError("broad universe coverage threshold is invalid")
         if not 0 <= self.maximum_missing_ratio <= 1:
             raise ValueError("broad universe missing-data threshold is invalid")
+        if self.minimum_operational_universe < 1:
+            raise ValueError("broad universe minimum operational size is invalid")
+        if not 0 < self.coverage_collapse_ratio <= 1:
+            raise ValueError("broad universe coverage collapse ratio is invalid")
+        if self.candidate_max < 1:
+            raise ValueError("broad universe candidate bound is invalid")
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,6 +96,10 @@ class EffectiveRuntimeConfig:
     cache_dir: Path = Path("data/cache")
     report_dir: Path = Path("reports")
     operational_policy_path: Path = Path("var/operational/operational_policy.json")
+    operational_universe_baseline_path: Path = Path(
+        "var/operational-universe-baseline.json"
+    )
+    forward_ledger_path: Path = Path("var/forward-ledger.jsonl")
     primary_provider: str = "yahoo"
     fallback_provider: str = "stooq"
     provider_priority: tuple[str, ...] = (
@@ -258,6 +278,15 @@ def resolve_effective_runtime_config(
                 str(settings.operational_policy_path),
             )
         ),
+        operational_universe_baseline_path=Path(
+            scalar.get(
+                "operational_universe_baseline_path",
+                "var/operational-universe-baseline.json",
+            )
+        ),
+        forward_ledger_path=Path(
+            scalar.get("forward_ledger_path", "var/forward-ledger.jsonl")
+        ),
         primary_provider=scalar.get("primary_provider", "yahoo").lower(),
         fallback_provider=scalar.get("fallback_provider", "twelve_data").lower(),
         provider_priority=tuple(
@@ -335,6 +364,17 @@ def resolve_effective_runtime_config(
             maximum_missing_ratio=_number(scalar, "universe_maximum_missing_ratio", 0.02),
             include_adr=_boolean(scalar, "universe_include_adr", False),
             include_reit=_boolean(scalar, "universe_include_reit", False),
+            require_pit_total_return=_boolean(
+                scalar, "universe_require_pit_total_return", True
+            ),
+            minimum_operational_universe=_integer(
+                scalar, "universe_minimum_operational_universe", 50
+            ),
+            coverage_collapse_ratio=_number(
+                scalar, "universe_coverage_collapse_ratio", 0.5
+            ),
+            candidate_max=_integer(scalar, "universe_candidate_max", 100),
+            candidate_min_alpha=_number(scalar, "universe_candidate_min_alpha", 0.0),
         ),
         stress_risk=StressRiskConfig(
             maximum_cvar_loss=_number(scalar, "stress_maximum_cvar_loss", 0.06),

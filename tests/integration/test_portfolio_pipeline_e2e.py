@@ -697,6 +697,8 @@ def _seed_test_b_state(
         cache_dir=tmp_path / "cache",
         report_dir=tmp_path / "reports",
         operational_policy_path=tmp_path / "operational_policy.json",
+        operational_universe_baseline_path=tmp_path / "operational-universe-baseline.json",
+        forward_ledger_path=tmp_path / "forward-ledger.jsonl",
     )
     data_version = "fixture-data-version-b"
     decision_time = TEST_B_DECISION_TIME

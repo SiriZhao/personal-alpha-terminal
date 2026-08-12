@@ -459,6 +459,7 @@ class ProductionDailyWorkflow:
                 )
             )
         self.session.flush()
+        self._append_forward_predictions(run, assembled)
         return self._result_from_record(
             run,
             assembled.parameter_fingerprint,
@@ -466,6 +467,52 @@ class ProductionDailyWorkflow:
             output=output,
             regime_link=regime_link,
         )
+
+    def _append_forward_predictions(
+        self,
+        run: QuantDecisionRun,
+        assembled: AssembledDailyInput,
+    ) -> None:
+        """Append immutable forward predictions for approved recommendations.
+
+        This is a historical evidence ledger only: it records what the system
+        actually recommended, never a simulated fill.  Future outcomes may only
+        be appended by an explicit ``forward-track append-outcome`` command;
+        predictions are never mutated.
+        """
+        from personal_alpha_terminal.quant_engine.forward_track import (
+            ForwardPrediction,
+            append_prediction,
+        )
+
+        path = self.effective_config.forward_ledger_path
+        for recommendation in run.recommendations:
+            expected_alpha = float(
+                recommendation.component_scores.get("expected_alpha", 0.0)
+            )
+            risk_contribution = recommendation.component_scores.get(
+                "risk_contribution"
+            )
+            confidence = float(recommendation.confidence_score)
+            prediction = ForwardPrediction(
+                recommendation_id=recommendation.recommendation_id,
+                run_id=str(run.id),
+                symbol=recommendation.stock.symbol,
+                as_of=run.as_of_time,
+                decision_time=run.as_of_time,
+                target_weight=float(recommendation.target_weight),
+                expected_alpha=expected_alpha,
+                probability=(confidence / 100.0 if confidence > 0 else None),
+                risk_contribution=(
+                    float(risk_contribution)
+                    if risk_contribution is not None
+                    else None
+                ),
+                benchmark=assembled.benchmark_symbol,
+                data_hash=run.data_version,
+                created_at=run.as_of_time,
+            )
+            append_prediction(prediction, path)
 
     @staticmethod
     def _research_stages(research: AssembledResearchInput) -> tuple[PipelineStage, ...]:
