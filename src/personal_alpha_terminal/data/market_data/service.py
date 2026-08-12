@@ -5,15 +5,23 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import date, timedelta
 from functools import partial
+from typing import Any
 
 from sqlalchemy.exc import SQLAlchemyError
 
 from personal_alpha_terminal.core.config import Settings
+from personal_alpha_terminal.data.market_data.circuit_breaker import (
+    ProviderCircuitBreaker,
+    ProviderCircuitState,
+)
 from personal_alpha_terminal.data.market_data.contracts import (
     AssetPriceRequest,
     AssetType,
     ProviderCapability,
     ProviderRawBatch,
+)
+from personal_alpha_terminal.data.market_data.error_classification import (
+    classify_provider_error,
 )
 from personal_alpha_terminal.data.market_data.exceptions import (
     DataQualityError,
@@ -57,12 +65,22 @@ class MarketDataEngine:
         quality_checker: DataQualityChecker | None = None,
         normalizer: PriceNormalizer | None = None,
         sleep: Callable[[float], None] = time.sleep,
+        circuit_breaker: ProviderCircuitBreaker | None = None,
+        batch_provider: Any | None = None,
+        batch_threshold: int = 200,
     ) -> None:
         self._repository = repository
         self._settings = settings
         self._quality_checker = quality_checker or DataQualityChecker()
         self._normalizer = normalizer or PriceNormalizer()
         self._sleep = sleep
+        self._circuit = circuit_breaker or ProviderCircuitBreaker(
+            settings.market_data_provider_cache_dir / "circuit-breaker"
+        )
+        self._provider_outcomes: dict[str, list[dict[str, object]]] = {}
+        self._latencies: dict[str, list[float]] = {}
+        self._batch_provider = batch_provider
+        self._batch_threshold = max(1, batch_threshold)
         self._providers: dict[tuple[Market, AssetType], list[MarketDataProvider]] = {}
 
         for provider in providers:
@@ -123,6 +141,19 @@ class MarketDataEngine:
         stocks = self._repository.list_active_stocks(markets=markets, symbols=symbols)
         results: list[InstrumentUpdateResult] = []
 
+        if (
+            not symbols
+            and len(stocks) > self._batch_threshold
+            and self._batch_provider is not None
+            and self._circuit.state(self._batch_provider.source)
+            is not ProviderCircuitState.OPEN_CIRCUIT
+        ):
+            return self._run_batch_refresh(
+                stocks,
+                effective_end,
+                forced_start_date=start_date,
+            )
+
         if symbols:
             found = {stock.symbol for stock in stocks}
             market = next(iter(markets or set()))
@@ -150,6 +181,164 @@ class MarketDataEngine:
                 )
             )
 
+        return DailyUpdateReport(
+            started_on=date.today(),
+            results=tuple(results),
+        )
+
+    def _run_batch_refresh(
+        self,
+        stocks: list[Any],
+        end_date: date,
+        *,
+        forced_start_date: date | None,
+    ) -> DailyUpdateReport:
+        """Batch-first refresh for large universes.
+
+        The broad universe is fetched in bounded chunks via the batch provider;
+        successes are persisted per chunk (never all-or-nothing) and failures
+        are recorded per symbol.  Symbols already fresh through ``end_date`` are
+        skipped, giving a resume-friendly incremental run.
+        """
+        from personal_alpha_terminal.data.market_data.schemas import InstrumentUpdateResult
+
+        batch_provider = self._batch_provider
+        assert batch_provider is not None
+        chunk_size = int(getattr(batch_provider, "chunk_size", 100))
+        requested = [item for item in stocks if item.symbol]
+        target = sorted(item.symbol for item in requested)
+        fresh: set[str] = set()
+        pending: list[str] = []
+        for symbol in target:
+            stock = next((item for item in requested if item.symbol == symbol), None)
+            if stock is None:
+                continue
+            latest = self._repository.latest_price_date(stock.id, batch_provider.source)
+            if latest is not None and latest >= end_date:
+                fresh.add(symbol)
+            else:
+                pending.append(symbol)
+
+        results: list[InstrumentUpdateResult] = []
+        start_date = forced_start_date or self._incremental_start(None)
+        for symbol in sorted(fresh):
+            results.append(
+                InstrumentUpdateResult(
+                    symbol=symbol,
+                    market="US",
+                    source=batch_provider.source,
+                    provider=batch_provider.provider_id,
+                    status="cached",
+                    start_date=start_date,
+                    end_date=end_date,
+                    error="already fresh through end_date; skipped by resume logic",
+                )
+            )
+        chunks = [
+            pending[index : index + chunk_size]
+            for index in range(0, len(pending), chunk_size)
+        ]
+        stock_by_symbol = {item.symbol: item for item in requested}
+        for chunk in chunks:
+            try:
+                report = batch_provider.download(
+                    tuple(chunk),
+                    start_date=start_date,
+                    end_date=end_date,
+                )
+            except Exception as exc:  # noqa: BLE001 - isolation boundary
+                structured = classify_provider_error(
+                    batch_provider.source,
+                    exc,
+                    symbol=", ".join(chunk[:3]),
+                    attempt=1,
+                )
+                self._record_outcome(
+                    batch_provider.source,
+                    structured.classification.value,
+                    structured.sanitized_reason,
+                )
+                self._circuit.record_failure(
+                    batch_provider.source,
+                    structured.classification,
+                    symbol=chunk[0] if chunk else "BATCH",
+                )
+                for symbol in chunk:
+                    results.append(
+                        InstrumentUpdateResult(
+                            symbol=symbol,
+                            market="US",
+                            source=batch_provider.source,
+                            provider=batch_provider.provider_id,
+                            status="failed",
+                            start_date=start_date,
+                            end_date=end_date,
+                            error=structured.classification.value,
+                        )
+                    )
+                continue
+            self._circuit.record_success(batch_provider.source)
+            self._record_outcome(batch_provider.source, "SUCCESS", None)
+            received = set(report.received_symbols)
+            failed = set(report.failed_symbols)
+            for symbol in chunk:
+                stock = stock_by_symbol.get(symbol)
+                if stock is None or symbol not in received:
+                    results.append(
+                        InstrumentUpdateResult(
+                            symbol=symbol,
+                            market="US",
+                            source=batch_provider.source,
+                            provider=batch_provider.provider_id,
+                            status="no_data" if symbol not in failed else "failed",
+                            start_date=start_date,
+                            end_date=end_date,
+                            error=(
+                                "SYMBOL_NOT_RECEIVED"
+                                if symbol not in failed
+                                else "NO_PRICE_HISTORY"
+                            ),
+                        )
+                    )
+                    continue
+                batch_bars = [
+                    bar for bar in report.bars if getattr(bar, "symbol", None) == symbol
+                ]
+                if not batch_bars:
+                    results.append(
+                        InstrumentUpdateResult(
+                            symbol=symbol,
+                            market="US",
+                            source=batch_provider.source,
+                            provider=batch_provider.provider_id,
+                            status="no_data",
+                            start_date=start_date,
+                            end_date=end_date,
+                            error="NO_PRICE_HISTORY",
+                        )
+                    )
+                    continue
+                with self._repository.savepoint():
+                    upsert = self._repository.upsert_bars(
+                        stock=stock,
+                        source=batch_provider.source,
+                        provider=batch_provider.provider_id,
+                        bars=batch_bars,
+                    )
+                results.append(
+                    InstrumentUpdateResult(
+                        symbol=symbol,
+                        market="US",
+                        source=batch_provider.source,
+                        provider=batch_provider.provider_id,
+                        status="success",
+                        start_date=start_date,
+                        end_date=end_date,
+                        fetched_count=len(batch_bars),
+                        inserted_count=upsert.inserted_count,
+                        updated_count=upsert.updated_count,
+                    )
+                )
         return DailyUpdateReport(
             started_on=date.today(),
             results=tuple(results),
@@ -353,31 +542,75 @@ class MarketDataEngine:
     ) -> ProviderRawBatch:
         attempts = self._settings.market_data_max_retries + 1
         for attempt in range(1, attempts + 1):
+            started = time.perf_counter()
             try:
-                return operation()
+                result = operation()
+                self._circuit.record_success(provider.source)
+                self._latencies.setdefault(provider.source, []).append(
+                    (time.perf_counter() - started) * 1000.0
+                )
+                self._record_outcome(provider.source, "SUCCESS", None)
+                return result
             except ProviderDependencyError:
                 raise
-            except ProviderRequestError:
+            except (MarketDataError, RuntimeError, ValueError) as exc:
+                structured = classify_provider_error(
+                    provider.source,
+                    exc,
+                    symbol=symbol,
+                    attempt=attempt,
+                )
+                self._record_outcome(
+                    provider.source, structured.classification.value, structured.sanitized_reason
+                )
+                self._circuit.record_failure(
+                    provider.source,
+                    structured.classification,
+                    symbol=symbol,
+                )
+                logger.warning(
+                    "Provider request failed: provider=%s symbol=%s attempt=%s/%s "
+                    "classification=%s reason=%s",
+                    provider.source,
+                    symbol,
+                    attempt,
+                    attempts,
+                    structured.classification.value,
+                    structured.sanitized_reason,
+                )
+                if not structured.retryable:
+                    raise ProviderRequestError(
+                        f"{provider.source} failed for {symbol}: "
+                        f"{structured.classification.value}"
+                    ) from exc
                 if attempt == attempts:
                     raise
                 base_delay = self._settings.market_data_retry_backoff_seconds * (
                     2 ** (attempt - 1)
                 )
                 delay = base_delay + random.uniform(0.0, min(0.25, base_delay))
-                logger.warning(
-                    "Provider request retry: provider=%s symbol=%s attempt=%s/%s delay=%s",
-                    provider.source,
-                    symbol,
-                    attempt,
-                    attempts,
-                    delay,
-                )
                 self._sleep(delay)
-            except Exception as exc:
-                raise ProviderRequestError(
-                    f"Unexpected {provider.source} failure for {symbol}: {exc}"
-                ) from exc
         raise RuntimeError("Retry loop exited unexpectedly.")
+
+    def _record_outcome(
+        self, provider: str, classification: str, reason: str | None
+    ) -> None:
+        self._provider_outcomes.setdefault(provider, []).append(
+            {
+                "provider": provider,
+                "classification": classification,
+                "sanitized_reason": reason,
+            }
+        )
+
+    def provider_health(self) -> dict[str, list[dict[str, object]]]:
+        return {
+            provider: list(outcomes)
+            for provider, outcomes in sorted(self._provider_outcomes.items())
+        }
+
+    def circuit_state(self, provider: str) -> str:
+        return self._circuit.state(provider).value
 
     def _incremental_start(self, latest: date | None) -> date:
         if latest is None:
@@ -389,17 +622,18 @@ class MarketDataEngine:
     def _provider_for(self, market: Market, asset_type: AssetType) -> MarketDataProvider:
         return self._providers_for(market, asset_type)[0]
 
-    def _providers_for(
-        self,
-        market: Market,
-        asset_type: AssetType,
-    ) -> tuple[MarketDataProvider, ...]:
-        try:
-            return tuple(self._providers[(market, asset_type)])
-        except KeyError as exc:
-            raise UnsupportedMarketError(
-                f"No market-data provider configured for {market}/{asset_type}."
-            ) from exc
+    def _providers_for(self, market: Market, asset_type: AssetType) -> list[MarketDataProvider]:
+        available: list[MarketDataProvider] = []
+        for provider in self._providers.get((market, asset_type), []):
+            if self._circuit.state(provider.source) is ProviderCircuitState.OPEN_CIRCUIT:
+                self._record_outcome(
+                    provider.source,
+                    "SKIPPED",
+                    "provider circuit is OPEN_CIRCUIT; request suppressed",
+                )
+                continue
+            available.append(provider)
+        return available
 
     @staticmethod
     def _provider_capability(

@@ -14,6 +14,7 @@ import json
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -65,6 +66,7 @@ class BroadUniverseSyncResult:
     quarantined: dict[str, str]
     retried_from_quarantine: tuple[str, ...]
     total_registered: int
+    provider_incident: str | None = None
 
     def document(self) -> dict[str, object]:
         return {
@@ -80,6 +82,7 @@ class BroadUniverseSyncResult:
             "quarantined": self.quarantined,
             "retried_from_quarantine": list(self.retried_from_quarantine),
             "total_registered": self.total_registered,
+            "provider_incident": self.provider_incident,
         }
 
 
@@ -151,11 +154,21 @@ class BroadUniverseDataService:
         rules: EligibilityRules | None = None,
         history_start: date | None = None,
         require_pit_total_return: bool | None = None,
+        circuit_breaker: Any | None = None,
     ) -> None:
         self.session = session
         self.cache_root = cache_root
         self.directory_root = directory_root or (cache_root / "us-current-directory")
         self.provider = provider or YahooBatchStockProvider()
+        if circuit_breaker is None:
+            from personal_alpha_terminal.data.market_data.circuit_breaker import (
+                ProviderCircuitBreaker,
+            )
+
+            circuit_breaker = ProviderCircuitBreaker(
+                cache_root / "circuit-breaker"
+            )
+        self.circuit_breaker = circuit_breaker
         self.rules = rules or EligibilityRules()
         if require_pit_total_return is not None:
             self.rules = EligibilityRules(
@@ -340,12 +353,48 @@ class BroadUniverseDataService:
         inserted = 0
         updated = 0
         failed_map: dict[str, str] = {}
+        provider_incident: str | None = None
+        from personal_alpha_terminal.data.market_data.circuit_breaker import (
+            ProviderCircuitState,
+        )
+        from personal_alpha_terminal.data.market_data.error_classification import (
+            classify_provider_error,
+        )
+
         for chunk in chunks:
-            report = self.provider.download(
-                chunk,
-                start_date=start_date,
-                end_date=end_date,
-            )
+            if (
+                self.circuit_breaker.state(self.provider.source)
+                is ProviderCircuitState.OPEN_CIRCUIT
+            ):
+                provider_incident = "PROVIDER_CIRCUIT_OPEN"
+                for symbol in chunk:
+                    failed.add(symbol)
+                continue
+            try:
+                report = self.provider.download(
+                    chunk,
+                    start_date=start_date,
+                    end_date=end_date,
+                )
+            except Exception as exc:  # noqa: BLE001 - isolation boundary
+                structured = classify_provider_error(
+                    self.provider.source,
+                    exc,
+                    symbol=chunk[0] if chunk else "BATCH",
+                    attempt=1,
+                )
+                self.circuit_breaker.record_failure(
+                    self.provider.source,
+                    structured.classification,
+                    symbol=chunk[0] if chunk else "BATCH",
+                )
+                for symbol in chunk:
+                    failed.add(symbol)
+                    failed_map.setdefault(symbol, structured.classification.value)
+                provider_incident = provider_incident or structured.classification.value
+                self.session.commit()
+                continue
+            self.circuit_breaker.record_success(self.provider.source)
             received.update(report.received_symbols)
             failed.update(report.failed_symbols)
             bar_count += report.bar_count
@@ -382,6 +431,7 @@ class BroadUniverseDataService:
             quarantined=dict(failed_map),
             retried_from_quarantine=retried,
             total_registered=len(target),
+            provider_incident=provider_incident,
         )
 
     def _registered_stock_symbols(self, *, limit: int | None) -> tuple[str, ...]:

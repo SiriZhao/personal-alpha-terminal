@@ -42,6 +42,7 @@ def render_daily_quant_result(
         _benchmark(result, console)
         _market(result, console)
         _ai_intelligence(result, console)
+        _market_data(result, console)
         _data_certification(result, console)
         _pit_universe(result, console)
         _data_health(result, console)
@@ -337,6 +338,89 @@ def _pipeline(result: DailyQuantResult, console: Console) -> None:
             stage.message,
         )
     console.print(table)
+
+
+def _market_data(result: DailyQuantResult, console: Console) -> None:
+    """Market data panel: data mode, providers, coverage, verdict."""
+    data_stage = next((item for item in result.stages if item.name == "DATA"), None)
+    data_meta = data_stage.metadata if data_stage is not None else {}
+    llm_stage = next((item for item in result.stages if item.name == "LLM_INTELLIGENCE"), None)
+    llm_meta = llm_stage.metadata if llm_stage is not None else {}
+    data_mode = str(result.provenance.get("data_mode", "CACHE_REPLAY"))
+    expected = result.analysis_date
+    latest = next(
+        (item.latest_date for item in result.data_health if item.latest_date),
+        None,
+    )
+    coverage = next(
+        (item.coverage for item in result.data_health if item.coverage is not None),
+        None,
+    )
+    provider = str(data_meta.get("provider", "UNAVAILABLE"))
+    primary = "yahoo" if "yahoo" in provider.lower() else provider
+    fallback = str(llm_meta.get("provider", "--"))
+    verdict = _market_data_verdict(data_stage)
+    table = Table(show_header=False, box=None, pad_edge=False)
+    table.add_column(style="bold cyan")
+    table.add_column()
+    rows = (
+        (_t("\u4ea4\u6613\u65e5", "Trade date"), str(result.trade_date)),
+        (_t("\u5206\u6790\u65e5", "Analysis date"), str(result.analysis_date)),
+        (
+            _t("\u9884\u671f\u6700\u65b0\u5b8c\u6210\u4ea4\u6613\u65e5", "Expected latest session"),
+            str(expected),
+        ),
+        (
+            _t("\u5b9e\u9645\u6700\u65b0\u4ea4\u6613\u65e5", "Actual latest session"),
+            str(latest or "UNAVAILABLE"),
+        ),
+        (_t("\u6570\u636e\u6a21\u5f0f", "Data mode"), data_mode),
+        (_t("\u4e3b\u6570\u636e\u6e90", "Primary provider"), primary),
+        (_t("\u5907\u7528\u6570\u636e\u6e90", "Fallback provider"), fallback),
+        (_t("\u6570\u636e\u8986\u76d6", "Coverage"), _percent(coverage)),
+        (
+            _t("\u5e02\u573a\u6570\u636e\u7ed3\u8bba", "Market data verdict"),
+            verdict,
+        ),
+    )
+    for label, value in rows:
+        table.add_row(label, value)
+    console.print(
+        Panel(
+            table,
+            title=_t("\u3010\u5e02\u573a\u6570\u636e\u3011", "MARKET DATA"),
+            border_style=(
+                "red"
+                if verdict.startswith("BLOCKED")
+                else "yellow"
+                if verdict == "PASS_DEGRADED"
+                else "green"
+            ),
+        )
+    )
+
+
+def _market_data_verdict(data_stage: object) -> str:
+    """Derive a one-line market-data verdict from the DATA stage status."""
+    from personal_alpha_terminal.application.daily_result import StageStatus
+
+    if data_stage is None:
+        return "BLOCKED_STALE_DATA"
+    status = getattr(data_stage, "status", None)
+    if status is StageStatus.PASS:
+        return "PASS"
+    if status is StageStatus.PASS_DEGRADED:
+        return "PASS_DEGRADED"
+    if status in {StageStatus.FAIL, StageStatus.FAIL_BLOCKING}:
+        message = str(getattr(data_stage, "message", "")).lower()
+        if "provider" in message or "refresh" in message:
+            return "BLOCKED_PROVIDER_FAILURE"
+        if "stale" in message:
+            return "BLOCKED_STALE_DATA"
+        if "coverage" in message or "collapse" in message:
+            return "BLOCKED_COVERAGE_COLLAPSE"
+        return "BLOCKED_STALE_DATA"
+    return "PASS_DEGRADED"
 
 
 def _data_certification(result: DailyQuantResult, console: Console) -> None:

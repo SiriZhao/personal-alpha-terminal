@@ -961,6 +961,11 @@ class DailyQuantOrchestrator:
                 },
                 "manual_broker": "Charles Schwab",
                 "automatic_execution": False,
+                "data_mode": (
+                    "LIVE_REFRESH"
+                    if data_metadata.get("refresh")
+                    else "CACHE_REPLAY"
+                ),
                 "lifecycle": workflow.lifecycle,
                 "lifecycle_blocked_symbols": workflow.lifecycle_blocked_symbols,
                 "transaction_cost_assumption": (
