@@ -79,6 +79,7 @@ class EffectiveRuntimeConfig:
     history_start: str = "2015-01-01"
     cache_dir: Path = Path("data/cache")
     report_dir: Path = Path("reports")
+    operational_policy_path: Path = Path("var/operational/operational_policy.json")
     primary_provider: str = "yahoo"
     fallback_provider: str = "stooq"
     provider_priority: tuple[str, ...] = (
@@ -154,6 +155,7 @@ class EffectiveRuntimeConfig:
         stress_parameters = asdict(self.stress_risk)
         stress_parameters.pop("production_validated")
         stress_parameters.pop("validation_id")
+        stress_parameters.pop("provisional_operational")
         return fingerprint({"risk_model": self.risk_model, "stress_risk": stress_parameters})
 
     @property
@@ -250,6 +252,12 @@ def resolve_effective_runtime_config(
         history_start=scalar.get("history_start", "2015-01-01"),
         cache_dir=Path(scalar.get("cache_dir", "data/cache")),
         report_dir=Path(scalar.get("report_dir", "reports")),
+        operational_policy_path=Path(
+            scalar.get(
+                "operational_policy_path",
+                str(settings.operational_policy_path),
+            )
+        ),
         primary_provider=scalar.get("primary_provider", "yahoo").lower(),
         fallback_provider=scalar.get("fallback_provider", "twelve_data").lower(),
         provider_priority=tuple(
@@ -389,6 +397,7 @@ def effective_config_from_settings(settings: Settings) -> EffectiveRuntimeConfig
     return EffectiveRuntimeConfig(
         cache_dir=settings.market_data_provider_cache_dir,
         report_dir=settings.daily_pipeline_report_path.parent,
+        operational_policy_path=settings.operational_policy_path,
         independent_provider_priority=tuple(
             item.strip().lower()
             for item in settings.market_data_independent_provider_priority.split(",")
@@ -564,6 +573,7 @@ vix_symbol: ^VIX
 history_start: 2015-01-01
 cache_dir: data/cache
 report_dir: reports
+operational_policy_path: var/operational/operational_policy.json
 primary_provider: yahoo
 fallback_provider: stooq
 provider_priority:

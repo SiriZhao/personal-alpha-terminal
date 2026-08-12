@@ -37,6 +37,7 @@ def render_daily_quant_result(
             )
         )
         _today_actions(result, console)
+        _operational_status(result, console)
         _portfolio(result, console)
         _benchmark(result, console)
         _market(result, console)
@@ -140,6 +141,8 @@ def _header(result: DailyQuantResult) -> str:
     classification = {
         "CERTIFIED_ACTIONABLE": "ACTIONABLE TRADING PLAN · MANUAL EXECUTION ONLY",
         "CERTIFIED_NO_ACTION": "CERTIFIED NO-ACTION RUN",
+        "PROVISIONAL_ACTIONABLE": "PROVISIONAL OPERATIONAL ACTION · MANUAL ONLY",
+        "PROVISIONAL_NO_ACTION": "PROVISIONAL NO-ACTION RUN",
         "VALID_ANALYSIS_NON_ACTIONABLE": (
             "VALID QUANT ANALYSIS / NON-ACTIONABLE\nFORMAL TRADING DECISION NOT AVAILABLE"
         ),
@@ -158,6 +161,8 @@ def _header(result: DailyQuantResult) -> str:
         classification = {
             "CERTIFIED_ACTIONABLE": "可执行 · 仅生成外部券商手动执行计划",
             "CERTIFIED_NO_ACTION": "无需操作 · 全部正式门禁已通过",
+            "PROVISIONAL_ACTIONABLE": "试运行量化可操作 · 仅手动执行",
+            "PROVISIONAL_NO_ACTION": "试运行无需操作",
             "VALID_ANALYSIS_NON_ACTIONABLE": "量化分析有效 · 当前不可生成正式交易建议",
             "INVALID_NON_ACTIONABLE": "运行无效 · 不得用于交易",
         }[result.run_classification]
@@ -245,6 +250,63 @@ def _today_actions(result: DailyQuantResult, console: Console) -> None:
             item.earliest_execution_time.isoformat(),
         )
     console.print(table)
+
+
+def _operational_status(result: DailyQuantResult, console: Console) -> None:
+    statuses = {item.name: item.status for item in result.stages}
+
+    def ok(name: str) -> bool:
+        return statuses.get(name) in {StageStatus.PASS, StageStatus.PASS_DEGRADED}
+
+    research = (
+        _t("未完全认证", "NOT_CERTIFIABLE")
+        if result.research_certification_state.upper() == "NOT_CERTIFIABLE"
+        else result.research_certification_state
+    )
+    data = _t("通过", "PASS") if ok("DATA") else _t("阻塞", "BLOCKED")
+    pit = _t("通过", "PASS") if ok("PIT") else _t("阻塞", "BLOCKED")
+    signal = _t("通过", "PASS") if ok("SIGNAL") else _t("阻塞", "BLOCKED")
+    risk = _t("通过", "PASS") if ok("RISK") else _t("阻塞", "BLOCKED")
+    policy = (
+        _t(
+            f"允许降级生产建议（{result.operational_policy_id}）",
+            f"ALLOW PROVISIONAL ({result.operational_policy_id})",
+        )
+        if result.operationally_allowed
+        else _t("未配置 / 拒绝", "NOT_CONFIGURED / BLOCKED")
+    )
+    final_state = (
+        _t("可操作（降级）", "ACTIONABLE (DEGRADED)")
+        if result.operationally_allowed
+        else _t("不可操作", "NOT_ACTIONABLE")
+    )
+    body = _t(
+        f"【研究认证】{research}\n"
+        f"【生产数据】{data}\n"
+        f"【PIT】{pit}\n"
+        f"【量化信号】{signal}\n"
+        f"【风控】{risk}\n"
+        f"【运行策略】{policy}\n"
+        f"【最终状态】{final_state}\n\n"
+        "当前建议未获得完整历史研究认证，但已根据显式 Operational Policy "
+        "允许进入生产建议。该状态不代表研究认证通过。",
+        f"Research certification: {research}\n"
+        f"Data: {data}\n"
+        f"PIT: {pit}\n"
+        f"Signal: {signal}\n"
+        f"Risk: {risk}\n"
+        f"Operational policy: {policy}\n"
+        f"Final: {final_state}\n\n"
+        "Current advice is allowed by an explicit Operational Policy but is not "
+        "full research certification. This status does not mean research is certified.",
+    )
+    console.print(
+        Panel(
+            body,
+            title=_t("研究认证与运行策略", "RESEARCH / OPERATIONAL POLICY"),
+            border_style="yellow",
+        )
+    )
 
 
 def _pipeline(result: DailyQuantResult, console: Console) -> None:

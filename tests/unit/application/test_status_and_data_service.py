@@ -20,6 +20,7 @@ from personal_alpha_terminal.data.market_data.schemas import (
 )
 from personal_alpha_terminal.models import (
     DataSnapshotManifest,
+    ExchangeSession,
     MarketUniverseMember,
     MarketUniverseSnapshot,
 )
@@ -234,3 +235,28 @@ def test_sync_repairs_an_existing_empty_current_universe_snapshot(
         members = tuple(session.query(MarketUniverseMember).all())
 
     assert len(members) == len(MINIMUM_US_RESEARCH_UNIVERSE)
+
+
+def test_sync_populates_certified_exchange_calendar(
+    session_factory, tmp_path: Path
+) -> None:
+    with session_factory.begin() as session:
+        service = DataService(
+            session,
+            Settings(database_url="sqlite://"),
+            snapshot_root=tmp_path,
+            sync_runner=lambda _session, _start, _end: _successful_report(),
+            lineage_runner=_fixture_lineage,
+        )
+        service.sync_market_data(
+            start_date=date(2026, 7, 1),
+            end_date=date(2026, 8, 1),
+        )
+        sessions = tuple(
+            session.query(ExchangeSession)
+            .filter(ExchangeSession.source == "exchange_calendars")
+            .all()
+        )
+    assert sessions
+    assert all(item.is_open for item in sessions)
+    assert all(item.open_time is not None for item in sessions)

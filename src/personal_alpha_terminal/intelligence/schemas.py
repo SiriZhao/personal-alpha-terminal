@@ -86,10 +86,18 @@ def _aware(value: datetime, field_name: str) -> datetime:
 
 class RawInformation(StrictModel):
     raw_id: str
+    document_id: str | None = None
     source: str
     source_identifier: str
     title: str
     body: str
+    issuer_id: str | None = None
+    permanent_security_id: str | None = None
+    ticker_as_of: str | None = None
+    amended_document_id: str | None = None
+    document_type: str | None = None
+    timezone: str | None = None
+    ingestion_version: str | None = None
     published_at: datetime
     observed_at: datetime
     ingested_at: datetime
@@ -103,6 +111,7 @@ class RawInformation(StrictModel):
     available_at: datetime | None = None
     processed_at: datetime | None = None
     revision_id: str | None = None
+    decision_as_of: datetime | None = None
 
     @field_validator("raw_id", "source", "source_identifier", "title")
     @classmethod
@@ -124,6 +133,7 @@ class RawInformation(StrictModel):
         "provider_received_at",
         "available_at",
         "processed_at",
+        "decision_as_of",
     )
     @classmethod
     def optional_aware_timestamps(cls, value: datetime | None, info: Any) -> datetime | None:
@@ -160,6 +170,9 @@ class RawInformation(StrictModel):
         object.__setattr__(self, "provider_received_at", received)
         object.__setattr__(self, "available_at", available)
         object.__setattr__(self, "processed_at", processed)
+        object.__setattr__(self, "document_id", self.document_id or self.raw_id)
+        if self.decision_as_of is not None and self.decision_as_of < available:
+            raise ValueError("decision_as_of precedes document availability")
         return self
 
     def visible_at(self, decision_as_of: datetime) -> bool:

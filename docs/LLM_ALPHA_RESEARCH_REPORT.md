@@ -7,6 +7,14 @@ reported. The required survivorship-safe market history is still unavailable, an
 there is no certified historical PIT text/event package. Opening locked OOS under
 those conditions would contaminate the research process.
 
+Real corpus state in `var/personal_alpha.db`:
+
+- `intelligence_raw_information`: `0`
+- `intelligence_events`: `0`
+- `intelligence_event_evidence`: `0`
+
+No fixture or isolated extraction result is production Alpha evidence.
+
 The implemented research path supports PIT replay, cross-sectional event factors,
 benchmark-relative outcomes, empirical-Bayes shrinkage, Brier/log-loss/ECE
 calibration and a 252-session promotion minimum. Controlled fixtures demonstrate

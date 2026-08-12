@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass, field, replace
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from hashlib import sha256
 from math import floor
@@ -10,6 +10,14 @@ from math import floor
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from personal_alpha_terminal.application.operational_readiness import (
+    OperationalApprovalIdentity,
+    OperationalPolicy,
+    OperationalPolicyDecision,
+    OperationalPolicyStore,
+    OperationalReadiness,
+    build_operational_identity,
+)
 from personal_alpha_terminal.application.regime_link import (
     REGIME_UNAVAILABLE,
     RegimeLinkResult,
@@ -138,6 +146,13 @@ class TodayResult:
     probability_overlay_state: str = "RESEARCH_ONLY"
     probability_overlay_reason: str = "PROBABILITY_ARTIFACT_MISSING"
     probability_overlay_effects: tuple[ProbabilityOverlayEffect, ...] = ()
+    operational_approval_artifact_id: str = 'NOT_APPROVED'
+    operational_readiness: str = OperationalReadiness.BLOCKED.value
+    research_certification_state: str = "NOT_CERTIFIABLE"
+    operational_policy_id: str = "NOT_CONFIGURED"
+    operational_policy_decision: str = "BLOCK"
+    operationally_allowed: bool = False
+    operational_degraded_reason: str | None = None
 
 
 class ProductionDailyWorkflow:
@@ -156,8 +171,16 @@ class ProductionDailyWorkflow:
         self.validation_registry = ValidationArtifactRegistry(
             self.effective_config.validation_artifact_dir
         )
+        self.operational_store = OperationalPolicyStore(
+            self.effective_config.operational_policy_path
+        )
 
-    def _pipeline(self, validation_id: str | None) -> DailyQuantPipeline:
+    def _pipeline(
+        self,
+        validation_id: str | None,
+        *,
+        operational_mode: bool = False,
+    ) -> DailyQuantPipeline:
         costs = TransactionCostModel(self.effective_config.transaction_cost)
         construction = PortfolioConstructionEngine(
             constraints=replace(
@@ -165,12 +188,14 @@ class ProductionDailyWorkflow:
                 model_validation_id=validation_id,
             ),
             cost_model=costs,
+            operational_mode=operational_mode,
         )
         stress_config = StressRiskConfig(
             **{
                 **asdict(self.effective_config.stress_risk),
-                "production_validated": validation_id is not None,
+                "production_validated": validation_id is not None and not operational_mode,
                 "validation_id": validation_id,
+                "provisional_operational": operational_mode,
             }
         )
         return DailyQuantPipeline(
@@ -178,6 +203,7 @@ class ProductionDailyWorkflow:
             construction=construction,
             cost_model=costs,
             stress_config=stress_config,
+            operational_mode=operational_mode,
         )
 
     def run(self, *, portfolio_id: int | None, decision_time: datetime) -> TodayResult:
@@ -251,8 +277,19 @@ class ProductionDailyWorkflow:
                     benchmark_definition=research.benchmark_symbol,
                 )
             )
+            provisional_policy = self._operational_policy()
+            if portfolio_approval is not None:
+                validation_id = portfolio_approval.validation_id
+                operational_mode = False
+            elif provisional_policy is not None:
+                validation_id = provisional_policy.policy_id
+                operational_mode = True
+            else:
+                validation_id = None
+                operational_mode = False
             self.pipeline = self._pipeline(
-                portfolio_approval.validation_id if portfolio_approval is not None else None
+                validation_id,
+                operational_mode=operational_mode,
             )
             output = self.pipeline.run(assembled.inputs)
         except (ArithmeticError, LookupError, RuntimeError, ValueError) as error:
@@ -435,15 +472,24 @@ class ProductionDailyWorkflow:
         approved = tuple(
             item
             for item in research.alpha_signals
-            if item.production_eligible(research.decision_time)
+            if item.operational_eligible(research.decision_time)
         )
         alpha_status = "VALID" if approved else "BLOCKED"
+        provisional = any(
+            item.validation_status.value == "PROVISIONAL_OPERATIONAL_APPROVED"
+            for item in approved
+        )
         alpha_detail = (
-            f"{len(approved)} PRODUCTION_APPROVED signals"
+            (
+                f"{len(approved)} PROVISIONAL_OPERATIONAL_APPROVED signals"
+                if provisional
+                else f"{len(approved)} PRODUCTION_APPROVED signals"
+            )
             if approved
             else (
-                "STRATEGY_NOT_PRODUCTION_APPROVED: candidates remain DIAGNOSTIC_ONLY; "
-                "locked OOS, PIT, survivorship and after-cost evidence is absent"
+                "STRATEGY_NOT_PRODUCTION_APPROVED: no provisional operational "
+                "approval or full production approval is bound to this strategy; "
+                "candidates remain DIAGNOSTIC_ONLY"
             )
         )
         return (
@@ -520,6 +566,14 @@ class ProductionDailyWorkflow:
         result_blockers = tuple(
             dict.fromkeys(item for item in (strategy_blocker, blocker) if item is not None)
         )
+        operational_policy_id = research.operational_policy_id
+        operational_policy_decision = research.operational_policy_decision
+        operationally_allowed = bool(
+            operational_policy_id != "NOT_CONFIGURED"
+            and strategy_blocker is None
+            and blocker is None
+        )
+        operational = operationally_allowed
         return TodayResult(
             run_id=0,
             decision_time=research.decision_time,
@@ -527,7 +581,15 @@ class ProductionDailyWorkflow:
             data_freshness="CERTIFIED_AS_OF_DECISION",
             status="BLOCKED",
             data_certification="APPROVED",
-            model_status=("PRODUCTION_APPROVED" if strategy_blocker is None else "DIAGNOSTIC_ONLY"),
+            model_status=(
+                (
+                    "PROVISIONAL_OPERATIONAL_APPROVED"
+                    if operational_policy_id != "NOT_CONFIGURED"
+                    else "PRODUCTION_APPROVED"
+                )
+                if strategy_blocker is None
+                else "DIAGNOSTIC_ONLY"
+            ),
             portfolio_status="NOT_INITIALIZED",
             risk_regime=link.display_status,
             gross_target=None,
@@ -574,7 +636,41 @@ class ProductionDailyWorkflow:
             probability_overlay_state=research.probability_overlay_state,
             probability_overlay_reason=research.probability_overlay_reason,
             probability_overlay_effects=research.probability_overlay_effects,
+            operational_approval_artifact_id=(
+                operational_policy_id
+                if operational
+                else "NOT_APPROVED"
+            ),
+            operational_readiness=(
+                OperationalReadiness.PROVISIONAL_ACTIONABLE.value
+                if operational
+                else OperationalReadiness.BLOCKED.value
+            ),
+            research_certification_state="NOT_CERTIFIABLE",
+            operational_policy_id=operational_policy_id,
+            operational_policy_decision=operational_policy_decision,
+            operationally_allowed=operationally_allowed,
+            operational_degraded_reason=(
+                "research_certification_state=NOT_CERTIFIABLE; "
+                "explicit operational policy allows provisional production advice"
+                if operational
+                else "operational policy missing or denies provisional advice"
+            ),
         )
+
+    def _operational_policy(self) -> OperationalPolicy | None:
+        policy = self.operational_store.load()
+        if policy is None:
+            return None
+        allowed, _reason = policy.allows(
+            self._operational_identity(),
+            "NOT_CERTIFIABLE",
+            now=datetime.now(UTC),
+        )
+        return policy if allowed else None
+
+    def _operational_identity(self) -> OperationalApprovalIdentity:
+        return build_operational_identity(self.effective_config, self.assembler.strategy)
 
     def _persist_blocked(
         self,
@@ -700,7 +796,14 @@ class ProductionDailyWorkflow:
             status=run.status.upper(),
             data_certification="APPROVED" if data_approved else "BLOCKED",
             model_status=(
-                "PRODUCTION_APPROVED" if strategy_blocker is None else "DIAGNOSTIC_ONLY"
+                (
+                    "PROVISIONAL_OPERATIONAL_APPROVED"
+                    if assembled is not None
+                    and assembled.operational_policy_id != "NOT_CONFIGURED"
+                    else "PRODUCTION_APPROVED"
+                )
+                if strategy_blocker is None
+                else "DIAGNOSTIC_ONLY"
             ),
             portfolio_status="TARGET_COMPUTED" if run.gate_status == "APPROVED" else "UNCHANGED",
             risk_regime=(
@@ -817,6 +920,48 @@ class ProductionDailyWorkflow:
             probability_overlay_effects=(
                 assembled.probability_overlay_effects if assembled is not None else ()
             ),
+            operational_approval_artifact_id=(
+                assembled.operational_policy_id
+                if assembled is not None
+                and assembled.operational_policy_id != "NOT_CONFIGURED"
+                and strategy_blocker is None
+                and run.status in {"generated", "no_decision"}
+                else "NOT_APPROVED"
+            ),
+            operational_policy_id=(
+                assembled.operational_policy_id
+                if assembled is not None
+                else "NOT_CONFIGURED"
+            ),
+            operational_policy_decision=(
+                assembled.operational_policy_decision
+                if assembled is not None
+                else OperationalPolicyDecision.BLOCK.value
+            ),
+            operationally_allowed=bool(
+                assembled is not None
+                and assembled.operational_policy_id != "NOT_CONFIGURED"
+                and strategy_blocker is None
+                and run.status in {"generated", "no_decision"}
+            ),
+            operational_readiness=(
+                OperationalReadiness.PROVISIONAL_ACTIONABLE.value
+                if assembled is not None
+                and assembled.operational_policy_id != "NOT_CONFIGURED"
+                and strategy_blocker is None
+                and run.status in {"generated", "no_decision"}
+                else OperationalReadiness.BLOCKED.value
+            ),
+            research_certification_state="NOT_CERTIFIABLE",
+            operational_degraded_reason=(
+                "research_certification_state=NOT_CERTIFIABLE; "
+                "explicit operational policy allows provisional production advice"
+                if assembled is not None
+                and assembled.operational_policy_id != "NOT_CONFIGURED"
+                and strategy_blocker is None
+                and run.status in {"generated", "no_decision"}
+                else "operational policy missing or denies provisional advice"
+            ),
         )
 
     def _identity_hashes(self, data_version: str) -> dict[str, str]:
@@ -837,13 +982,13 @@ def _strategy_blocker(
     approved = tuple(
         item
         for item in signals
-        if item.production_eligible(decision_time)
+        if item.operational_eligible(decision_time)
     )
     if approved:
         return None
     return (
-        "STRATEGY_NOT_PRODUCTION_APPROVED: no immutable approval backed by locked OOS, "
-        "PIT, survivorship-controlled and after-cost evidence"
+        "STRATEGY_NOT_PRODUCTION_APPROVED: no explicit operational policy or "
+        "full production approval is bound to this strategy/config"
     )
 
 

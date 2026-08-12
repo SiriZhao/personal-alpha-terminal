@@ -7,7 +7,11 @@ from enum import StrEnum
 import numpy as np
 import pandas as pd
 
-from personal_alpha_terminal.quant_engine.alpha import AlphaSignal, UnifiedAlphaEngine
+from personal_alpha_terminal.quant_engine.alpha import (
+    AlphaSignal,
+    AlphaValidationStatus,
+    UnifiedAlphaEngine,
+)
 from personal_alpha_terminal.quant_engine.costs import TransactionCostModel
 from personal_alpha_terminal.quant_engine.decision import (
     ProductionDecision,
@@ -96,16 +100,19 @@ class DailyQuantPipeline:
         risk_budget: DynamicRiskBudget | None = None,
         cost_model: TransactionCostModel | None = None,
         stress_config: StressRiskConfig | None = None,
+        operational_mode: bool = False,
     ) -> None:
         self.cost_model = cost_model or TransactionCostModel()
         self.risk_model = risk_model or PortfolioRiskModel()
         self.construction = construction or PortfolioConstructionEngine(
-            cost_model=self.cost_model
+            cost_model=self.cost_model,
+            operational_mode=operational_mode,
         )
         self.risk_budget = risk_budget or DynamicRiskBudget()
         self.trade_generator = TradeGenerator(self.cost_model)
         self.decision_engine = ProductionDecisionEngine()
         self.stress_config = stress_config or StressRiskConfig()
+        self.operational_mode = operational_mode
 
     def run(self, inputs: DailyQuantInput) -> DailyQuantOutput:
         stages: list[PipelineStage] = []
@@ -167,7 +174,7 @@ class DailyQuantPipeline:
                 tuple(blockers),
             )
         stages.append(PipelineStage("Point-in-Time Inputs", "VALID", "no future observations"))
-        approved_alpha = UnifiedAlphaEngine().for_decision(
+        approved_alpha = UnifiedAlphaEngine().for_operational_decision(
             inputs.alpha_signals, decision_time=inputs.decision_time
         )
         if not approved_alpha:
@@ -185,8 +192,34 @@ class DailyQuantPipeline:
                 None,
                 tuple(blockers),
             )
+        if not self.operational_mode and any(
+            item.validation_status is AlphaValidationStatus.PROVISIONAL_OPERATIONAL_APPROVED
+            for item in approved_alpha
+        ):
+            blockers.append(
+                "provisional operational signals are not allowed without an "
+                "explicit operational policy"
+            )
+            stages.append(PipelineStage("Alpha Signals", "BLOCKED", blockers[-1]))
+            return DailyQuantOutput(
+                ProductionPipelineStatus.BLOCKED,
+                tuple(stages),
+                None,
+                None,
+                (),
+                None,
+                tuple(blockers),
+            )
         stages.append(
-            PipelineStage("Alpha Signals", "VALID", f"{len(approved_alpha)} approved signals")
+            PipelineStage(
+                "Alpha Signals",
+                "VALID",
+                (
+                    f"{len(approved_alpha)} provisional operational signals"
+                    if self.operational_mode
+                    else f"{len(approved_alpha)} approved signals"
+                ),
+            )
         )
         try:
             risk = self.risk_model.fit(
@@ -249,7 +282,7 @@ class DailyQuantPipeline:
                 None,
                 tuple(blockers),
             )
-        if not target.production_approved:
+        if not target.operational_approved:
             blockers.extend(target.blockers)
             stages.append(PipelineStage("Portfolio Construction", "BLOCKED", "; ".join(blockers)))
             return DailyQuantOutput(
@@ -262,7 +295,15 @@ class DailyQuantPipeline:
                 tuple(blockers),
             )
         stages.append(
-            PipelineStage("Portfolio Construction", "PRODUCTION_APPROVED", target.model_version)
+            PipelineStage(
+                "Portfolio Construction",
+                (
+                    "PROVISIONAL_OPERATIONAL_APPROVED"
+                    if self.operational_mode
+                    else "PRODUCTION_APPROVED"
+                ),
+                target.model_version,
+            )
         )
         target_vector = np.asarray(
             [target.target_weights.get(symbol, 0.0) for symbol in risk.symbols], dtype=float

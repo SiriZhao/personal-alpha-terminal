@@ -10,6 +10,7 @@ import pandas as pd
 
 class FactorSignalStatus(StrEnum):
     VALID = "VALID"
+    DEGRADED = "DEGRADED"
     INSUFFICIENT_DATA = "INSUFFICIENT_DATA"
     BLOCKED = "BLOCKED"
     NOT_VALIDATED = "NOT_VALIDATED"
@@ -62,6 +63,7 @@ def process_cross_section(
     *,
     as_of: datetime,
     minimum_required_factors: int = 2,
+    allow_degraded_neutralization: bool = False,
 ) -> FactorCrossSectionResult:
     """Causal raw -> winsorized -> robust z -> neutralized factor pipeline."""
 
@@ -108,7 +110,10 @@ def process_cross_section(
         if spec.sector_neutral:
             if "sector" not in frame or frame["sector"].isna().all():
                 warnings.append(f"{spec.name}: sector exposure is not neutralized")
-                statuses[spec.name] = FactorSignalStatus.NOT_VALIDATED
+                if allow_degraded_neutralization:
+                    statuses[spec.name] = FactorSignalStatus.DEGRADED
+                else:
+                    statuses[spec.name] = FactorSignalStatus.NOT_VALIDATED
             else:
                 methods.append("within-sector median centering")
                 neutralized, insufficient_groups = _within_group_center(
@@ -119,17 +124,28 @@ def process_cross_section(
                     warnings.append(
                         f"{spec.name}: insufficient sector groups: {', '.join(insufficient_groups)}"
                     )
-                    statuses[spec.name] = FactorSignalStatus.NOT_VALIDATED
+                    if allow_degraded_neutralization:
+                        statuses[spec.name] = FactorSignalStatus.DEGRADED
+                    else:
+                        statuses[spec.name] = FactorSignalStatus.NOT_VALIDATED
         if spec.size_neutral:
             if "market_cap" not in frame or frame["market_cap"].notna().sum() < 3:
                 warnings.append(f"{spec.name}: size exposure is not neutralized")
-                statuses[spec.name] = FactorSignalStatus.NOT_VALIDATED
+                if allow_degraded_neutralization:
+                    statuses[spec.name] = FactorSignalStatus.DEGRADED
+                    neutralized = _robust_zscore(signal)
+                else:
+                    statuses[spec.name] = FactorSignalStatus.NOT_VALIDATED
             else:
                 methods.append("log-market-cap residualization")
                 neutralized, size_valid = _size_residual(neutralized, frame["market_cap"])
                 if not size_valid:
                     warnings.append(f"{spec.name}: size residualization lacks rank/DoF")
-                    statuses[spec.name] = FactorSignalStatus.NOT_VALIDATED
+                    if allow_degraded_neutralization:
+                        statuses[spec.name] = FactorSignalStatus.DEGRADED
+                        neutralized = _robust_zscore(signal)
+                    else:
+                        statuses[spec.name] = FactorSignalStatus.NOT_VALIDATED
         neutralized = _robust_zscore(neutralized)
         output[f"{spec.name}__normalized"] = neutralized
         statuses.setdefault(spec.name, FactorSignalStatus.VALID)

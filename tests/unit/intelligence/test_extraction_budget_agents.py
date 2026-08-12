@@ -40,6 +40,16 @@ class StubProvider:
         return LLMResponse(self.content, self.name, self.model, False)
 
 
+class CapturingProvider:
+    name = "stub"
+    model = "stub-v1"
+    request: LLMRequest | None = None
+
+    def generate(self, request: LLMRequest) -> LLMResponse:
+        self.request = request
+        return LLMResponse(_pit_payload(), self.name, self.model, False)
+
+
 class FailingProvider:
     name = "failing"
     model = "failing-v1"
@@ -110,6 +120,33 @@ def _payload() -> str:
     )
 
 
+def _pit_payload() -> str:
+    return json.dumps(
+        {
+            "symbol": "TSLA",
+            "entity": "Tesla, Inc.",
+            "sector": "Consumer Discretionary",
+            "industry": "Automotive",
+            "event_type": "EARNINGS",
+            "event_subtype": "quarterly results",
+            "summary": "Structured result based only on supplied figures.",
+            "direction": "UNKNOWN",
+            "magnitude": None,
+            "surprise": None,
+            "relevance": 0.9,
+            "novelty": 0.7,
+            "confidence": 0.95,
+            "expected_horizon": 90,
+            "affected_assets": ["TSLA"],
+            "affected_sectors": ["Consumer Discretionary"],
+            "themes": ["earnings"],
+            "effective_at": "2025-01-29T21:09:13Z",
+            "earnings_features": None,
+            "macro_features": None,
+        }
+    )
+
+
 def _extractor(provider: object, cache: InMemoryExtractionCache) -> StructuredEventExtractor:
     budget = IntelligenceBudget(
         IntelligenceBudgetConfig(max_requests_per_run=4, max_tokens_per_run=50_000)
@@ -133,6 +170,43 @@ def test_structured_extraction_is_cached_and_strict() -> None:
     assert provider.calls == 1
     assert first.event is not None and first.event.symbol == "MSFT"
     assert first.event.structured_features["earnings"]["eps_surprise"] == 0.05
+
+
+def test_structured_extraction_uses_historical_available_at_as_pit_cutoff() -> None:
+    available = datetime(2025, 1, 29, 21, 9, 13, tzinfo=UTC)
+    ingested = datetime(2026, 8, 12, 5, 41, tzinfo=UTC)
+    raw = RawInformation(
+        raw_id="sec-tsla-8k",
+        source="sec-edgar",
+        source_identifier="0001628280-25-002993",
+        title="Tesla, Inc. 8-K",
+        body="Tesla reported fourth quarter and full year 2024 results.",
+        published_at=available,
+        observed_at=available,
+        ingested_at=ingested,
+        data_cutoff=ingested,
+        available_at=available,
+    )
+    provider = CapturingProvider()
+    extractor = StructuredEventExtractor(
+        provider,
+        InMemoryExtractionCache(),
+        IntelligenceBudget(
+            IntelligenceBudgetConfig(
+                max_requests_per_run=2,
+                max_tokens_per_run=50_000,
+            )
+        ),
+        clock=lambda: datetime(2026, 8, 12, 5, 45, tzinfo=UTC),
+    )
+    outcome = extractor.extract(raw)
+    assert outcome.status is IntelligenceStatus.READY
+    assert outcome.event is not None
+    assert provider.request is not None
+    assert provider.request.as_of == available
+    assert outcome.event.data_cutoff == available
+    assert "2026-08-12" not in provider.request.user_prompt
+    assert "2025-01-29T21:09:13Z" in provider.request.user_prompt
 
 
 def test_earnings_agent_returns_structured_features_not_a_trade() -> None:

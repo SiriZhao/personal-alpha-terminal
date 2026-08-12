@@ -43,11 +43,19 @@ and risk boundaries are unchanged, and no auto-execution or paper account was ad
 - provider-disabled failure drill: `PASS`; `LLM_INTELLIGENCE` became
   `OPTIONAL_UNAVAILABLE` and the classical result stayed
   `VALID_ANALYSIS_NON_ACTIONABLE`;
-- live daily run with `main`: DATA/PIT/FEATURE/FACTOR `PASS`, LLM
-  `PASS_DEGRADED/SHADOW`, SIGNAL `FAIL_BLOCKING`, actions `0`;
+- refreshed live daily run `daily-5b9f4d3812f14b329429fc2e79fc8796`:
+  DATA/PIT/FEATURE/FACTOR `PASS`, LLM `OPTIONAL_UNAVAILABLE`, SIGNAL
+  `FAIL_BLOCKING`, actions `0`, classification
+  `VALID_ANALYSIS_NON_ACTIONABLE`;
 - repeated daily input: classification, data identity and config hash reproduced;
 - Ruff: `PASS`; strict mypy: `PASS` across 366 source files;
-- full pytest: `659 passed`.
+- full pytest: `663 passed`.
+
+This closure also fixed the historical research baseline identity to include
+`required_end`, so a later refresh creates a new immutable baseline instead of
+conflicting with an earlier one. The Champion/Challenger gate now requires an
+exact shared experiment identity and can return `REJECTED` as a distinct
+outcome.
 
 ## Remaining blockers
 

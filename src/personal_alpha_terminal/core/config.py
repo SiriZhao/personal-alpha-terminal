@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     daily_pipeline_max_event_jobs: int = Field(default=10, ge=1, le=100)
     daily_pipeline_max_probability_jobs: int = Field(default=10, ge=1, le=100)
     daily_pipeline_report_path: Path = Path("DAILY_PIPELINE_REPORT.md")
+    operational_policy_path: Path = Path("var/operational/operational_policy.json")
     daily_pipeline_quality_report_path: Path = Path("DATA_QUALITY_REPORT.md")
     daily_pipeline_lock_path: Path = Path("var/run/daily_pipeline.lock")
     daily_pipeline_lock_stale_hours: int = Field(default=12, ge=1, le=168)

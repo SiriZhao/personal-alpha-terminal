@@ -12,6 +12,7 @@ class AlphaValidationStatus(StrEnum):
     RESEARCH = "RESEARCH"
     VALIDATING = "VALIDATING"
     TESTED = "TESTED"
+    PROVISIONAL_OPERATIONAL_APPROVED = "PROVISIONAL_OPERATIONAL_APPROVED"
     PRODUCTION_APPROVED = "PRODUCTION_APPROVED"
     DISABLED = "DISABLED"
 
@@ -46,6 +47,7 @@ class AlphaSignal:
     data_version: str
     evidence_coverage: float = 1.0
     calibration_id: str | None = None
+    operational_approval_hash: str | None = None
 
     def __post_init__(self) -> None:
         if self.as_of.tzinfo is None or self.valid_until.tzinfo is None:
@@ -88,6 +90,25 @@ class AlphaSignal:
             and self.as_of <= decision_time <= self.valid_until
         )
 
+    def operational_eligible(self, decision_time: datetime) -> bool:
+        """Return whether deterministic alpha may enter the daily operational chain.
+
+        Provisional operational approval and full production approval both pass
+        this gate.  The caller must keep the approval artifact identity separate;
+        this method never labels a provisional signal as production approved.
+        """
+
+        return (
+            self.validation_status
+            in {
+                AlphaValidationStatus.PROVISIONAL_OPERATIONAL_APPROVED,
+                AlphaValidationStatus.PRODUCTION_APPROVED,
+            }
+            and self.data_quality is AlphaDataQuality.VALID
+            and self.pit_valid
+            and self.as_of <= decision_time <= self.valid_until
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class ResearchRunManifest:
@@ -121,6 +142,24 @@ class UnifiedAlphaEngine:
             raise ValueError("decision_time must be timezone-aware")
         eligible = tuple(
             item for item in signals if item.production_eligible(decision_time)
+        )
+        return tuple(
+            sorted(
+                eligible,
+                key=lambda item: (item.symbol, item.horizon, item.signal_type),
+            )
+        )
+
+    def for_operational_decision(
+        self,
+        signals: tuple[AlphaSignal, ...],
+        *,
+        decision_time: datetime,
+    ) -> tuple[AlphaSignal, ...]:
+        if decision_time.tzinfo is None:
+            raise ValueError("decision_time must be timezone-aware")
+        eligible = tuple(
+            item for item in signals if item.operational_eligible(decision_time)
         )
         return tuple(
             sorted(

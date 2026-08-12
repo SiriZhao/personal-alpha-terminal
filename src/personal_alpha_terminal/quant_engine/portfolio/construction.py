@@ -25,6 +25,7 @@ from personal_alpha_terminal.research.data_gate import (
 
 class PortfolioConstructionStatus(StrEnum):
     PRODUCTION_APPROVED = "PRODUCTION_APPROVED"
+    PROVISIONAL_OPERATIONAL_APPROVED = "PROVISIONAL_OPERATIONAL_APPROVED"
     BLOCKED = "BLOCKED"
 
 
@@ -115,15 +116,25 @@ class PortfolioTarget:
     def production_approved(self) -> bool:
         return self.status is PortfolioConstructionStatus.PRODUCTION_APPROVED
 
+    @property
+    def operational_approved(self) -> bool:
+        return self.status in {
+            PortfolioConstructionStatus.PRODUCTION_APPROVED,
+            PortfolioConstructionStatus.PROVISIONAL_OPERATIONAL_APPROVED,
+        }
+
 
 class PortfolioConstructionEngine:
     def __init__(
         self,
         constraints: PortfolioConstraints | None = None,
         cost_model: TransactionCostModel | None = None,
+        *,
+        operational_mode: bool = False,
     ) -> None:
         self.constraints = constraints or PortfolioConstraints()
         self.cost_model = cost_model or TransactionCostModel()
+        self.operational_mode = operational_mode
 
     def construct(
         self,
@@ -148,7 +159,8 @@ class PortfolioConstructionEngine:
             )
         if not risk.valid_for_optimization:
             return self._blocked(decision_time, authorization, risk, ("risk model is blocked",))
-        if risk.size_exposure_status is not SizeExposureStatus.VALID:
+        size_degraded = risk.size_exposure_status is not SizeExposureStatus.VALID
+        if size_degraded and not self.operational_mode:
             return self._blocked(
                 decision_time,
                 authorization,
@@ -166,13 +178,15 @@ class PortfolioConstructionEngine:
             raise ValueError("current weights must be finite and long-only")
         if sum(current_weights.values()) > 1 + 1e-9:
             raise ValueError("current weights cannot exceed total portfolio value")
-        approved = UnifiedAlphaEngine().for_decision(alpha_signals, decision_time=decision_time)
+        approved = UnifiedAlphaEngine().for_operational_decision(
+            alpha_signals, decision_time=decision_time
+        )
         if not approved:
             return self._blocked(
                 decision_time,
                 authorization,
                 risk,
-                ("no PRODUCTION_APPROVED alpha is available",),
+                ("no operationally approved alpha is available",),
             )
         contributions, expected = _expected_returns(approved, risk.symbols, decision_time)
         if not expected or max(expected.values()) <= 0:
@@ -222,7 +236,7 @@ class PortfolioConstructionEngine:
         )
         sector_members = _members_by_label(symbols, risk.sectors)
         beta = np.array([risk.beta[symbol] for symbol in symbols])
-        sizes = np.array([risk.size_scores[symbol] for symbol in symbols])
+        sizes = np.array([risk.size_scores.get(symbol, 0.0) for symbol in symbols])
 
         def objective(weights: np.ndarray) -> float:
             delta = weights - current
@@ -328,6 +342,10 @@ class PortfolioConstructionEngine:
             volatility_limit=volatility_limit,
             sector_members=sector_members,
             cluster_members=cluster_members,
+            require_size_exposure=(
+                not self.operational_mode
+                or risk.size_exposure_status is SizeExposureStatus.VALID
+            ),
         )
         if violations:
             return self._blocked(decision_time, authorization, risk, tuple(violations))
@@ -369,7 +387,11 @@ class PortfolioConstructionEngine:
                 ("approved alpha signals use inconsistent data versions",),
             )
         return PortfolioTarget(
-            status=PortfolioConstructionStatus.PRODUCTION_APPROVED,
+            status=(
+                PortfolioConstructionStatus.PROVISIONAL_OPERATIONAL_APPROVED
+                if self.operational_mode
+                else PortfolioConstructionStatus.PRODUCTION_APPROVED
+            ),
             as_of=decision_time,
             target_weights=target,
             cash_weight=1 - float(weights.sum()),
@@ -382,7 +404,15 @@ class PortfolioConstructionEngine:
             sector_weights=sector_weights,
             cluster_weights=cluster_weights,
             alpha_contributions=contributions,
-            risk_reductions=(*risk_budget.reasons, *risk.limitations),
+            risk_reductions=(
+                *risk_budget.reasons,
+                *risk.limitations,
+                *(
+                    ("size_neutralization:degraded",)
+                    if size_degraded and self.operational_mode
+                    else ()
+                ),
+            ),
             blockers=(),
             model_version=self.constraints.model_version,
             risk_model_version=risk.model_version,
@@ -529,6 +559,7 @@ def _constraint_violations(
     volatility_limit: float,
     sector_members: dict[str, tuple[int, ...]],
     cluster_members: dict[str, tuple[int, ...]],
+    require_size_exposure: bool = True,
 ) -> list[str]:
     violations: list[str] = []
     tolerance = 1e-6
@@ -553,9 +584,9 @@ def _constraint_violations(
         <= constraints.maximum_beta + tolerance
     ):
         violations.append("beta band failed after no-trade processing")
-    if risk.size_exposure_status is not SizeExposureStatus.VALID:
+    if require_size_exposure and risk.size_exposure_status is not SizeExposureStatus.VALID:
         violations.append("PIT market-cap size exposure is NOT_VALIDATED")
-    else:
+    elif require_size_exposure:
         sizes = np.array([risk.size_scores[symbol] for symbol in risk.symbols])
         if abs(float(sizes @ weights)) > constraints.maximum_size_exposure + tolerance:
             violations.append("size exposure limit failed after no-trade processing")

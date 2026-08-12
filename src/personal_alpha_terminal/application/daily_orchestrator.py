@@ -974,6 +974,14 @@ class DailyQuantOrchestrator:
                     "model_approval_hash": workflow.model_approval_hash,
                 },
                 "probability_calibration_status": workflow.probability_calibration_status,
+                "operational_approval_artifact_id": workflow.operational_approval_artifact_id,
+                "operational_readiness": workflow.operational_readiness,
+                "research_certification_state": workflow.research_certification_state,
+                "operational_policy_id": workflow.operational_policy_id,
+                "operational_policy_decision": workflow.operational_policy_decision,
+                "operationally_allowed": workflow.operationally_allowed,
+                "operational_degraded_reason": workflow.operational_degraded_reason,
+                "full_research_certified": False,
             },
             self._effective_config.canonical_run_config_hash,
             tuple(
@@ -990,6 +998,14 @@ class DailyQuantOrchestrator:
                 )
             ),
             self._decision_traces(factors, decisions, target_weights, current),
+            None,
+            workflow.operational_readiness,
+            workflow.operational_approval_artifact_id,
+            workflow.research_certification_state,
+            workflow.operational_policy_id,
+            workflow.operational_policy_decision,
+            workflow.operationally_allowed,
+            workflow.operational_degraded_reason,
         )
 
     @staticmethod

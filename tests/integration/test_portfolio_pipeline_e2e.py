@@ -32,6 +32,13 @@ from sqlalchemy.orm import Session
 
 from personal_alpha_terminal.application.app_service import ApplicationService
 from personal_alpha_terminal.application.data_service import DataService
+from personal_alpha_terminal.application.operational_readiness import (
+    DEFAULT_ALLOWED_RESEARCH_STATES,
+    OperationalPolicyDecision,
+    OperationalPolicyStore,
+    build_operational_identity,
+    issue_operational_policy,
+)
 from personal_alpha_terminal.application.quant_daily_service import (
     ProductionDailyWorkflow,
 )
@@ -689,6 +696,7 @@ def _seed_test_b_state(
     config = EffectiveRuntimeConfig(
         cache_dir=tmp_path / "cache",
         report_dir=tmp_path / "reports",
+        operational_policy_path=tmp_path / "operational_policy.json",
     )
     data_version = "fixture-data-version-b"
     decision_time = TEST_B_DECISION_TIME
@@ -996,6 +1004,50 @@ def test_b_without_approval_artifacts_fails_closed(tmp_path: Path) -> None:
         assert run.status == "blocked"
         assert run.gate_status == "BLOCKED"
         assert run.recommendations == []
+    engine.dispose()
+
+
+def test_b_provisional_operational_approval_runs_without_research_artifacts(
+    tmp_path: Path,
+) -> None:
+    engine = build_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        portfolio_id, config = _seed_test_b_state(
+            session, tmp_path, produce_artifacts=False
+        )
+        strategy = USAdaptiveAlphaCoreV1(config.strategy)
+        policy = issue_operational_policy(
+            identity=build_operational_identity(config, strategy),
+            decision=OperationalPolicyDecision.ALLOW_PROVISIONAL,
+            research_states_allowed=DEFAULT_ALLOWED_RESEARCH_STATES,
+            issued_by="USER:test:e2e",
+            reason="isolated provisional operational mode: current data and PIT gates pass",
+            created_at=TEST_B_DECISION_TIME - timedelta(days=1),
+        )
+        OperationalPolicyStore(config.operational_policy_path).save(policy)
+
+        workflow = ProductionDailyWorkflow(session, config)
+        result = workflow.run(
+            portfolio_id=portfolio_id,
+            decision_time=TEST_B_DECISION_TIME,
+        )
+
+        assert result.status == "GENERATED"
+        assert result.model_status == "PROVISIONAL_OPERATIONAL_APPROVED"
+        assert result.production_approval_artifact_id == "NOT_APPROVED"
+        assert result.operational_policy_id == policy.policy_id
+        assert result.operational_policy_decision == "ALLOW_PROVISIONAL"
+        assert result.operationally_allowed
+        assert result.operational_approval_artifact_id == policy.policy_id
+        assert result.operational_readiness == "PROVISIONAL_ACTIONABLE"
+        assert result.target is not None
+        assert result.target.operational_approved
+        assert not result.target.production_approved
+        assert result.target.model_validation_id == policy.policy_id
+        assert result.recommendations
+        assert result.trades
+
     engine.dispose()
 
 

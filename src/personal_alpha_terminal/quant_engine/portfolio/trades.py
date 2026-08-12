@@ -62,7 +62,7 @@ class TradeGenerator:
         average_daily_dollar_volume: dict[str, float],
         minimum_trade_weight: float,
     ) -> tuple[TradeProposal, ...]:
-        if not target.production_approved:
+        if not target.operational_approved:
             return ()
         if portfolio_value <= 0 or minimum_trade_weight < 0:
             raise ValueError("trade generation inputs are invalid")

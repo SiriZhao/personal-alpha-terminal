@@ -68,6 +68,88 @@ def run_daily(
     return 0 if result.actionable else 3
 
 
+def _operational_policy_command(args: argparse.Namespace) -> int:
+    from personal_alpha_terminal.application.operational_readiness import (
+        DEFAULT_ALLOWED_RESEARCH_STATES,
+        OperationalPolicyDecision,
+        OperationalPolicyStore,
+        build_operational_identity,
+        issue_operational_policy,
+    )
+    from personal_alpha_terminal.quant_engine.strategies.us_adaptive_alpha_core import (
+        USAdaptiveAlphaCoreV1,
+    )
+
+    config = load_config(args.config)
+    store = OperationalPolicyStore(config.operational_policy_path)
+    if args.operational_policy_action == "show":
+        policy = store.load()
+        if policy is None:
+            console.print(
+                Panel(
+                    "Operational Policy: NOT_CONFIGURED (default BLOCK)",
+                    title="OPERATIONAL POLICY",
+                    border_style="yellow",
+                )
+            )
+            return 0
+        console.print(
+            Panel(
+                json.dumps(
+                    policy.document(),
+                    ensure_ascii=False,
+                    indent=2,
+                    sort_keys=True,
+                ),
+                title=f"OPERATIONAL POLICY / {policy.policy_id}",
+                border_style="green",
+            )
+        )
+        return 0
+    decision = OperationalPolicyDecision(args.decision.upper())
+    strategy = USAdaptiveAlphaCoreV1(config.strategy)
+    identity = build_operational_identity(config, strategy)
+    expires_at = None
+    if args.expires_at:
+        expires_at = datetime.combine(
+            date.fromisoformat(args.expires_at),
+            datetime.min.time(),
+            tzinfo=UTC,
+        )
+    policy = issue_operational_policy(
+        identity=identity,
+        decision=decision,
+        research_states_allowed=(
+            DEFAULT_ALLOWED_RESEARCH_STATES
+            if decision is OperationalPolicyDecision.ALLOW_PROVISIONAL
+            else ()
+        ),
+        issued_by="USER:cli:operational-policy:set",
+        reason=args.reason,
+        created_at=datetime.now(UTC),
+        expires_at=expires_at,
+    )
+    store.save(policy, force=args.force)
+    console.print(
+        Panel(
+            json.dumps(
+                policy.document(),
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            ),
+            title=f"OPERATIONAL POLICY SAVED / {policy.policy_id}",
+            border_style="green",
+        )
+    )
+    console.print(f"Policy path: {config.operational_policy_path.resolve()}")
+    console.print(
+        "Research certification is unchanged. This policy only permits degraded "
+        "production advice for the exact bound strategy/config identity."
+    )
+    return 0
+
+
 def _application_service(
     *,
     snapshot_root: Path | None = None,
@@ -886,6 +968,27 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("doctor")
     subparsers.add_parser("diagnostics", help="Alias for doctor")
     subparsers.add_parser("settings", help="Show the active terminal configuration path")
+    operational_policy = subparsers.add_parser(
+        "operational-policy",
+        help="Show or explicitly set the persistent operational policy",
+    )
+    operational_policy_actions = operational_policy.add_subparsers(
+        dest="operational_policy_action",
+        required=True,
+    )
+    operational_policy_actions.add_parser("show", help="Show the active policy (default BLOCK)")
+    operational_policy_set = operational_policy_actions.add_parser(
+        "set",
+        help="Explicitly issue or replace the operational policy",
+    )
+    operational_policy_set.add_argument(
+        "--decision",
+        choices=("ALLOW_PROVISIONAL", "BLOCK"),
+        required=True,
+    )
+    operational_policy_set.add_argument("--reason", required=True)
+    operational_policy_set.add_argument("--expires-at", default=None)
+    operational_policy_set.add_argument("--force", action="store_true")
     subparsers.add_parser("version", help="Show application version")
     subparsers.add_parser("research", help="Run the audited local research pipeline")
     research_data = subparsers.add_parser(
@@ -1011,6 +1114,8 @@ def main(argv: list[str] | None = None) -> int:
                 )
             )
             return 0
+        if command == "operational-policy":
+            return _operational_policy_command(args)
         if command == "version":
             from personal_alpha_terminal import __version__
 

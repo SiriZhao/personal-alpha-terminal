@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, replace
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import numpy as np
 import pandas as pd
@@ -10,6 +10,13 @@ from sqlalchemy.orm import Session
 
 from personal_alpha_terminal.application.broad_universe_service import (
     BroadUSUniverseService,
+)
+from personal_alpha_terminal.application.operational_readiness import (
+    OperationalApprovalIdentity,
+    OperationalPolicy,
+    OperationalPolicyDecision,
+    OperationalPolicyStore,
+    build_operational_identity,
 )
 from personal_alpha_terminal.core.effective_config import EffectiveRuntimeConfig
 from personal_alpha_terminal.data.us_market.broad_universe import EligibilityRules
@@ -87,6 +94,8 @@ class AssembledDailyInput:
     probability_overlay_state: str = "RESEARCH_ONLY"
     probability_overlay_reason: str = "PROBABILITY_ARTIFACT_MISSING"
     probability_overlay_effects: tuple[ProbabilityOverlayEffect, ...] = ()
+    operational_policy_id: str = "NOT_CONFIGURED"
+    operational_policy_decision: str = "BLOCK"
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,6 +129,8 @@ class AssembledResearchInput:
     probability_overlay_state: str = "RESEARCH_ONLY"
     probability_overlay_reason: str = "PROBABILITY_ARTIFACT_MISSING"
     probability_overlay_effects: tuple[ProbabilityOverlayEffect, ...] = ()
+    operational_policy_id: str = "NOT_CONFIGURED"
+    operational_policy_decision: str = "BLOCK"
 
 
 class ProductionDailyQuantInputAssembler:
@@ -145,6 +156,9 @@ class ProductionDailyQuantInputAssembler:
         )
         self.probability_overlay_registry = ProbabilityOverlayRegistry(
             self.effective_config.validation_artifact_dir
+        )
+        self.operational_store = OperationalPolicyStore(
+            self.effective_config.operational_policy_path
         )
 
     def assemble(
@@ -247,6 +261,9 @@ class ProductionDailyQuantInputAssembler:
             # Current-directory provenance is a production prerequisite. Legacy
             # local rows may still produce diagnostics but can never reach a trade.
             approval = None
+        operational_policy = None
+        if broad_universe_production_eligible and approval is None:
+            operational_policy = self._operational_policy()
         approval_data_version = (
             approval.data_version if approval is not None else 'NOT_APPROVED'
         )
@@ -266,8 +283,16 @@ class ProductionDailyQuantInputAssembler:
             decision_time=decision_time,
             data_version=universe.data_version,
             approval=approval,
+            operational_approval_hash=(
+                operational_policy.policy_id
+                if operational_policy is not None
+                else None
+            ),
             calibration=calibration,
             fundamentals=fundamentals,
+            allow_degraded_neutralization=(
+                operational_policy is not None
+            ),
         )
         strategy_version = (
             f"{self.strategy.model_id}:{self.strategy.version}:"
@@ -416,7 +441,31 @@ class ProductionDailyQuantInputAssembler:
             overlay_application.state.value,
             overlay_application.reason,
             overlay_application.effects,
+            (
+                operational_policy.policy_id
+                if operational_policy is not None
+                else "NOT_CONFIGURED"
+            ),
+            (
+                operational_policy.decision.value
+                if operational_policy is not None
+                else OperationalPolicyDecision.BLOCK.value
+            ),
         )
+
+    def _operational_policy(self) -> OperationalPolicy | None:
+        policy = self.operational_store.load()
+        if policy is None:
+            return None
+        allowed, _reason = policy.allows(
+            self._operational_identity(),
+            "NOT_CERTIFIABLE",
+            now=datetime.now(UTC),
+        )
+        return policy if allowed else None
+
+    def _operational_identity(self) -> OperationalApprovalIdentity:
+        return build_operational_identity(self.effective_config, self.strategy)
 
     def complete_with_portfolio(
         self,
@@ -507,6 +556,8 @@ class ProductionDailyQuantInputAssembler:
             research.probability_overlay_state,
             research.probability_overlay_reason,
             research.probability_overlay_effects,
+            research.operational_policy_id,
+            research.operational_policy_decision,
         )
 
     def _select_alpha_universe(

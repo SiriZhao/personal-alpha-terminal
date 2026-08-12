@@ -14,7 +14,10 @@ There are no truthful BASE-vs-LLM locked-OOS metrics to report. Blocking evidenc
 3. `LOCKED_OOS_NOT_OPENED`
 4. `CHAMPION_CHALLENGER_OOS_EVIDENCE_UNAVAILABLE`
 
-The evaluator requires at least 252 locked-OOS observations and improvement in
-after-cost excess return and Rank IC without worse drawdown. Transaction cost,
-slippage, benchmark and identical portfolio/risk constraints are mandatory. The
-gate can return approval or rejection; it cannot promote on availability alone.
+The evaluator now requires an exact `ChampionChallengerIdentity` for both arms:
+same research dataset, universe, benchmark, cost model, portfolio/risk
+constraints, and locked-OOS definition. It also requires at least 252
+locked-OOS observations per arm, complete metrics, improvement in after-cost
+excess return and Rank IC, no worse drawdown, and no worse Brier/log-loss
+calibration. The gate can return `PRODUCTION_APPROVED`, `REJECTED`, or
+`NOT_CERTIFIABLE`; it cannot promote on availability alone.

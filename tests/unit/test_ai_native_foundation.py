@@ -15,6 +15,8 @@ from personal_alpha_terminal.agents.llm import (
 )
 from personal_alpha_terminal.intelligence.champion_challenger import (
     ChallengerStatus,
+    ChampionChallengerIdentity,
+    OOSMetrics,
     evaluate_challenger,
 )
 from personal_alpha_terminal.intelligence.factor_registry import (
@@ -49,6 +51,47 @@ class FixedProvider:
             cached_tokens=40,
             latency_ms=12,
         )
+
+
+def _challenger_identity() -> ChampionChallengerIdentity:
+    return ChampionChallengerIdentity(
+        research_data_version="research-pit-v1",
+        universe_version="universe-v1",
+        benchmark="SPY",
+        cost_model_version="cost-v1",
+        portfolio_constraint_hash="portfolio-v1",
+        risk_model_hash="risk-v1",
+        locked_oos_definition_hash="locked-oos-v1",
+    )
+
+
+def _oos_metrics(
+    *,
+    rank_ic: float,
+    net_excess_return: float,
+    max_drawdown: float,
+    brier_score: float,
+    log_loss: float,
+    identity: ChampionChallengerIdentity | None = None,
+) -> OOSMetrics:
+    experiment = identity or _challenger_identity()
+    return OOSMetrics(
+        observations=260,
+        rank_ic=rank_ic,
+        net_excess_return=net_excess_return,
+        turnover=2.5,
+        transaction_cost=0.004,
+        max_drawdown=max_drawdown,
+        brier_score=brier_score,
+        log_loss=log_loss,
+        data_version=experiment.research_data_version,
+        universe_version=experiment.universe_version,
+        benchmark=experiment.benchmark,
+        cost_model_version=experiment.cost_model_version,
+        portfolio_constraint_hash=experiment.portfolio_constraint_hash,
+        risk_model_hash=experiment.risk_model_hash,
+        locked_oos_definition_hash=experiment.locked_oos_definition_hash,
+    )
 
 
 def test_gateway_records_hashed_provenance_cost_without_credentials() -> None:
@@ -162,6 +205,99 @@ def test_challenger_cannot_promote_without_certified_market_and_text_oos() -> No
     assert result.status is ChallengerStatus.NOT_CERTIFIABLE
     assert not result.llm_can_affect_production
     assert "HISTORICAL_TEXT_PIT_NOT_CERTIFIED" in result.blockers
+
+
+def test_challenger_gate_rejects_certifiable_but_not_better_arm() -> None:
+    champion = _oos_metrics(
+        rank_ic=0.05,
+        net_excess_return=0.04,
+        max_drawdown=-0.12,
+        brier_score=0.20,
+        log_loss=0.60,
+    )
+    challenger = _oos_metrics(
+        rank_ic=0.03,
+        net_excess_return=0.03,
+        max_drawdown=-0.14,
+        brier_score=0.22,
+        log_loss=0.64,
+    )
+    result = evaluate_challenger(
+        research_data_certified=True,
+        text_pit_certified=True,
+        locked_oos_opened=True,
+        champion=champion,
+        challenger=challenger,
+        identity=_challenger_identity(),
+    )
+    assert result.status is ChallengerStatus.REJECTED
+    assert not result.llm_can_affect_production
+    assert result.blockers == ("NO_STABLE_AFTER_COST_INCREMENTAL_ALPHA",)
+
+
+def test_challenger_gate_promotes_only_with_identical_identity_and_improvement() -> None:
+    champion = _oos_metrics(
+        rank_ic=0.04,
+        net_excess_return=0.03,
+        max_drawdown=-0.14,
+        brier_score=0.22,
+        log_loss=0.64,
+    )
+    challenger = _oos_metrics(
+        rank_ic=0.06,
+        net_excess_return=0.05,
+        max_drawdown=-0.13,
+        brier_score=0.20,
+        log_loss=0.60,
+    )
+    result = evaluate_challenger(
+        research_data_certified=True,
+        text_pit_certified=True,
+        locked_oos_opened=True,
+        champion=champion,
+        challenger=challenger,
+        identity=_challenger_identity(),
+    )
+    assert result.status is ChallengerStatus.PRODUCTION_APPROVED
+    assert result.llm_can_affect_production
+    assert result.blockers == ()
+
+
+def test_challenger_gate_blocks_changed_locked_oos_identity() -> None:
+    champion = _oos_metrics(
+        rank_ic=0.04,
+        net_excess_return=0.03,
+        max_drawdown=-0.14,
+        brier_score=0.22,
+        log_loss=0.64,
+    )
+    challenger = _oos_metrics(
+        rank_ic=0.06,
+        net_excess_return=0.05,
+        max_drawdown=-0.13,
+        brier_score=0.20,
+        log_loss=0.60,
+    )
+    changed = ChampionChallengerIdentity(
+        research_data_version="research-pit-v1",
+        universe_version="universe-v1",
+        benchmark="SPY",
+        cost_model_version="cost-v1",
+        portfolio_constraint_hash="portfolio-v1",
+        risk_model_hash="risk-v1",
+        locked_oos_definition_hash="changed-locked-oos-v2",
+    )
+    result = evaluate_challenger(
+        research_data_certified=True,
+        text_pit_certified=True,
+        locked_oos_opened=True,
+        champion=champion,
+        challenger=challenger,
+        identity=changed,
+    )
+    assert result.status is ChallengerStatus.NOT_CERTIFIABLE
+    assert "COMPARISON_IDENTITY_MISMATCH" in result.blockers
+    assert not result.llm_can_affect_production
 
 
 def test_historical_replay_is_invariant_to_future_document() -> None:

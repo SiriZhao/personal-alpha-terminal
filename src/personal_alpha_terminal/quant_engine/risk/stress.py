@@ -20,6 +20,7 @@ class StressStatus(StrEnum):
 class StressRiskConfig:
     production_validated: bool = False
     validation_id: str | None = None
+    provisional_operational: bool = False
     maximum_cvar_loss: float = 0.06
     maximum_liquidation_days: float = 5.0
     maximum_correlation_spike_loss: float = 0.08
@@ -48,6 +49,8 @@ class StressRiskConfig:
             raise ValueError("stress warning ratio must be in (0, 1)")
         if self.production_validated and not self.validation_id:
             raise ValueError("validated stress configuration requires validation_id")
+        if self.provisional_operational and not self.validation_id:
+            raise ValueError("provisional operational stress requires validation_id")
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,7 +157,7 @@ def evaluate_portfolio_stress(
         for name, value in metrics.items()
         if name not in failures and value > limits[name] * config.warning_ratio
     )
-    if not config.production_validated:
+    if not config.production_validated and not config.provisional_operational:
         status = StressStatus.NOT_VALIDATED
     elif failures:
         status = StressStatus.BLOCKED

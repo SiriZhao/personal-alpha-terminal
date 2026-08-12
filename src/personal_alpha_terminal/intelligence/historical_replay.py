@@ -22,6 +22,7 @@ class HistoricalAIReplayStatus(StrEnum):
 class HistoricalAIReplayResult:
     cutoff: datetime
     visible_document_ids: tuple[str, ...]
+    visible_document_versions: tuple[str, ...]
     visible_event_ids: tuple[str, ...]
     factor_observations: tuple[LLMFactorObservation, ...]
     status: HistoricalAIReplayStatus
@@ -48,7 +49,10 @@ class HistoricalAIReplay:
     ) -> HistoricalAIReplayResult:
         _aware(cutoff, "cutoff")
         visible_documents = tuple(
-            sorted(item.raw_id for item in documents if item.visible_at(cutoff))
+            sorted(
+                (item for item in documents if item.visible_at(cutoff)),
+                key=lambda item: item.raw_id,
+            )
         )
         visible_events = tuple(
             item_at_cutoff
@@ -71,7 +75,10 @@ class HistoricalAIReplay:
         identity = "|".join(
             (
                 cutoff.isoformat(),
-                *visible_documents,
+                *(
+                    f"{item.document_id}|{item.revision_id or ''}|{item.raw_id}"
+                    for item in visible_documents
+                ),
                 *(item.event_id for item in visible_events),
                 *(item.observation_hash for item in factors),
                 *blockers,
@@ -79,7 +86,11 @@ class HistoricalAIReplay:
         )
         return HistoricalAIReplayResult(
             cutoff=cutoff,
-            visible_document_ids=visible_documents,
+            visible_document_ids=tuple(item.raw_id for item in visible_documents),
+            visible_document_versions=tuple(
+                f"{item.document_id}|{item.revision_id or ''}|{item.raw_id}"
+                for item in visible_documents
+            ),
             visible_event_ids=tuple(item.event_id for item in visible_events),
             factor_observations=factors,
             status=(

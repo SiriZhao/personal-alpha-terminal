@@ -117,10 +117,11 @@ class StructuredEventExtractor:
         cached = self.cache.get(key)
         if cached is not None:
             return self._parse(cached, raw, cache_hit=True, is_mock=False)
+        pit_cutoff = raw.available_at or raw.observed_at
         prompt = json.dumps(
             {
                 "schema": ExtractedEventPayload.model_json_schema(),
-                "information": raw.model_dump(mode="json"),
+                "information": _pit_snapshot(raw),
                 "rules": [
                     "Use only the supplied information and its data cutoff.",
                     "Do not predict price, recommend trades, or invent missing values.",
@@ -150,7 +151,7 @@ class StructuredEventExtractor:
             task_type="EVENT_EXTRACTION",
             prompt_version=self.PROMPT_VERSION,
             input_document_ids=(raw.raw_id,),
-            as_of=raw.data_cutoff,
+            as_of=pit_cutoff,
             max_tokens=2048,
             thinking="disabled",
         )
@@ -196,6 +197,7 @@ class StructuredEventExtractor:
         cache_hit: bool,
         is_mock: bool,
     ) -> ExtractionOutcome:
+        pit_cutoff = raw.available_at or raw.observed_at
         if is_mock:
             return ExtractionOutcome(
                 IntelligenceStatus.DEGRADED,
@@ -271,7 +273,7 @@ class StructuredEventExtractor:
                 evidence=(evidence,),
                 model_version=self.provider.model,
                 prompt_version=self.PROMPT_VERSION,
-                data_cutoff=raw.data_cutoff,
+                data_cutoff=pit_cutoff,
                 created_at=now,
                 backtest_safety=BacktestSafety.BACKTEST_SAFE,
             )
@@ -286,3 +288,14 @@ class StructuredEventExtractor:
                 cache_hit,
                 self.provider.name,
             )
+
+
+def _pit_snapshot(raw: RawInformation) -> dict[str, object]:
+    """Expose only historical availability metadata to the model."""
+
+    cutoff = raw.available_at or raw.observed_at
+    snapshot = raw.model_dump(mode="json")
+    snapshot["data_cutoff"] = cutoff.isoformat()
+    snapshot["ingested_at"] = cutoff.isoformat()
+    snapshot["processed_at"] = cutoff.isoformat()
+    return snapshot

@@ -84,8 +84,10 @@ class USAdaptiveAlphaCoreV1:
         decision_time: datetime,
         data_version: str,
         approval: ModelApprovalRecord | None,
+        operational_approval_hash: str | None = None,
         calibration: ProbabilityCalibrationArtifact | None = None,
         fundamentals: pd.DataFrame | None = None,
+        allow_degraded_neutralization: bool = False,
     ) -> StrategyAlphaResult:
         if decision_time.tzinfo is None:
             raise ValueError("decision_time must be timezone-aware")
@@ -143,11 +145,15 @@ class USAdaptiveAlphaCoreV1:
             tuple(specs),
             as_of=decision_time,
             minimum_required_factors=3,
+            allow_degraded_neutralization=allow_degraded_neutralization,
         )
         parameter_fingerprint = self.config.parameter_fingerprint
         production = bool(
             approval is not None
             and approval.parameter_fingerprint == parameter_fingerprint
+        )
+        provisional_operational = bool(
+            not production and operational_approval_hash
         )
         calibration_data_version = approval.data_version if approval is not None else data_version
         calibrated = bool(
@@ -157,16 +163,29 @@ class USAdaptiveAlphaCoreV1:
             and calibration.identity.alpha_data_version == calibration_data_version
             and calibration.identity.strategy_parameter_hash == parameter_fingerprint
         )
-        if production and any(status.value != "VALID" for status in processed.statuses.values()):
+        allowed_statuses = {"VALID"}
+        if allow_degraded_neutralization:
+            allowed_statuses.add("DEGRADED")
+        if (
+            production or provisional_operational
+        ) and any(status.value not in allowed_statuses for status in processed.statuses.values()):
             return StrategyAlphaResult(
                 (),
                 tuple(
                     sorted(
                         set(disabled)
+                        | (
+                            {"neutralization:degraded"}
+                            if any(
+                                status.value == "DEGRADED"
+                                for status in processed.statuses.values()
+                            )
+                            else set()
+                        )
                         | {
                             f"{name}:{status.value}"
                             for name, status in processed.statuses.items()
-                            if status.value != "VALID"
+                            if status.value not in allowed_statuses
                         }
                     )
                 ),
@@ -213,6 +232,8 @@ class USAdaptiveAlphaCoreV1:
                     status=(
                         "PRODUCTION_APPROVED"
                         if production
+                        else "PROVISIONAL_OPERATIONAL_APPROVED"
+                        if provisional_operational
                         else "DIAGNOSTIC_ONLY"
                     ),
                     raw_values=raw_values,
@@ -245,6 +266,8 @@ class USAdaptiveAlphaCoreV1:
                     validation_status=(
                         AlphaValidationStatus.PRODUCTION_APPROVED
                         if production
+                        else AlphaValidationStatus.PROVISIONAL_OPERATIONAL_APPROVED
+                        if provisional_operational
                         else AlphaValidationStatus.RESEARCH
                     ),
                     model_version=f"{self.model_id}:{self.version}:{parameter_fingerprint[:12]}",
@@ -253,6 +276,11 @@ class USAdaptiveAlphaCoreV1:
                     calibration_id=(
                         calibration.calibration_id
                         if calibrated and calibration
+                        else None
+                    ),
+                    operational_approval_hash=(
+                        operational_approval_hash
+                        if provisional_operational
                         else None
                     ),
                 )
@@ -275,5 +303,20 @@ class USAdaptiveAlphaCoreV1:
             for index, item in enumerate(ranked, start=1)
         ]
         return StrategyAlphaResult(
-            tuple(signals), tuple(disabled), parameter_fingerprint, tuple(factor_rows)
+            tuple(signals),
+            tuple(
+                sorted(
+                    set(disabled)
+                    | (
+                        {"neutralization:degraded"}
+                        if any(
+                            status.value == "DEGRADED"
+                            for status in processed.statuses.values()
+                        )
+                        else set()
+                    )
+                )
+            ),
+            parameter_fingerprint,
+            tuple(factor_rows),
         )

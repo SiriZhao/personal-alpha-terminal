@@ -244,6 +244,13 @@ class DailyQuantResult:
     model_versions: tuple[str, ...]
     decision_traces: dict[str, dict[str, object]] | None = None
     certificate_path: str | None = None
+    operational_readiness: str = "BLOCKED"
+    operational_approval_artifact_id: str = "NOT_APPROVED"
+    research_certification_state: str = "NOT_CERTIFIABLE"
+    operational_policy_id: str = "NOT_CONFIGURED"
+    operational_policy_decision: str = "BLOCK"
+    operationally_allowed: bool = False
+    operational_degraded_reason: str | None = None
 
     @property
     def duration_seconds(self) -> float:
@@ -303,6 +310,10 @@ class DailyQuantResult:
                 if self.diagnostic_analysis_complete
                 else "INVALID_NON_ACTIONABLE"
             )
+        if self.operationally_allowed:
+            if self.execution_plan.legs:
+                return "PROVISIONAL_ACTIONABLE"
+            return "PROVISIONAL_NO_ACTION"
         if self.execution_plan.legs:
             return "CERTIFIED_ACTIONABLE"
         return "CERTIFIED_NO_ACTION"
@@ -358,6 +369,14 @@ class DailyQuantResult:
             "trading_use": (
                 "MANUAL_REVIEW_REQUIRED" if self.actionable else "DO_NOT_USE_FOR_TRADING"
             ),
+            "operational_readiness": self.operational_readiness,
+            "operational_approval_artifact_id": self.operational_approval_artifact_id,
+            "operational_policy_id": self.operational_policy_id,
+            "operational_policy_decision": self.operational_policy_decision,
+            "operationally_allowed": self.operationally_allowed,
+            "operational_degraded_reason": self.operational_degraded_reason,
+            "research_certification_state": self.research_certification_state,
+            "full_research_certified": False,
             "version": self.version,
             "build_identifier": self.provenance.get("build_identifier", self.version),
             "git_commit": self.provenance.get("git_commit", "UNAVAILABLE"),
@@ -478,6 +497,13 @@ def canonical_result_hash(result: DailyQuantResult) -> str:
         {
             "canonical_input_hash": canonical_input_hash(result),
             "classification": result.run_classification,
+            "operational_readiness": result.operational_readiness,
+            "operational_approval_artifact_id": result.operational_approval_artifact_id,
+            "operational_policy_id": result.operational_policy_id,
+            "operational_policy_decision": result.operational_policy_decision,
+            "operationally_allowed": result.operationally_allowed,
+            "operational_degraded_reason": result.operational_degraded_reason,
+            "research_certification_state": result.research_certification_state,
             "stage_statuses": [
                 (item.name, item.status.value, item.message) for item in result.stages
             ],

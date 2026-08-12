@@ -59,7 +59,7 @@ class ProductionDecisionEngine:
                 authorization.decision.status.value,
                 authorization.decision.blockers,
             )
-        if not target.production_approved:
+        if not target.operational_approved:
             return ProductionDecision(
                 ProductionDecisionStatus.BLOCKED,
                 as_of,
