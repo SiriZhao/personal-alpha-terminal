@@ -102,6 +102,13 @@ class EffectiveRuntimeConfig:
         "var/operational-universe-baseline.json"
     )
     forward_ledger_path: Path = Path("var/forward-ledger.jsonl")
+    shadow_ledger_path: Path = Path("var/shadow-ledger.jsonl")
+    shadow_registry_path: Path = Path("var/alpha-engine2/research-registry.jsonl")
+    # Optional ROUND 8 shadow challenger.  When set, the daily run records
+    # what the challenger would recommend (SHADOW) without ever affecting
+    # the official recommendation, target or ledger.  Disabled by default.
+    shadow_challenger_id: str | None = None
+    shadow_coefficients: dict[str, float] | None = None
     primary_provider: str = "yahoo"
     fallback_provider: str = "stooq"
     provider_priority: tuple[str, ...] = (
@@ -288,6 +295,19 @@ def resolve_effective_runtime_config(
         ),
         forward_ledger_path=Path(
             scalar.get("forward_ledger_path", "var/forward-ledger.jsonl")
+        ),
+        shadow_ledger_path=Path(
+            scalar.get("shadow_ledger_path", "var/shadow-ledger.jsonl")
+        ),
+        shadow_registry_path=Path(
+            scalar.get("shadow_registry_path", "var/alpha-engine2/research-registry.jsonl")
+        ),
+        shadow_challenger_id=_optional_text(scalar, "shadow_challenger_id"),
+        shadow_coefficients=_optional_float_map(
+            scalar,
+            "shadow_momentum_coefficient",
+            "shadow_trend_coefficient",
+            "shadow_volatility_coefficient",
         ),
         primary_provider=scalar.get("primary_provider", "yahoo").lower(),
         fallback_provider=scalar.get("fallback_provider", "twelve_data").lower(),
@@ -527,6 +547,30 @@ def _apply_cli_overrides(
     if cache_dir is not None:
         config = replace(config, cache_dir=Path(str(cache_dir)))
     return config
+
+
+def _optional_text(scalar: dict[str, str], key: str) -> str | None:
+    value = scalar.get(key)
+    return value.strip() if value and value.strip() else None
+
+
+def _optional_float_map(
+    scalar: dict[str, str],
+    momentum_key: str,
+    trend_key: str,
+    volatility_key: str,
+) -> dict[str, float] | None:
+    output: dict[str, float] = {}
+    momentum = scalar.get(momentum_key)
+    trend = scalar.get(trend_key)
+    volatility = scalar.get(volatility_key)
+    if momentum is not None:
+        output["momentum_coefficient"] = float(momentum)
+    if trend is not None:
+        output["trend_coefficient"] = float(trend)
+    if volatility is not None:
+        output["low_volatility_coefficient"] = float(volatility)
+    return output or None
 
 
 def _portfolio_key(value: str | None) -> int | str | None:

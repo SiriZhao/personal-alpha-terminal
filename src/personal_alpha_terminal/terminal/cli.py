@@ -22,6 +22,7 @@ from personal_alpha_terminal.terminal.daily_renderer import render_daily_quant_r
 from personal_alpha_terminal.terminal.forward_track_cli import forward_track_command
 from personal_alpha_terminal.terminal.market_sessions import MarketSessionCalendar
 from personal_alpha_terminal.terminal.round7_cli import round7_research_command
+from personal_alpha_terminal.terminal.round8_cli import round8_research_command
 
 if TYPE_CHECKING:
     from personal_alpha_terminal.application import ApplicationService
@@ -1265,6 +1266,52 @@ def build_parser() -> argparse.ArgumentParser:
     )
     round7_rerun.add_argument("--benchmark", default="SPY")
     round7_rerun.add_argument("--horizon", type=int, default=21)
+    round8_research = subparsers.add_parser(
+        "round8-research",
+        help="ROUND 8 Alpha Engine 2.0 champion/challenger research",
+    )
+    round8_actions = round8_research.add_subparsers(dest="round8_action", required=True)
+    round8_actions.add_parser("status", help="Show champion/challenger research status")
+    round8_actions.add_parser("shadow-report", help="Show the shadow production ledger")
+    shadow_outcome = round8_actions.add_parser(
+        "shadow-append-outcome", help="Append a real forward outcome for a shadow prediction"
+    )
+    shadow_outcome.add_argument("shadow_id")
+    shadow_outcome.add_argument("--observed-at", required=True)
+    shadow_outcome.add_argument("--realized-return", type=float, required=True)
+    shadow_outcome.add_argument("--source", default="DB_RAW_OHLCV")
+    shadow_outcome.add_argument("--horizon", default="HORIZON")
+    register_experiment = round8_actions.add_parser(
+        "register-experiment", help="Register a research experiment (including rejected ones)"
+    )
+    register_experiment.add_argument("experiment_id")
+    register_experiment.add_argument("--strategy-id", required=True)
+    register_experiment.add_argument("--strategy-version", required=True)
+    register_experiment.add_argument("--hypothesis", required=True)
+    register_experiment.add_argument("--factors", required=True)
+    register_experiment.add_argument("--parameters", required=True)
+    register_experiment.add_argument("--universe-version", required=True)
+    register_experiment.add_argument("--horizon", type=int, required=True)
+    register_experiment.add_argument("--benchmark", default="SPY")
+    register_experiment.add_argument("--cost-model-version", required=True)
+    register_experiment.add_argument("--train-start", required=True)
+    register_experiment.add_argument("--train-end", required=True)
+    register_experiment.add_argument("--validation-start", required=True)
+    register_experiment.add_argument("--validation-end", required=True)
+    register_experiment.add_argument("--oos-start", required=True)
+    register_experiment.add_argument("--oos-end", required=True)
+    register_experiment.add_argument("--results", required=True)
+    register_experiment.add_argument(
+        "--status",
+        choices=("PROMOTED", "REJECTED", "RESEARCH_ONLY", "NOT_CERTIFIABLE"),
+        default="RESEARCH_ONLY",
+    )
+    register_experiment.add_argument("--rejection-reason", default="")
+    promotion_evaluate = round8_actions.add_parser(
+        "promotion-evaluate", help="Evaluate a challenger against the fixed promotion gate"
+    )
+    promotion_evaluate.add_argument("challenger_id")
+    promotion_evaluate.add_argument("--metrics", required=True)
     subparsers.add_parser("backtest", help="Check the PIT backtest execution gate")
     subparsers.add_parser("init-config")
     data_provider = subparsers.add_parser(
@@ -1403,6 +1450,8 @@ def main(argv: list[str] | None = None) -> int:
             return _round4_research_command(args)
         if command == "round7-research":
             return round7_research_command(args)
+        if command == "round8-research":
+            return round8_research_command(args)
         if command == "backtest":
             return _backtest_status(args.config)
         if command == "explain":

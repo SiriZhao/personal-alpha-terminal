@@ -462,6 +462,7 @@ class ProductionDailyWorkflow:
             )
         self.session.flush()
         self._append_forward_predictions(run, assembled)
+        self._append_shadow_predictions(run, assembled)
         return self._result_from_record(
             run,
             assembled.parameter_fingerprint,
@@ -515,6 +516,85 @@ class ProductionDailyWorkflow:
                 created_at=run.as_of_time,
             )
             append_prediction(prediction, path)
+
+    def _append_shadow_predictions(
+        self,
+        run: QuantDecisionRun,
+        assembled: AssembledDailyInput,
+    ) -> None:
+        """Record what a configured challenger would recommend (SHADOW only).
+
+        A challenger in shadow mode never changes the official recommendation,
+        target, portfolio or ledger.  It only appends immutable predictions to
+        the shadow ledger so a real forward comparison can accumulate.  The
+        challenger must be registered in the research registry and must not be
+        production-approved; anything else fails closed to no-op.
+        """
+        challenger_id = self.effective_config.shadow_challenger_id
+        if not challenger_id:
+            return
+        from personal_alpha_terminal.quant_engine.alpha_engine2.research_registry import (
+            ExperimentStatus,
+            ResearchRegistry,
+        )
+        from personal_alpha_terminal.quant_engine.alpha_engine2.shadow import (
+            ShadowLedger,
+            ShadowPrediction,
+        )
+
+        registry = ResearchRegistry(self.effective_config.shadow_registry_path)
+        experiments = registry.by_strategy(challenger_id)
+        if not experiments:
+            return
+        # A challenger is shadow-eligible only while it is RESEARCH_ONLY (or
+        # REJECTED).  A promoted challenger is handled by the normal production
+        # approval path, not the shadow ledger.
+        if any(
+            item.status is ExperimentStatus.PROMOTED for item in experiments
+        ):
+            return
+        coefficients = self.effective_config.shadow_coefficients or _challenger_coefficients(
+            experiments[-1]
+        )
+        factors = assembled.factors
+        if not factors:
+            return
+        def _challenger_alpha(factor: StrategyFactorSnapshot) -> float:
+            return float(
+                factor.components.get("momentum", 0.0)
+                * coefficients.get("momentum_coefficient", 0.0)
+                + factor.components.get("trend", 0.0)
+                * coefficients.get("trend_coefficient", 0.0)
+                + factor.components.get("low_volatility", 0.0)
+                * coefficients.get("low_volatility_coefficient", 0.0)
+            )
+
+        ranked = sorted(factors, key=lambda item: (-_challenger_alpha(item), item.symbol))
+        ledger = ShadowLedger(self.effective_config.shadow_ledger_path)
+        for index, factor in enumerate(ranked[:20], start=1):
+            alpha = _challenger_alpha(factor)
+            recommendation = (
+                "BUY"
+                if alpha > 0 and factor.rank <= 10
+                else "ADD"
+                if alpha > 0
+                else "HOLD"
+            )
+            prediction = ShadowPrediction(
+                shadow_id=f"shadow-{run.id}-{factor.symbol}",
+                run_id=str(run.id),
+                decision_time=run.as_of_time,
+                challenger_id=challenger_id,
+                challenger_version=experiments[-1].strategy_version,
+                symbol=factor.symbol,
+                rank=index,
+                expected_alpha=float(alpha),
+                target_weight=0.0,
+                recommendation=recommendation,
+                data_hash=run.data_version,
+                created_at=run.as_of_time,
+            )
+            ledger.append_prediction(prediction)
 
     @staticmethod
     def _research_stages(research: AssembledResearchInput) -> tuple[PipelineStage, ...]:
@@ -1072,6 +1152,22 @@ class ProductionDailyWorkflow:
             "cost_model_hash": self.effective_config.cost_model_hash,
             "canonical_run_config_hash": self.effective_config.canonical_run_config_hash,
         }
+
+
+def _challenger_coefficients(experiment: object) -> dict[str, float]:
+    """Extract factor coefficients from a registered challenger experiment.
+
+    Defaults to the classical champion coefficients when the experiment does not
+    declare its own, so shadow comparison stays well-defined.
+    """
+    parameters = getattr(experiment, "parameters", {}) or {}
+    return {
+        "momentum_coefficient": float(parameters.get("momentum_coefficient", 0.006)),
+        "trend_coefficient": float(parameters.get("trend_coefficient", 0.003)),
+        "low_volatility_coefficient": float(
+            parameters.get("low_volatility_coefficient", 0.002)
+        ),
+    }
 
 
 def _strategy_blocker(
