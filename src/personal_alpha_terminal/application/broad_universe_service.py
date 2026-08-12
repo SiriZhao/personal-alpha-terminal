@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
 from statistics import median
@@ -89,7 +89,16 @@ class BroadUSUniverseService:
         universe_date: date,
         decision_time: datetime,
         reference_symbols: tuple[str, ...],
+        require_pit_total_return: bool | None = None,
     ) -> BroadUniverseSelection:
+        rules = self.rules
+        if require_pit_total_return is not None:
+            rules = EligibilityRules(
+                **{
+                    **asdict(self.rules),
+                    "require_pit_total_return": require_pit_total_return,
+                }
+            )
         if decision_time.tzinfo is None:
             raise ValueError("broad universe decision_time must be timezone-aware")
         securities = tuple(
@@ -104,14 +113,9 @@ class BroadUSUniverseService:
         )
         directory, warnings = self._directory_or_fallback(securities, decision_time)
         stock_by_key = {
-            (item.exchange, item.symbol): item
-            for item in securities
-            if item.asset_type == "stock"
+            (item.exchange, item.symbol): item for item in securities if item.asset_type == "stock"
         }
-        directory_by_key = {
-            (item.exchange, item.symbol): item
-            for item in directory.records
-        }
+        directory_by_key = {(item.exchange, item.symbol): item for item in directory.records}
         observations: list[SecurityEligibilityObservation] = []
         for key, stock in stock_by_key.items():
             record = directory_by_key.get(key)
@@ -122,6 +126,7 @@ class BroadUSUniverseService:
                 stock,
                 universe_date=universe_date,
                 decision_time=decision_time,
+                rules=rules,
             )
             if observation is not None:
                 observations.append(observation)
@@ -130,11 +135,9 @@ class BroadUSUniverseService:
             tuple(observations),
             universe_date=universe_date,
             decision_time=decision_time,
-            rules=self.rules,
+            rules=rules,
         )
-        eligible_keys = {
-            (item.exchange, item.symbol) for item in eligibility.factor_eligible
-        }
+        eligible_keys = {(item.exchange, item.symbol) for item in eligibility.factor_eligible}
         alpha_securities = tuple(
             stock_by_key[key] for key in sorted(eligible_keys) if key in stock_by_key
         )
@@ -144,10 +147,7 @@ class BroadUSUniverseService:
             for item in securities
             if (
                 item.asset_type == "etf"
-                or (
-                    item.asset_type == "index"
-                    and item.symbol in requested_references
-                )
+                or (item.asset_type == "index" and item.symbol in requested_references)
             )
         )
         if not alpha_securities:
@@ -193,6 +193,7 @@ class BroadUSUniverseService:
         *,
         universe_date: date,
         decision_time: datetime,
+        rules: EligibilityRules,
     ) -> SecurityEligibilityObservation | None:
         # Eligibility for the session uses data strictly before the universe date.
         rows = tuple(
@@ -206,7 +207,7 @@ class BroadUSUniverseService:
                     Price.available_time <= decision_time,
                 )
                 .order_by(Price.trade_date.desc(), Price.id.desc())
-                .limit(max(300, self.rules.minimum_trading_sessions + 20))
+                .limit(max(300, rules.minimum_trading_sessions + 20))
             )
         )
         if not rows:
@@ -222,10 +223,10 @@ class BroadUSUniverseService:
                     ExchangeSession.available_time <= decision_time,
                 )
                 .order_by(ExchangeSession.session_date.desc())
-                .limit(self.rules.minimum_trading_sessions)
+                .limit(rules.minimum_trading_sessions)
             )
         )
-        expected = len(expected_dates) or self.rules.minimum_trading_sessions
+        expected = len(expected_dates) or rules.minimum_trading_sessions
         expected_set = set(expected_dates)
         covered = (
             sum(item.trade_date in expected_set for item in ordered)
@@ -270,7 +271,7 @@ class BroadUSUniverseService:
             valid_bar_coverage=coverage,
             missing_ratio=max(0.0, 1.0 - coverage),
             corporate_action_integrity=version is not None,
-            feature_available=len(ordered) >= self.rules.minimum_trading_sessions,
+            feature_available=len(ordered) >= rules.minimum_trading_sessions,
         )
 
     @staticmethod

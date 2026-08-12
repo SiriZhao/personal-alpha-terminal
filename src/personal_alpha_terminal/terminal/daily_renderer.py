@@ -417,6 +417,16 @@ def _pit_universe(result: DailyQuantResult, console: Console) -> None:
     data_evidence = data_stage.metadata if data_stage is not None else {}
     universe = result.provenance.get("universe_evidence", {})
     universe = universe if isinstance(universe, dict) else {}
+    price_based = universe.get("price_based")
+    price_based = price_based if isinstance(price_based, dict) else {}
+    broad_lines = ""
+    if price_based:
+        broad_lines = (
+            "截面排名池 (价格基准, PRICE_BASED_RANKING)\n"
+            f"Data eligible {price_based.get('data_eligible', 'UNAVAILABLE')}   "
+            f"Liquidity eligible {price_based.get('liquidity_eligible', 'UNAVAILABLE')}   "
+            f"Factor eligible {price_based.get('factor_eligible', 'UNAVAILABLE')}\n"
+        )
     console.print(
         Panel(
             f"Status {stage.status.value if stage else 'NOT_RUN'}   "
@@ -427,7 +437,8 @@ def _pit_universe(result: DailyQuantResult, console: Console) -> None:
             f"Data eligible {universe.get('data_eligible', 0)}   "
             f"Liquidity eligible {universe.get('liquidity_eligible', 0)}   "
             f"Factor eligible {universe.get('factor_eligible', 0)}\n"
-            "As-of cutoff "
+            + broad_lines
+            + "As-of cutoff "
             f"{result.data_cutoff.isoformat() if result.data_cutoff else 'UNAVAILABLE'}\n"
             "Latest completed session "
             f"{data_evidence.get('latest_completed_session', result.analysis_date)}\n"

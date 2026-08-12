@@ -590,10 +590,46 @@ class ProductionDailyQuantInputAssembler:
         if official:
             if not selection.alpha_securities:
                 raise ValueError("official broad universe has no factor eligible equities")
+            official_evidence = selection.evidence()
+            # The broad *price-based* ranking layer (explicitly labeled, no PIT
+            # total-return certification claim) reports the real cross-sectional
+            # factor pool over the current directory.  The strict production
+            # alpha universe above remains PIT-total-return gated.
+            try:
+                price_based = BroadUSUniverseService(
+                    self.session,
+                    cache_root=self.effective_config.cache_dir / "us-current-directory",
+                    rules=EligibilityRules(
+                        **asdict(self.effective_config.broad_universe)
+                    ),
+                ).select(
+                    universe_date=universe_date,
+                    decision_time=decision_time,
+                    reference_symbols=reference_symbols,
+                    require_pit_total_return=False,
+                )
+                official_evidence["price_based"] = {
+                    "listed_securities": price_based.eligibility.raw_listed_securities,
+                    "listed_equities": price_based.eligibility.raw_listed_equities,
+                    "security_type_eligible": len(
+                        price_based.eligibility.security_type_eligible
+                    ),
+                    "data_eligible": len(price_based.eligibility.data_eligible),
+                    "liquidity_eligible": len(price_based.eligibility.liquidity_eligible),
+                    "factor_eligible": len(price_based.eligibility.factor_eligible),
+                    "signal_eligible": len(price_based.eligibility.signal_eligible),
+                    "pit_status": price_based.eligibility.pit_status,
+                    "symbols": sorted(
+                        item.symbol for item in price_based.eligibility.factor_eligible
+                    ),
+                    "survivorship_status": price_based.eligibility.survivorship_status.value,
+                }
+            except (KeyError, OSError, TypeError, ValueError):
+                official_evidence["price_based"] = {"status": "UNAVAILABLE"}
             return (
                 selection.alpha_securities,
                 selection.reference_securities,
-                selection.evidence(),
+                official_evidence,
                 True,
             )
 

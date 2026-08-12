@@ -16,6 +16,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from personal_alpha_terminal.terminal.broad_universe_cli import broad_universe_command
 from personal_alpha_terminal.terminal.config import default_config_text, load_config
 from personal_alpha_terminal.terminal.daily_renderer import render_daily_quant_result
 from personal_alpha_terminal.terminal.market_sessions import MarketSessionCalendar
@@ -878,6 +879,96 @@ def _backtest_status(config_path: Path) -> int:
     return 0 if availability.available else 3
 
 
+def _round4_research_command(args: argparse.Namespace) -> int:
+    from dataclasses import asdict
+
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session, sessionmaker
+
+    from personal_alpha_terminal.application.broad_universe_service import (
+        BroadUSUniverseService,
+    )
+    from personal_alpha_terminal.data.us_market.broad_universe import EligibilityRules
+    from personal_alpha_terminal.quant_engine.round4_research import (
+        run_round4_research,
+        write_round4_report,
+    )
+
+    config = load_config(args.config)
+    engine = create_engine(f"sqlite:///{args.database}")
+    factory = sessionmaker(bind=engine, expire_on_commit=False, class_=Session)
+    decision_time = (
+        datetime.fromisoformat(args.as_of)
+        if args.as_of
+        else datetime.now(UTC)
+    )
+    if decision_time.tzinfo is None:
+        decision_time = decision_time.replace(tzinfo=UTC)
+    try:
+        with factory() as session:
+            rules = EligibilityRules(**asdict(config.broad_universe))
+            selection = BroadUSUniverseService(
+                session,
+                cache_root=config.cache_dir / "us-current-directory",
+                rules=rules,
+            ).select(
+                universe_date=decision_time.date(),
+                decision_time=decision_time,
+                reference_symbols=(args.benchmark, config.nasdaq_benchmark),
+            )
+            report = run_round4_research(
+                session,
+                decision_time=decision_time,
+                history_start=date.fromisoformat(args.history_start),
+                benchmark=args.benchmark,
+                horizon=args.horizon,
+                rules=rules,
+                eligibility=selection.eligibility,
+            )
+        path = write_round4_report(report, args.output)
+    except (OSError, RuntimeError, TypeError, ValueError) as error:
+        console.print(f"ROUND 4 research failed closed: {error}")
+        return 2
+    console.print("[bold]ROUND 4 RESEARCH[/bold]")
+    console.print(
+        f"Universe: {report.universe.get('factor_panel_stocks', 0)} factor-eligible stocks "
+        f"over {report.universe.get('factor_dates', 0)} dates"
+    )
+    console.print(f"Survivorship: {report.survivors}")
+    calibration = report.calibration
+    if calibration is not None:
+        console.print(
+            f"Probability OOS N={calibration.oos_samples}  Brier={calibration.brier_score:.4f}  "
+            f"ECE={calibration.expected_calibration_error:.4f}  ROC-AUC={calibration.roc_auc:.4f}"
+        )
+    else:
+        console.print("Probability: DEGRADED (calibration evidence unavailable)")
+    snapshot = report.probability_snapshot
+    if isinstance(snapshot, dict) and snapshot.get("rows"):
+        rows = snapshot["rows"]
+        if isinstance(rows, list) and rows:
+            first = rows[0]
+            probability = float(first.get("probability") or 0.0)
+            multiplier = float(first.get("multiplier") or 0.0)
+            adjusted_alpha = float(first.get("adjusted_alpha") or 0.0)
+            console.print(
+                f"Current probability top row: {first.get('symbol')} "
+                f"p={probability:.4f} "
+                f"multiplier={multiplier:.4f} "
+                f"adjusted_alpha={adjusted_alpha:.6f}"
+            )
+    ab = report.portfolio_ab
+    if ab is not None:
+        console.print(
+            f"Classical net {ab.classical_net_return:.2%} vs Probability net "
+            f"{ab.probability_net_return:.2%}; changed rows {ab.probability_change_count}"
+        )
+    else:
+        console.print("Probability A/B: UNAVAILABLE")
+    console.print(f"Report: {path.resolve()}")
+    return 0
+
+
 def _certificate_path(config_path: Path, run_id: str | None) -> Path:
     config = load_config(config_path)
     root = config.report_dir / "daily-runs"
@@ -1083,6 +1174,43 @@ def build_parser() -> argparse.ArgumentParser:
     research_import.add_argument("path", type=Path)
     research_import.add_argument("--required-start", default=None)
     research_import.add_argument("--required-end", default=None)
+    broad_universe = subparsers.add_parser(
+        "broad-universe",
+        help="Register, sync and report the broad tradable US equity universe",
+    )
+    broad_universe.add_argument("--database", type=Path, default=Path("var/personal_alpha.db"))
+    broad_universe.add_argument("--json", action="store_true")
+    broad_universe_actions = broad_universe.add_subparsers(
+        dest="broad_universe_action",
+        required=True,
+    )
+    broad_universe_actions.add_parser("status", help="Show registration, coverage and quarantine")
+    broad_universe_actions.add_parser("register", help="Register current-directory common stocks")
+    broad_universe_sync = broad_universe_actions.add_parser(
+        "sync", help="Download prices for the registered broad universe"
+    )
+    broad_universe_sync.add_argument(
+        "--mode", choices=("incremental", "backfill"), default="incremental"
+    )
+    broad_universe_sync.add_argument("--start-date", default=None)
+    broad_universe_sync.add_argument("--end-date", default=None)
+    broad_universe_sync.add_argument("--sessions-back", type=int, default=10)
+    broad_universe_sync.add_argument("--max-symbols", type=int, default=None)
+    broad_universe_sync.add_argument("--chunk-size", type=int, default=None)
+    broad_universe_funnel = broad_universe_actions.add_parser(
+        "funnel", help="Report the per-layer tradable universe funnel"
+    )
+    broad_universe_funnel.add_argument("--as-of", default=None)
+    round4_research = subparsers.add_parser(
+        "round4-research",
+        help="Run ROUND 4 broad cross-section, calibration and OOS research",
+    )
+    round4_research.add_argument("--database", type=Path, default=Path("var/personal_alpha.db"))
+    round4_research.add_argument("--as-of", default=None)
+    round4_research.add_argument("--history-start", default="2020-01-01")
+    round4_research.add_argument("--benchmark", default="SPY")
+    round4_research.add_argument("--horizon", type=int, default=21)
+    round4_research.add_argument("--output", type=Path, default=Path("var/round4-research"))
     subparsers.add_parser("backtest", help="Check the PIT backtest execution gate")
     subparsers.add_parser("init-config")
     data_provider = subparsers.add_parser(
@@ -1207,6 +1335,10 @@ def main(argv: list[str] | None = None) -> int:
             return _research(args.config)
         if command == "research-data":
             return _research_data_command(args)
+        if command == "broad-universe":
+            return broad_universe_command(args)
+        if command == "round4-research":
+            return _round4_research_command(args)
         if command == "backtest":
             return _backtest_status(args.config)
         if command == "explain":

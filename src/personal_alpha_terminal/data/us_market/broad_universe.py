@@ -153,6 +153,12 @@ class EligibilityRules:
     maximum_missing_ratio: float = 0.02
     include_adr: bool = False
     include_reit: bool = False
+    # Production default: the factor universe requires a certified PIT
+    # total-return series (corporate-action integrity).  The broad *price-based*
+    # ranking layer may set this False; such a universe is explicitly labeled
+    # PRICE_BASED_RANKING and never claims total-return or corporate-action
+    # certification.
+    require_pit_total_return: bool = True
     allowed_exchanges: tuple[str, ...] = ("XNAS", "XNYS", "XASE")
 
     def __post_init__(self) -> None:
@@ -425,7 +431,13 @@ def evaluate_broad_universe(
                 data_reasons.append("VALID_BAR_COVERAGE_INSUFFICIENT")
             if observation.missing_ratio > configured.maximum_missing_ratio:
                 data_reasons.append("MISSING_DATA_RATIO_EXCESSIVE")
-            if not observation.corporate_action_integrity:
+            if not observation.corporate_action_integrity and (
+                configured.require_pit_total_return
+            ):
+                # Production-strict factor universe requires a certified PIT
+                # total-return series.  The broad price-based ranking layer
+                # skips this check and is labeled PRICE_BASED_RANKING below;
+                # it never claims total-return or corporate-action certification.
                 data_reasons.append("CORPORATE_ACTION_INTEGRITY_INCOMPLETE")
             if not observation.feature_available:
                 data_reasons.append("FEATURES_UNAVAILABLE")
@@ -478,7 +490,11 @@ def evaluate_broad_universe(
         exclusions=exclusions,
         rules_fingerprint=configured.fingerprint,
         snapshot_hash=_hash(payload),
-        pit_status="CURRENT_PIT_ONLY",
+        pit_status=(
+            "CURRENT_PIT_ONLY"
+            if configured.require_pit_total_return
+            else "PRICE_BASED_RANKING"
+        ),
         survivorship_status=snapshot.survivorship_status,
     )
 
