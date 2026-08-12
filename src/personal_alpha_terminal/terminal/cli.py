@@ -23,6 +23,7 @@ from personal_alpha_terminal.terminal.forward_track_cli import forward_track_com
 from personal_alpha_terminal.terminal.market_sessions import MarketSessionCalendar
 from personal_alpha_terminal.terminal.round7_cli import round7_research_command
 from personal_alpha_terminal.terminal.round8_cli import round8_research_command
+from personal_alpha_terminal.terminal.round9_cli import round9_research_command
 
 if TYPE_CHECKING:
     from personal_alpha_terminal.application import ApplicationService
@@ -1312,6 +1313,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
     promotion_evaluate.add_argument("challenger_id")
     promotion_evaluate.add_argument("--metrics", required=True)
+    round9_research = subparsers.add_parser(
+        "round9-research",
+        help="ROUND 9 LLM Quant Modernization (Shadow -> Advisory)",
+    )
+    round9_actions = round9_research.add_subparsers(dest="round9_action", required=True)
+    advisory_snapshot = round9_actions.add_parser(
+        "advisory-snapshot", help="Assemble a deterministic advisory snapshot"
+    )
+    advisory_snapshot.add_argument("--model", default="advisory-v1")
+    advisory_snapshot.add_argument("--pit-documents", type=int, default=0)
+    evaluate = round9_actions.add_parser(
+        "evaluate", help="Evaluate an LLM against the fixed quality thresholds"
+    )
+    evaluate.add_argument("--metrics", required=True)
+    shadow_research = round9_actions.add_parser(
+        "shadow-research", help="Classical vs Classical+LLM shadow feature (strict OOS)"
+    )
+    shadow_research.add_argument("--metrics", required=True)
     subparsers.add_parser("backtest", help="Check the PIT backtest execution gate")
     subparsers.add_parser("init-config")
     data_provider = subparsers.add_parser(
@@ -1452,6 +1471,8 @@ def main(argv: list[str] | None = None) -> int:
             return round7_research_command(args)
         if command == "round8-research":
             return round8_research_command(args)
+        if command == "round9-research":
+            return round9_research_command(args)
         if command == "backtest":
             return _backtest_status(args.config)
         if command == "explain":

@@ -349,6 +349,9 @@ class DailyQuantOrchestrator:
                     "factor_status": "SHADOW",
                     "production_influence": False,
                     "output_row_count": 0,
+                    "advisory_status": "UNAVAILABLE",
+                    "advisory_quant_impact": "NONE",
+                    "fallback": "CLASSICAL_CHAMPION",
                 },
             )
             return
@@ -430,6 +433,9 @@ class DailyQuantOrchestrator:
                         else "CERTIFIED_PIT_TEXT_UNAVAILABLE"
                     ),
                     "output_row_count": event_count,
+                    "advisory_status": "ADVISORY" if event_count else "SHADOW",
+                    "advisory_quant_impact": "SHADOW" if observations else "NONE",
+                    "advisory_pit_documents": raw_count,
                 },
             )
             warnings.append(
@@ -452,6 +458,8 @@ class DailyQuantOrchestrator:
                     "fallback": "CLASSICAL_CHAMPION",
                     "fallback_reason": "LLM_INTELLIGENCE_UNAVAILABLE",
                     "output_row_count": 0,
+                    "advisory_status": "UNAVAILABLE",
+                    "advisory_quant_impact": "NONE",
                 },
             )
 

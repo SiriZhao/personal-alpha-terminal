@@ -79,31 +79,45 @@ def _ai_intelligence(result: DailyQuantResult, console: Console) -> None:
     table = Table(show_header=False, box=None, pad_edge=False)
     table.add_column(style="bold cyan")
     table.add_column()
+    advisory_status = str(metadata.get("advisory_status", "SHADOW"))
+    advisory_impact = str(metadata.get("advisory_quant_impact", "NONE"))
+    advisory_impact_text = "SHADOW" if advisory_impact == "SHADOW" else "NO"
     rows = (
-        (_t("状态", "Status"), _status_text(stage.status)),
+        (_t("\u72b6\u6001", "Status"), _status_text(stage.status)),
         (
-            _t("Provider / 模型", "Provider / model"),
+            _t("Provider / \u6a21\u578b", "Provider / model"),
             f"{metadata.get('provider', '--')} / {metadata.get('model', '--')}",
         ),
-        (_t("已处理文档", "Processed documents"), str(metadata.get("processed_documents", 0))),
-        (_t("PIT 事件", "PIT events"), str(metadata.get("detected_events", 0))),
         (
-            _t("SHADOW 因子观测", "SHADOW factor observations"),
+            _t("\u5df2\u5904\u7406\u6587\u6863", "Processed documents"),
+            str(metadata.get("processed_documents", 0)),
+        ),
+        (_t("PIT \u4e8b\u4ef6", "PIT events"), str(metadata.get("detected_events", 0))),
+        (
+            _t("SHADOW \u56e0\u5b50\u89c2\u6d4b", "SHADOW factor observations"),
             str(metadata.get("shadow_factor_observations", 0)),
         ),
-        (_t("因子状态", "Factor status"), str(metadata.get("factor_status", "UNAVAILABLE"))),
         (
-            _t("生产影响", "Production influence"),
-            _t("否", "NO") if not metadata.get("production_influence") else _t("是", "YES"),
+            _t("\u56e0\u5b50\u72b6\u6001", "Factor status"),
+            str(metadata.get("factor_status", "UNAVAILABLE")),
         ),
-        (_t("安全回退", "Safe fallback"), str(metadata.get("fallback", "CLASSICAL_CHAMPION"))),
+        (
+            _t("\u751f\u4ea7\u5f71\u54cd", "Production influence"),
+            "NO" if not metadata.get("production_influence") else "YES",
+        ),
+        (_t("AI \u72b6\u6001", "AI status"), advisory_status),
+        (_t("\u91cf\u5316\u51b3\u7b56\u5f71\u54cd", "Quant impact"), advisory_impact_text),
+        (
+            _t("\u5b89\u5168\u56de\u9000", "Safe fallback"),
+            str(metadata.get("fallback", "CLASSICAL_CHAMPION")),
+        ),
     )
     for label, value in rows:
         table.add_row(label, value)
     console.print(
         Panel(
             table,
-            title=_t("【AI 情报（SHADOW）】", "AI INTELLIGENCE (SHADOW)"),
+            title=_t("\u3010AI \u60c5\u62a5\u3011", "AI INTELLIGENCE"),
             border_style="yellow",
         )
     )
