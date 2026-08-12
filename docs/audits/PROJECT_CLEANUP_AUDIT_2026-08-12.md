@@ -1,4 +1,4 @@
-# Personal Alpha Terminal — Project Cleanup Audit 2026-08-12
+# Personal Alpha Terminal - Project Cleanup Audit 2026-08-12
 
 ## Executive Summary
 
