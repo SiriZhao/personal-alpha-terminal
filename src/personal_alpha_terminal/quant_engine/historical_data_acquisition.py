@@ -466,6 +466,7 @@ def build_research_baseline(
         "risk_model_hash": config.risk_model_hash,
         "portfolio_constraint_hash": config.portfolio_constraint_hash,
         "git_head": git_head,
+        "required_end": required_end.isoformat(),
     }
     baseline_hash = fingerprint(identity)
     return ResearchBaseline(

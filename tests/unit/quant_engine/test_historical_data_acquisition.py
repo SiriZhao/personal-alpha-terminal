@@ -16,6 +16,7 @@ from personal_alpha_terminal.quant_engine.historical_data_acquisition import (
     AcquisitionCheckpoint,
     CapabilityStatus,
     HistoricalResearchClassification,
+    ResearchBaseline,
     audit_available_historical_layers,
     build_research_baseline,
     persist_acquisition_checkpoint,
@@ -121,7 +122,7 @@ def _directory() -> CurrentDirectorySnapshot:
     )
 
 
-def _baseline():
+def _baseline() -> ResearchBaseline:
     return build_research_baseline(
         EffectiveRuntimeConfig(),
         git_head="a" * 40,
@@ -140,6 +141,18 @@ def test_baseline_freezes_expanded_universe_strategy_probability_and_oos_policy(
     assert first.requirements.locked_oos_sessions == 252
     assert first.requirements.minimum_total_sessions > 252
     assert first.requirements.configured_target_start == date(2015, 1, 1)
+
+
+def test_required_end_change_creates_new_baseline_identity() -> None:
+    first = _baseline()
+    changed = build_research_baseline(
+        EffectiveRuntimeConfig(),
+        git_head="a" * 40,
+        git_commit_time=datetime(2024, 1, 6, tzinfo=UTC),
+        required_end=date(2025, 1, 3),
+    )
+    assert changed.requirements.required_end == date(2025, 1, 3)
+    assert changed.research_baseline_id != first.research_baseline_id
 
 
 def test_provider_matrix_is_conservative_and_officially_sourced() -> None:

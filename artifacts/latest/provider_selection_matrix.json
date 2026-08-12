@@ -1,0 +1,395 @@
+{
+  "claims": [
+    {
+      "capability": "permanent_security_id",
+      "checked_at": "2026-08-12",
+      "confidence": "HIGH_OFFICIAL",
+      "exact_official_statement": "PERMNO is a proprietary, permanent identifier used to track US-listed equities over time.",
+      "official_url": "https://indexes.morningstar.com/research-data-products/crsp-us-stock-databases",
+      "product_plan": "CRSP US Stock Databases",
+      "provider_id": "crsp_us_stock",
+      "status": "YES"
+    },
+    {
+      "capability": "delisting_lifecycle",
+      "checked_at": "2026-08-12",
+      "confidence": "HIGH_OFFICIAL",
+      "exact_official_statement": "Daily and monthly market data and corporate actions for over 36,000 active and inactive securities.",
+      "official_url": "https://indexes.morningstar.com/research-data-products/crsp-us-stock-databases",
+      "product_plan": "CRSP US Stock Databases",
+      "provider_id": "crsp_us_stock",
+      "status": "YES"
+    },
+    {
+      "capability": "delisting_return",
+      "checked_at": "2026-08-12",
+      "confidence": "HIGH_OFFICIAL",
+      "exact_official_statement": "Delisting information is documented; exact terminal treatment depends on the licensed edition and contract.",
+      "official_url": "https://www.crsp.org/wp-content/uploads/guides/CRSP10_Year_US_Stock_Database_Guide.pdf",
+      "product_plan": "CRSP US Stock Databases",
+      "provider_id": "crsp_us_stock",
+      "status": "PARTIAL"
+    },
+    {
+      "capability": "historical_membership",
+      "checked_at": "2026-08-12",
+      "confidence": "MEDIUM_OFFICIAL",
+      "exact_official_statement": "Active/inactive security population is available; project membership must be reconstructed and audited.",
+      "official_url": "https://indexes.morningstar.com/research-data-products/crsp-us-stock-databases",
+      "product_plan": "CRSP US Stock Databases",
+      "provider_id": "crsp_us_stock",
+      "status": "PARTIAL"
+    },
+    {
+      "capability": "pit_total_return_vintages",
+      "checked_at": "2026-08-12",
+      "confidence": "MEDIUM_OFFICIAL",
+      "exact_official_statement": "CRSP has return data; the exact PIT vintage contract must be confirmed from the licensed data dictionary.",
+      "official_url": "https://indexes.morningstar.com/research-data-products/crsp-us-stock-databases",
+      "product_plan": "CRSP US Stock Databases",
+      "provider_id": "crsp_us_stock",
+      "status": "PARTIAL"
+    },
+    {
+      "capability": "corporate_actions",
+      "checked_at": "2026-08-12",
+      "confidence": "HIGH_OFFICIAL",
+      "exact_official_statement": "Daily and monthly market data and corporate actions for over 36,000 active and inactive securities.",
+      "official_url": "https://indexes.morningstar.com/research-data-products/crsp-us-stock-databases",
+      "product_plan": "CRSP US Stock Databases",
+      "provider_id": "crsp_us_stock",
+      "status": "PARTIAL"
+    },
+    {
+      "capability": "pit_corporate_action_availability",
+      "checked_at": "2026-08-12",
+      "confidence": "UNKNOWN_REQUIRES_PROVIDER_CONFIRMATION",
+      "exact_official_statement": "The public product page does not prove PIT announcement availability or action revisions.",
+      "official_url": "https://indexes.morningstar.com/research-data-products/crsp-us-stock-databases",
+      "product_plan": "CRSP US Stock Databases",
+      "provider_id": "crsp_us_stock",
+      "status": "UNKNOWN"
+    },
+    {
+      "capability": "benchmark_same_pit",
+      "checked_at": "2026-08-12",
+      "confidence": "UNKNOWN_REQUIRES_PROVIDER_CONFIRMATION",
+      "exact_official_statement": "The public product page does not prove SPY/QQQ benchmark PIT compatibility.",
+      "official_url": "https://indexes.morningstar.com/research-data-products/crsp-us-stock-databases",
+      "product_plan": "CRSP US Stock Databases",
+      "provider_id": "crsp_us_stock",
+      "status": "UNKNOWN"
+    },
+    {
+      "capability": "permanent_security_id",
+      "checked_at": "2026-08-12",
+      "confidence": "HIGH_OFFICIAL",
+      "exact_official_statement": "assetid is static over the lifetime of a security in supported environments, including Python.",
+      "official_url": "https://norgatedata.com/data-package-faq.php",
+      "product_plan": "US Stocks Platinum",
+      "provider_id": "norgate_data",
+      "status": "PARTIAL"
+    },
+    {
+      "capability": "delisting_lifecycle",
+      "checked_at": "2026-08-12",
+      "confidence": "HIGH_OFFICIAL",
+      "exact_official_statement": "Platinum includes access to delisted securities and historical data back to 1990; exact completeness is not claimed.",
+      "official_url": "https://norgatedata.com/stockmarketpackages.php",
+      "product_plan": "US Stocks Platinum",
+      "provider_id": "norgate_data",
+      "status": "PARTIAL"
+    },
+    {
+      "capability": "ticker_history",
+      "checked_at": "2026-08-12",
+      "confidence": "HIGH_OFFICIAL",
+      "exact_official_statement": "Do you provide prior symbols used by a security? No, only the current symbol is provided.",
+      "official_url": "https://norgatedata.com/data-package-faq.php",
+      "product_plan": "US Stocks Platinum",
+      "provider_id": "norgate_data",
+      "status": "NO"
+    },
+    {
+      "capability": "listing_lifecycle",
+      "checked_at": "2026-08-12",
+      "confidence": "HIGH_OFFICIAL",
+      "exact_official_statement": "For US securities, Platinum provides a Major Exchange Listed timeseries showing major-exchange versus OTC trading, but not exact exchange names.",
+      "official_url": "https://norgatedata.com/data-package-faq.php",
+      "product_plan": "US Stocks Platinum",
+      "provider_id": "norgate_data",
+      "status": "PARTIAL"
+    },
+    {
+      "capability": "delisting_return",
+      "checked_at": "2026-08-12",
+      "confidence": "HIGH_OFFICIAL",
+      "exact_official_statement": "Norgate does not provide delisting-return information.",
+      "official_url": "https://norgatedata.com/data-package-faq.php",
+      "product_plan": "US Stocks Platinum",
+      "provider_id": "norgate_data",
+      "status": "NO"
+    },
+    {
+      "capability": "historical_membership",
+      "checked_at": "2026-08-12",
+      "confidence": "HIGH_OFFICIAL",
+      "exact_official_statement": "Historical index membership can be queried as a true/false answer for any day through supported environments, but no constituent lists or announcement dates are provided.",
+      "official_url": "https://norgatedata.com/data-package-faq.php",
+      "product_plan": "US Stocks Platinum",
+      "provider_id": "norgate_data",
+      "status": "PARTIAL"
+    },
+    {
+      "capability": "corporate_actions",
+      "checked_at": "2026-08-12",
+      "confidence": "HIGH_OFFICIAL",
+      "exact_official_statement": "Corporate actions are not provided directly; actions are incorporated into adjusted price data.",
+      "official_url": "https://norgatedata.com/data-package-faq.php",
+      "product_plan": "US Stocks Platinum",
+      "provider_id": "norgate_data",
+      "status": "NO"
+    },
+    {
+      "capability": "pit_corporate_action_availability",
+      "checked_at": "2026-08-12",
+      "confidence": "UNKNOWN_REQUIRES_PROVIDER_CONFIRMATION",
+      "exact_official_statement": "No official statement proves PIT action availability or action revisions.",
+      "official_url": "https://norgatedata.com/data-package-faq.php",
+      "product_plan": "US Stocks Platinum",
+      "provider_id": "norgate_data",
+      "status": "UNKNOWN"
+    },
+    {
+      "capability": "pit_total_return_vintages",
+      "checked_at": "2026-08-12",
+      "confidence": "HIGH_OFFICIAL",
+      "exact_official_statement": "Adjusted series are provided, not historical PIT total-return vintages.",
+      "official_url": "https://norgatedata.com/data-package-faq.php",
+      "product_plan": "US Stocks Platinum",
+      "provider_id": "norgate_data",
+      "status": "NO"
+    },
+    {
+      "capability": "benchmark_same_pit",
+      "checked_at": "2026-08-12",
+      "confidence": "UNKNOWN_REQUIRES_PROVIDER_CONFIRMATION",
+      "exact_official_statement": "No official statement proves SPY/QQQ benchmark PIT compatibility.",
+      "official_url": "https://norgatedata.com/data-package-faq.php",
+      "product_plan": "US Stocks Platinum",
+      "provider_id": "norgate_data",
+      "status": "UNKNOWN"
+    },
+    {
+      "capability": "license_scope",
+      "checked_at": "2026-08-12",
+      "confidence": "HIGH_OFFICIAL",
+      "exact_official_statement": "Market-data terms distinguish display use and require a confirmed non-display/strategy license.",
+      "official_url": "https://massive.com/legal/market-data-terms-of-service",
+      "product_plan": "Advanced + strategy license",
+      "provider_id": "massive",
+      "status": "REQUIRES_LICENSE"
+    },
+    {
+      "capability": "delisted_securities",
+      "checked_at": "2026-08-12",
+      "confidence": "HIGH_OFFICIAL",
+      "exact_official_statement": "All Tickers exposes active status and delisted_utc; active=false means the asset has been delisted. Delisting returns are not proven.",
+      "official_url": "https://massive.com/docs/rest/stocks/tickers/all-tickers",
+      "product_plan": "Advanced + strategy license",
+      "provider_id": "massive",
+      "status": "PARTIAL"
+    },
+    {
+      "capability": "permanent_security_id",
+      "checked_at": "2026-08-12",
+      "confidence": "MEDIUM_OFFICIAL",
+      "exact_official_statement": "All Tickers documents CIK, composite_figi, and share_class_figi, but the permanent identity contract requires package audit.",
+      "official_url": "https://massive.com/docs/rest/stocks/tickers/all-tickers",
+      "product_plan": "Advanced + strategy license",
+      "provider_id": "massive",
+      "status": "PARTIAL"
+    },
+    {
+      "capability": "historical_membership",
+      "checked_at": "2026-08-12",
+      "confidence": "UNKNOWN_REQUIRES_PROVIDER_CONFIRMATION",
+      "exact_official_statement": "The date query on All Tickers is not proof of PIT historical membership for a project-defined broad universe.",
+      "official_url": "https://massive.com/docs/rest/stocks/tickers/all-tickers",
+      "product_plan": "Advanced + strategy license",
+      "provider_id": "massive",
+      "status": "UNKNOWN"
+    },
+    {
+      "capability": "delisted_securities",
+      "checked_at": "2026-08-12",
+      "confidence": "MEDIUM_OFFICIAL",
+      "exact_official_statement": "Sharadar-style products include delisted ticker coverage; exact plan and permanent identity must be confirmed.",
+      "official_url": "https://data.nasdaq.com/databases/SF1",
+      "product_plan": "Sharadar Equities/ETFs",
+      "provider_id": "nasdaq_data_link_sharadar",
+      "status": "PARTIAL"
+    },
+    {
+      "capability": "historical_membership",
+      "checked_at": "2026-08-12",
+      "confidence": "UNKNOWN_REQUIRES_PROVIDER_CONFIRMATION",
+      "exact_official_statement": "Official public documentation does not prove PIT index membership for the project universe.",
+      "official_url": "https://data.nasdaq.com/databases/SF1",
+      "product_plan": "Sharadar Equities/ETFs",
+      "provider_id": "nasdaq_data_link_sharadar",
+      "status": "UNKNOWN"
+    },
+    {
+      "capability": "permanent_security_id",
+      "checked_at": "2026-08-12",
+      "confidence": "MEDIUM_OFFICIAL",
+      "exact_official_statement": "Tiingo documents permaTicker-style identity; complete lifecycle and PIT contract are not proven.",
+      "official_url": "https://www.tiingo.com/documentation/appendix/symbology",
+      "product_plan": "Individual EOD",
+      "provider_id": "tiingo",
+      "status": "PARTIAL"
+    },
+    {
+      "capability": "historical_membership",
+      "checked_at": "2026-08-12",
+      "confidence": "HIGH_OFFICIAL",
+      "exact_official_statement": "Public EOD documentation does not provide PIT broad-universe membership.",
+      "official_url": "https://www.tiingo.com/documentation/end-of-day",
+      "product_plan": "Individual EOD",
+      "provider_id": "tiingo",
+      "status": "NO"
+    },
+    {
+      "capability": "delisted_securities",
+      "checked_at": "2026-08-12",
+      "confidence": "MEDIUM_OFFICIAL",
+      "exact_official_statement": "Delisted company data is advertised; terminal returns, permanent identity, and PIT membership require package audit.",
+      "official_url": "https://eodhd.com/financial-apis/delisted-stock-companies-data-2",
+      "product_plan": "EOD Historical Data All World",
+      "provider_id": "eodhd",
+      "status": "PARTIAL"
+    },
+    {
+      "capability": "ticker_history",
+      "checked_at": "2026-08-12",
+      "confidence": "HIGH_OFFICIAL",
+      "exact_official_statement": "Symbol Change History maps old symbols to new symbols over a date range; only US exchanges are currently supported.",
+      "official_url": "https://eodhd.com/financial-apis/delisted-stock-companies-data-2",
+      "product_plan": "EOD Historical Data All World",
+      "provider_id": "eodhd",
+      "status": "PARTIAL"
+    },
+    {
+      "capability": "delisting_return",
+      "checked_at": "2026-08-12",
+      "confidence": "UNKNOWN_REQUIRES_PROVIDER_CONFIRMATION",
+      "exact_official_statement": "Delisted EOD data is advertised, but no official terminal-return or consideration convention is documented.",
+      "official_url": "https://eodhd.com/financial-apis/delisted-stock-companies-data-2",
+      "product_plan": "EOD Historical Data All World",
+      "provider_id": "eodhd",
+      "status": "UNKNOWN"
+    },
+    {
+      "capability": "historical_membership",
+      "checked_at": "2026-08-12",
+      "confidence": "HIGH_OFFICIAL",
+      "exact_official_statement": "Official public documentation does not prove PIT broad-universe membership.",
+      "official_url": "https://eodhd.com/financial-apis/delisted-stock-companies-data-2",
+      "product_plan": "EOD Historical Data All World",
+      "provider_id": "eodhd",
+      "status": "NO"
+    },
+    {
+      "capability": "pit_corporate_action_availability",
+      "checked_at": "2026-08-12",
+      "confidence": "UNKNOWN_REQUIRES_PROVIDER_CONFIRMATION",
+      "exact_official_statement": "Dividends and splits are advertised, but official documentation does not prove PIT announcement availability or revisions.",
+      "official_url": "https://eodhd.com/financial-apis/delisted-stock-companies-data-2",
+      "product_plan": "EOD Historical Data All World",
+      "provider_id": "eodhd",
+      "status": "UNKNOWN"
+    },
+    {
+      "capability": "delisted_securities",
+      "checked_at": "2026-08-12",
+      "confidence": "MEDIUM_OFFICIAL",
+      "exact_official_statement": "Listing status since 2010 is documented; complete delisting returns and PIT lifecycle are not proven.",
+      "official_url": "https://www.alphavantage.co/documentation/",
+      "product_plan": "Free key or premium",
+      "provider_id": "alpha_vantage",
+      "status": "PARTIAL"
+    },
+    {
+      "capability": "historical_membership",
+      "checked_at": "2026-08-12",
+      "confidence": "MEDIUM_OFFICIAL",
+      "exact_official_statement": "Listing status time series is advertised since 2010, but project membership reconstruction must still be audited.",
+      "official_url": "https://www.alphavantage.co/documentation/",
+      "product_plan": "Free key or premium",
+      "provider_id": "alpha_vantage",
+      "status": "PARTIAL"
+    },
+    {
+      "capability": "delisted_securities",
+      "checked_at": "2026-08-12",
+      "confidence": "UNKNOWN_REQUIRES_PROVIDER_CONFIRMATION",
+      "exact_official_statement": "Official public pricing does not prove complete delisted coverage or delisting returns.",
+      "official_url": "https://twelvedata.com/pricing",
+      "product_plan": "Basic or paid",
+      "provider_id": "twelve_data",
+      "status": "UNKNOWN"
+    },
+    {
+      "capability": "historical_universe",
+      "checked_at": "2026-08-12",
+      "confidence": "HIGH_OFFICIAL",
+      "exact_official_statement": "The directory is a current listing file and cannot be used to reconstruct historical membership.",
+      "official_url": "https://www.nasdaqtrader.com/trader.aspx?id=symboldirdefs",
+      "product_plan": "Free current directory",
+      "provider_id": "nasdaq_trader_symbol_directory",
+      "status": "NO"
+    },
+    {
+      "capability": "corporate_actions",
+      "checked_at": "2026-08-12",
+      "confidence": "HIGH_OFFICIAL",
+      "exact_official_statement": "The endpoint supports splits, dividends, mergers, redemptions, name changes, worthless removals, and other action types.",
+      "official_url": "https://docs.alpaca.markets/us/reference/CorporateActions-1",
+      "product_plan": "Market Data API",
+      "provider_id": "alpaca",
+      "status": "PARTIAL"
+    },
+    {
+      "capability": "pit_corporate_action_availability",
+      "checked_at": "2026-08-12",
+      "confidence": "HIGH_OFFICIAL",
+      "exact_official_statement": "Alpaca states there are no guarantees on the creation time of corporate actions and actions may not be available immediately after announcement.",
+      "official_url": "https://docs.alpaca.markets/us/reference/CorporateActions-1",
+      "product_plan": "Market Data API",
+      "provider_id": "alpaca",
+      "status": "NO"
+    },
+    {
+      "capability": "delisted_securities",
+      "checked_at": "2026-08-12",
+      "confidence": "UNKNOWN_REQUIRES_PROVIDER_CONFIRMATION",
+      "exact_official_statement": "Corporate action coverage is documented, but delisted lifecycle and terminal return coverage are not proven by this page.",
+      "official_url": "https://docs.alpaca.markets/us/reference/CorporateActions-1",
+      "product_plan": "Market Data API",
+      "provider_id": "alpaca",
+      "status": "UNKNOWN"
+    },
+    {
+      "capability": "historical_membership",
+      "checked_at": "2026-08-12",
+      "confidence": "UNKNOWN_REQUIRES_PROVIDER_CONFIRMATION",
+      "exact_official_statement": "No official statement proves PIT historical membership for a project-defined broad universe.",
+      "official_url": "https://docs.alpaca.markets/us/reference/CorporateActions-1",
+      "product_plan": "Market Data API",
+      "provider_id": "alpaca",
+      "status": "UNKNOWN"
+    }
+  ],
+  "schema_version": "provider-selection-matrix-v1"
+}

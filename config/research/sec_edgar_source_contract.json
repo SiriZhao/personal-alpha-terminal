@@ -1,0 +1,17 @@
+{
+  "source_id": "sec-edgar",
+  "source_kind": "SEC_FILING",
+  "provider": "sec-edgar-immutable",
+  "availability_timestamp_proven": true,
+  "revision_history": true,
+  "symbol_mapping": true,
+  "timezone": true,
+  "raw_payload_immutable": true,
+  "rate_limit_compliant": true,
+  "coverage_start": "2018-07-03",
+  "coverage_end": "2026-08-11",
+  "known_limitations": [
+    "SEC post-acceptance corrections are rare but require manual replay re-audit",
+    "permanent_security_id mapping must come from a certified market research dataset"
+  ]
+}

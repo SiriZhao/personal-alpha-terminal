@@ -1,0 +1,92 @@
+{
+  "budget_used": {
+    "estimated_cost_usd": 0.12089,
+    "requests": 1,
+    "tokens": 12089
+  },
+  "cache_hit": false,
+  "error": null,
+  "event": {
+    "affected_assets": [
+      "tsla"
+    ],
+    "affected_sectors": [
+      "consumer discretionary"
+    ],
+    "backtest_safety": "BACKTEST_SAFE",
+    "canonical_cluster_id": null,
+    "confidence": 0.95,
+    "created_at": "2026-08-12T05:45:03.767514Z",
+    "data_cutoff": "2025-01-29T21:09:13Z",
+    "direction": "UNKNOWN",
+    "effective_at": "2025-01-29T21:09:13Z",
+    "entity": "Tesla, Inc.",
+    "event_id": "23060a72f937eef2330c64251c660fc25ab56042c8956dfe2aeca72d8cce7416",
+    "event_subtype": "quarterly results",
+    "event_type": "EARNINGS",
+    "evidence": [
+      {
+        "available_at": "2025-01-29T21:09:13Z",
+        "evidence_id": "sec-1318605-000162828025002993",
+        "extraction_confidence": 0.95,
+        "observed_at": "2025-01-29T21:09:13Z",
+        "published_at": "2025-01-29T21:09:13Z",
+        "reference": "https://www.sec.gov/Archives/edgar/data/1318605/000162828025002993/tsla-20250129.htm",
+        "source": "sec-edgar",
+        "source_hash": "0f54d01b541dd48733a5ecb13aacad3b25a7b367c896bd80a05424c9214dde43",
+        "source_identifier": "0001628280-25-002993"
+      }
+    ],
+    "expected_horizon": 90,
+    "industry": "Automotive",
+    "ingested_at": "2026-08-12T05:41:55.058972Z",
+    "magnitude": null,
+    "model_version": "deepseek-v4-flash",
+    "novelty": 0.7,
+    "observed_at": "2025-01-29T21:09:13Z",
+    "prompt_version": "event-extraction-v2",
+    "published_at": "2025-01-29T21:09:13Z",
+    "relevance": 0.9,
+    "schema_version": "event-schema-v1",
+    "sector": "Consumer Discretionary",
+    "source": "sec-edgar",
+    "source_hash": "0f54d01b541dd48733a5ecb13aacad3b25a7b367c896bd80a05424c9214dde43",
+    "source_identifier": "0001628280-25-002993",
+    "structured_features": {},
+    "summary": "Tesla, Inc. released its financial results for the fiscal quarter and year ended December 31, 2024 by posting its Fourth Quarter and Full Year 2024 Update on its website.",
+    "surprise": null,
+    "symbol": "TSLA",
+    "themes": [
+      "earnings",
+      "financial results"
+    ],
+    "title": "Tesla, Inc. 8-K 0001628280-25-002993"
+  },
+  "provider": "deepseek",
+  "retrieved_at": "2026-08-12T05:45:03.770328+00:00",
+  "status": "READY",
+  "usage": [
+    {
+      "as_of": "2025-01-29 21:09:13+00:00",
+      "cached_tokens": 11776,
+      "completion_tokens": 237,
+      "error_category": null,
+      "estimated_cost_usd": 0.0001014328,
+      "generated_at": "2026-08-12 05:45:00.810069+00:00",
+      "input_document_ids": [
+        "sec-1318605-000162828025002993"
+      ],
+      "latency_ms": 2957,
+      "model": "deepseek-v4-flash",
+      "prompt_tokens": 11791,
+      "prompt_version": "event-extraction-v2",
+      "provider": "deepseek",
+      "request_hash": "c52a04d65319b8ea1c2238837589df1f83d05be5ad671c847db40985aca66d51",
+      "response_hash": "ae991de8c1e678c00806ef9716778da100187fb5269846e5616ed7d064ee0636",
+      "retry_count": 0,
+      "run_id": null,
+      "task_type": "EVENT_EXTRACTION",
+      "validation_status": "VALID"
+    }
+  ]
+}

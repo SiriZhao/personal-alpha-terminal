@@ -39,6 +39,19 @@ class AdjustmentKind(StrEnum):
     CURRENT_FINAL_ADJUSTED = "CURRENT_FINAL_ADJUSTED"
 
 
+class CorporateActionType(StrEnum):
+    SPLIT = "SPLIT"
+    CASH_DIVIDEND = "CASH_DIVIDEND"
+    STOCK_DIVIDEND = "STOCK_DIVIDEND"
+    MERGER = "MERGER"
+    SPIN_OFF = "SPIN_OFF"
+    SYMBOL_CHANGE = "SYMBOL_CHANGE"
+    DELISTING = "DELISTING"
+
+
+SUPPORTED_CORPORATE_ACTIONS = frozenset(item.value for item in CorporateActionType)
+
+
 class ResearchRecordType(StrEnum):
     SECURITY = "SECURITY"
     MEMBERSHIP = "MEMBERSHIP"
@@ -61,6 +74,11 @@ class HistoricalSecurity:
     available_at: datetime
     source: str
     provider: str
+    cusip: str | None = None
+    figi: str | None = None
+    provider_security_id: str | None = None
+    company_id: str | None = None
+    company_name: str | None = None
 
     def __post_init__(self) -> None:
         _require_lineage(
@@ -155,13 +173,17 @@ class ResearchCorporateAction:
     cash_amount: float | None = None
     terminal_return: float | None = None
     successor_security_id: str | None = None
+    terminal_price: float | None = None
+    revision_id: str | None = None
 
     def __post_init__(self) -> None:
-        for field in ("ratio", "cash_amount", "terminal_return"):
+        for field in ("ratio", "cash_amount", "terminal_return", "terminal_price"):
             value = getattr(self, field)
             if value is not None:
                 object.__setattr__(self, field, float(value))
         _require_lineage(self.permanent_security_id, self.action_type, self.source, self.provider)
+        if self.action_type not in SUPPORTED_CORPORATE_ACTIONS:
+            raise ValueError(f"unsupported corporate action type: {self.action_type}")
         _require_aware(self.available_at, "corporate action available_at")
         if self.announcement_date is not None and self.announcement_date > self.effective_date:
             raise ValueError("corporate action announcement cannot follow effective date")
@@ -205,6 +227,11 @@ class ResearchDatasetPackage:
     corporate_actions: tuple[ResearchCorporateAction, ...]
     calendar: tuple[ExchangeSession, ...]
     data_domain: DataDomain = DataDomain.RESEARCH_RAW_DATA
+    provider_version: str = ""
+    acquisition_id: str = ""
+    license_scope: str = ""
+    known_limitations: tuple[str, ...] = ()
+    benchmark_universe_id: str | None = None
 
     def __post_init__(self) -> None:
         _require_lineage(self.dataset_id, self.schema_version, self.provider, self.source)
@@ -262,6 +289,14 @@ class ResearchDatasetManifestV2:
     certification_state: ResearchDatasetState
     blockers: tuple[str, ...]
     manifest_hash: str
+    provider_version: str = "NOT_PROVIDED"
+    acquisition_id: str = "NOT_PROVIDED"
+    active_security_count: int = 0
+    coverage_hash: str = ""
+    benchmark_universe_id: str | None = None
+    corporate_action_identity: str = ""
+    license_scope: str = "NOT_PROVIDED"
+    known_limitations: tuple[str, ...] = ()
 
     def document(self) -> dict[str, object]:
         return cast(dict[str, object], json.loads(json.dumps(asdict(self), default=str)))
@@ -393,8 +428,28 @@ def certify_research_package(
             rejected.append("PRICE_SECURITY_ID_ORPHANED")
         if price.observation_date > package.as_of or price.available_at > package.cutoff:
             rejected.append("FUTURE_PRICE_ROW")
+        if (
+            price.total_return_available_at is not None
+            and price.total_return_available_at > package.cutoff
+        ):
+            rejected.append("FUTURE_TOTAL_RETURN_REVISION_LEAKAGE")
         if price.adjustment_kind is AdjustmentKind.CURRENT_FINAL_ADJUSTED:
             blockers.append("CURRENT_ADJUSTED_SERIES_NOT_PIT_VINTAGE")
+        vintage = _security_vintage_on(
+            package.securities, price.permanent_security_id, price.observation_date
+        )
+        if vintage is None:
+            rejected.append("PRICE_WITHOUT_MATCHING_TICKER_VINTAGE")
+        else:
+            if price.ticker != vintage.ticker:
+                rejected.append("TICKER_VINTAGE_MISMATCH")
+            if vintage.listing_date is not None and price.observation_date < vintage.listing_date:
+                rejected.append("PRE_LISTING_PRICE_ROW")
+            if (
+                vintage.delisting_date is not None
+                and price.observation_date > vintage.delisting_date
+            ):
+                rejected.append("POST_DELISTING_PRICE_ROW")
 
     for action in package.corporate_actions:
         if action.permanent_security_id not in securities:
@@ -469,6 +524,43 @@ def certify_research_package(
     delisted_count = len(
         {item.permanent_security_id for item in package.securities if item.delisting_date}
     )
+    active_security_count = len(
+        {
+            item.permanent_security_id
+            for item in package.securities
+            if item.delisting_date is None
+        }
+    )
+    coverage_hash = fingerprint(
+        {
+            "date_start": date_start,
+            "date_end": date_end,
+            "security_count": counts["security_count"],
+            "active_security_count": active_security_count,
+            "delisted_count": delisted_count,
+            "universe_count": universe_count,
+            "membership_count": counts["membership_count"],
+            "calendar_session_count": counts["calendar_session_count"],
+            "benchmark_universe_id": package.benchmark_universe_id,
+        }
+    )
+    corporate_action_identity = (
+        fingerprint(
+            tuple(
+                sorted(
+                    (
+                        item.permanent_security_id,
+                        item.action_type,
+                        item.effective_date.isoformat(),
+                        item.revision_id or "",
+                    )
+                    for item in package.corporate_actions
+                )
+            )
+        )
+        if package.corporate_actions
+        else ""
+    )
     material: dict[str, object] = {
         "dataset_id": package.dataset_id,
         "dataset_version": dataset_version,
@@ -488,6 +580,14 @@ def certify_research_package(
         **counts,
         "universe_count": universe_count,
         "delisted_count": delisted_count,
+        "active_security_count": active_security_count,
+        "coverage_hash": coverage_hash,
+        "benchmark_universe_id": package.benchmark_universe_id,
+        "corporate_action_identity": corporate_action_identity,
+        "provider_version": package.provider_version or "NOT_PROVIDED",
+        "acquisition_id": package.acquisition_id or "NOT_PROVIDED",
+        "license_scope": package.license_scope or "NOT_PROVIDED",
+        "known_limitations": package.known_limitations,
         "raw_price_certified": raw_price_certified,
         "total_return_certified": total_return_certified,
         "content_hash": content_hash,
@@ -521,6 +621,14 @@ def certify_research_package(
         universe_count=universe_count,
         membership_count=counts["membership_count"],
         delisted_count=delisted_count,
+        active_security_count=active_security_count,
+        coverage_hash=coverage_hash,
+        benchmark_universe_id=package.benchmark_universe_id,
+        corporate_action_identity=corporate_action_identity,
+        provider_version=package.provider_version or "NOT_PROVIDED",
+        acquisition_id=package.acquisition_id or "NOT_PROVIDED",
+        license_scope=package.license_scope or "NOT_PROVIDED",
+        known_limitations=package.known_limitations,
         corporate_action_count=counts["corporate_action_count"],
         calendar_session_count=counts["calendar_session_count"],
         raw_price_certified=raw_price_certified,
@@ -564,6 +672,11 @@ def package_to_import_rows(package: ResearchDatasetPackage) -> list[dict[str, ob
         "as_of": package.as_of.isoformat(),
         "cutoff": package.cutoff.isoformat(),
         "use_scope": package.use_scope.value,
+        "provider_version": package.provider_version,
+        "acquisition_id": package.acquisition_id,
+        "license_scope": package.license_scope,
+        "known_limitations": ",".join(package.known_limitations),
+        "benchmark_universe_id": package.benchmark_universe_id or "",
     }
     groups: tuple[tuple[ResearchRecordType, Iterable[Any]], ...] = (
         (ResearchRecordType.SECURITY, package.securities),
@@ -727,8 +840,11 @@ def _validate_lifecycle(package: ResearchDatasetPackage, blockers: list[str]) ->
         ]
         if not terminal:
             blockers.append("DELISTED_SECURITY_LIFECYCLE_INCOMPLETE")
-        elif all(item.terminal_return is None for item in terminal):
-            blockers.append("DELISTING_RETURN_UNAVAILABLE")
+        else:
+            if all(item.terminal_return is None for item in terminal):
+                blockers.append("DELISTING_RETURN_UNAVAILABLE")
+            if all(item.terminal_price is None for item in terminal):
+                blockers.append("DELISTING_TERMINAL_PRICE_UNAVAILABLE")
     last_session = max((item.session_date for item in package.calendar), default=None)
     if last_session is None:
         return
@@ -793,6 +909,21 @@ def _security_type_on(
     return next(iter(values)) if len(values) == 1 else None
 
 
+def _security_vintage_on(
+    records: tuple[HistoricalSecurity, ...],
+    permanent_security_id: str,
+    observation_date: date,
+) -> HistoricalSecurity | None:
+    matches = tuple(
+        item
+        for item in records
+        if item.permanent_security_id == permanent_security_id
+        and item.ticker_valid_from <= observation_date
+        and (item.ticker_valid_to is None or observation_date <= item.ticker_valid_to)
+    )
+    return matches[0] if len(matches) == 1 else None
+
+
 def _read_sqlite_rows(path: Path) -> list[dict[str, object]]:
     uri = f"file:{path.resolve().as_posix()}?mode=ro"
     with sqlite3.connect(uri, uri=True) as connection:
@@ -832,14 +963,40 @@ def _package_from_rows(rows: list[dict[str, object]]) -> ResearchDatasetPackage:
         "as_of": _date(first, "as_of"),
         "cutoff": _datetime(first, "cutoff"),
         "use_scope": ResearchUseScope(_required(first, "use_scope")),
+        "provider_version": _optional(first, "provider_version") or "",
+        "acquisition_id": _optional(first, "acquisition_id") or "",
+        "license_scope": _optional(first, "license_scope") or "",
+        "known_limitations": _optional_tuple(first, "known_limitations"),
+        "benchmark_universe_id": _optional(first, "benchmark_universe_id"),
     }
     common_keys = (
         "dataset_id", "schema_version", "dataset_provider", "dataset_source",
-        "retrieved_at", "as_of", "cutoff", "use_scope",
+        "retrieved_at", "as_of", "cutoff", "use_scope", "provider_version",
+        "acquisition_id", "license_scope", "known_limitations", "benchmark_universe_id",
     )
+    optional_common_keys = {
+        "provider_version",
+        "acquisition_id",
+        "license_scope",
+        "known_limitations",
+        "benchmark_universe_id",
+    }
     for row in rows[1:]:
         for key in common_keys:
-            if _required(row, key) != _required(first, key):
+            if key in optional_common_keys:
+                current: object = (
+                    _optional_tuple(row, key)
+                    if key == "known_limitations"
+                    else (
+                        _optional(row, key)
+                        if key == "benchmark_universe_id"
+                        else (_optional(row, key) or "")
+                    )
+                )
+                expected: object = common[key]
+                if current != expected:
+                    raise ValueError(f"research package has mixed {key}")
+            elif _required(row, key) != _required(first, key):
                 raise ValueError(f"research package has mixed {key}")
     securities: list[HistoricalSecurity] = []
     memberships: list[HistoricalUniverseMembership] = []
@@ -865,6 +1022,11 @@ def _package_from_rows(rows: list[dict[str, object]]) -> ResearchDatasetPackage:
                     _datetime(row, "available_at"),
                     source,
                     provider,
+                    _optional(row, "cusip"),
+                    _optional(row, "figi"),
+                    _optional(row, "provider_security_id"),
+                    _optional(row, "company_id"),
+                    _optional(row, "company_name"),
                 )
             )
         elif record_type is ResearchRecordType.MEMBERSHIP:
@@ -917,6 +1079,8 @@ def _package_from_rows(rows: list[dict[str, object]]) -> ResearchDatasetPackage:
                     _optional_float(row, "cash_amount"),
                     _optional_float(row, "terminal_return"),
                     _optional(row, "successor_security_id"),
+                    _optional_float(row, "terminal_price"),
+                    _optional(row, "revision_id"),
                 )
             )
         else:
@@ -948,6 +1112,11 @@ def _package_from_rows(rows: list[dict[str, object]]) -> ResearchDatasetPackage:
         ),
         corporate_actions=tuple(actions),
         calendar=tuple(sorted(calendar, key=lambda item: item.session_date)),
+        provider_version=cast(str, common["provider_version"]),
+        acquisition_id=cast(str, common["acquisition_id"]),
+        license_scope=cast(str, common["license_scope"]),
+        known_limitations=cast(tuple[str, ...], common["known_limitations"]),
+        benchmark_universe_id=cast(str | None, common["benchmark_universe_id"]),
     )
 
 
@@ -982,6 +1151,13 @@ def _optional(row: Mapping[str, object], key: str) -> str | None:
         return None
     rendered = str(value).strip()
     return None if rendered in {"", "<NA>", "NaT", "nan"} else rendered
+
+
+def _optional_tuple(row: Mapping[str, object], key: str) -> tuple[str, ...]:
+    value = _optional(row, key)
+    if not value:
+        return ()
+    return tuple(item.strip() for item in value.split(",") if item.strip())
 
 
 def _date(row: Mapping[str, object], key: str) -> date:

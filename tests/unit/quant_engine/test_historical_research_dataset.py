@@ -103,6 +103,7 @@ def _complete_package() -> ResearchDatasetPackage:
             "SEC-DEAD", "DELISTING", date(2024, 1, 3), date(2024, 1, 2),
             datetime(2024, 1, 2, 12, tzinfo=UTC), "licensed fixture", "test-provider",
             terminal_return=-0.80,
+            terminal_price=1.80,
         ),
     )
     return ResearchDatasetPackage(
@@ -194,6 +195,90 @@ def test_future_corporate_action_and_future_price_fail_closed() -> None:
     assert "FUTURE_PRICE_ROW" in certify_research_package(
         replace(package, prices=(future_price, *package.prices[1:]))
     ).blockers
+
+
+def test_future_membership_availability_fails_closed() -> None:
+    package = _complete_package()
+    future_membership = replace(
+        package.memberships[0],
+        available_at=datetime(2024, 1, 8, tzinfo=UTC),
+    )
+    manifest = certify_research_package(
+        replace(
+            package,
+            memberships=(future_membership, package.memberships[1]),
+        )
+    )
+    assert manifest.certification_state is ResearchDatasetState.REJECTED
+    assert "FUTURE_MEMBERSHIP_LEAKAGE" in manifest.blockers
+
+
+def test_future_total_return_revision_fails_closed() -> None:
+    package = _complete_package()
+    future_revision = replace(
+        package.prices[0],
+        total_return_available_at=datetime(2024, 1, 7, tzinfo=UTC),
+    )
+    manifest = certify_research_package(
+        replace(package, prices=(future_revision, *package.prices[1:]))
+    )
+    assert manifest.certification_state is ResearchDatasetState.REJECTED
+    assert "FUTURE_TOTAL_RETURN_REVISION_LEAKAGE" in manifest.blockers
+
+
+def test_pre_listing_post_delisting_and_ticker_mismatch_rejected() -> None:
+    package = _complete_package()
+    pre_listing_package = replace(
+        package,
+        securities=tuple(
+            replace(item, listing_date=date(2024, 1, 3))
+            if item.permanent_security_id == "SEC-DEAD"
+            else item
+            for item in package.securities
+        ),
+    )
+    post_delisting = replace(
+        next(item for item in package.prices if item.permanent_security_id == "SEC-DEAD"),
+        observation_date=date(2024, 1, 4),
+    )
+    post_delisting_package = replace(
+        package,
+        securities=tuple(
+            replace(item, ticker_valid_to=None)
+            if item.permanent_security_id == "SEC-DEAD"
+            else item
+            for item in package.securities
+        ),
+        prices=(post_delisting, *package.prices[1:]),
+    )
+    wrong_ticker = replace(package.prices[0], ticker="NEW")
+    assert "PRE_LISTING_PRICE_ROW" in certify_research_package(
+        pre_listing_package
+    ).blockers
+    assert "POST_DELISTING_PRICE_ROW" in certify_research_package(
+        post_delisting_package
+    ).blockers
+    assert "TICKER_VINTAGE_MISMATCH" in certify_research_package(
+        replace(package, prices=(wrong_ticker, *package.prices[1:]))
+    ).blockers
+
+
+def test_delisted_terminal_price_is_required() -> None:
+    package = _complete_package()
+    missing_price = replace(
+        next(item for item in package.corporate_actions if item.action_type == "DELISTING"),
+        terminal_price=None,
+    )
+    manifest = certify_research_package(
+        replace(
+            package,
+            corporate_actions=(
+                package.corporate_actions[0],
+                missing_price,
+            ),
+        )
+    )
+    assert "DELISTING_TERMINAL_PRICE_UNAVAILABLE" in manifest.blockers
 
 
 def test_current_adjusted_series_cannot_become_pit_total_return() -> None:

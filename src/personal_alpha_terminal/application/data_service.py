@@ -201,6 +201,10 @@ class DataService:
             self._refresh_broad_current_directory()
         self._register_minimum_universe()
         self._create_universe_snapshot(end_date)
+        self._initialize_exchange_calendar(
+            start_date - timedelta(days=5),
+            end_date + timedelta(days=5),
+        )
         requested_at = datetime.now(UTC)
         report = self._sync_runner(self._session, start_date, end_date)
         completed_at = datetime.now(UTC)

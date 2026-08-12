@@ -1,0 +1,13 @@
+{
+  "schema_version": "cik-security-mapping-v1",
+  "source_identity": "REPLACE_WITH_CERTIFIED_MARKET_DATASET_CONTENT_HASH",
+  "mappings": [
+    {
+      "cik": 320193,
+      "permanent_security_id": "SEC-EXAMPLE-0001",
+      "ticker_as_of": "AAPL",
+      "mapping_source_type": "HISTORICAL_TIMELINE",
+      "available_at": "2018-07-03T00:00:00+00:00"
+    }
+  ]
+}

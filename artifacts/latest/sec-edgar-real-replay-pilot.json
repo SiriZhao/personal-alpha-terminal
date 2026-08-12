@@ -1,0 +1,108 @@
+{
+  "checks": {
+    "all_checks": true,
+    "amendment_version_linked_to_original": true,
+    "c1_before_jan29_future_invisible_hash": true,
+    "c1_before_jan29_repeated_deterministic": true,
+    "c1_event_invisible": true,
+    "c1_visible_is_early_8k_only": true,
+    "c2_after_original_10k_before_amendment_future_invisible_hash": true,
+    "c2_after_original_10k_before_amendment_repeated_deterministic": true,
+    "c2_event_visible": true,
+    "c2_sees_original_10k_not_amendment": true,
+    "c3_before_amendment_future_invisible_hash": true,
+    "c3_before_amendment_repeated_deterministic": true,
+    "c3_hides_amendment": true,
+    "c4_after_amendment_future_invisible_hash": true,
+    "c4_after_amendment_repeated_deterministic": true,
+    "c4_reveals_amendment": true
+  },
+  "cutoffs": {
+    "c1_before_jan29": {
+      "cutoff": "2025-01-29T21:00:00+00:00",
+      "replay_hash": "a03e491c9a45397dd4ba7370f13f97128bca82ef0e116562ed1a60d4157d6943",
+      "status": "NOT_CERTIFIABLE",
+      "visible_document_ids": [
+        "sec-1318605-000162828025000007"
+      ],
+      "visible_document_versions": [
+        "sec-1318605-000162828025000007|original-000162828025000007|sec-1318605-000162828025000007"
+      ],
+      "visible_event_ids": []
+    },
+    "c2_after_original_10k_before_amendment": {
+      "cutoff": "2025-01-30T02:00:00+00:00",
+      "replay_hash": "743cab40605dfd3c0e3ee090f425490d0ba961e9e62f1c7adfedcc3eba2ae8d7",
+      "status": "NOT_CERTIFIABLE",
+      "visible_document_ids": [
+        "sec-1318605-000162828025000007",
+        "sec-1318605-000162828025002993",
+        "sec-1318605-000162828025003063"
+      ],
+      "visible_document_versions": [
+        "sec-1318605-000162828025000007|original-000162828025000007|sec-1318605-000162828025000007",
+        "sec-1318605-000162828025002993|original-000162828025002993|sec-1318605-000162828025002993",
+        "sec-1318605-000162828025003063|original-000162828025003063|sec-1318605-000162828025003063"
+      ],
+      "visible_event_ids": [
+        "23060a72f937eef2330c64251c660fc25ab56042c8956dfe2aeca72d8cce7416"
+      ]
+    },
+    "c3_before_amendment": {
+      "cutoff": "2025-04-30T21:00:00+00:00",
+      "replay_hash": "88e795b347e9406a978e1c1a26341883d25da9d3bac926cf9ac2b0ab13aa0572",
+      "status": "NOT_CERTIFIABLE",
+      "visible_document_ids": [
+        "sec-1318605-000162828025000007",
+        "sec-1318605-000162828025002993",
+        "sec-1318605-000162828025003063",
+        "sec-1318605-000162828025016070",
+        "sec-1318605-000162828025018851",
+        "sec-1318605-000162828025018911"
+      ],
+      "visible_document_versions": [
+        "sec-1318605-000162828025000007|original-000162828025000007|sec-1318605-000162828025000007",
+        "sec-1318605-000162828025002993|original-000162828025002993|sec-1318605-000162828025002993",
+        "sec-1318605-000162828025003063|original-000162828025003063|sec-1318605-000162828025003063",
+        "sec-1318605-000162828025016070|original-000162828025016070|sec-1318605-000162828025016070",
+        "sec-1318605-000162828025018851|original-000162828025018851|sec-1318605-000162828025018851",
+        "sec-1318605-000162828025018911|original-000162828025018911|sec-1318605-000162828025018911"
+      ],
+      "visible_event_ids": [
+        "23060a72f937eef2330c64251c660fc25ab56042c8956dfe2aeca72d8cce7416"
+      ]
+    },
+    "c4_after_amendment": {
+      "cutoff": "2025-05-01T00:00:00+00:00",
+      "replay_hash": "6aa9bc76fd29226f65eb7846608f5fbb9df083775adb41c3b4cebf51e43607d5",
+      "status": "NOT_CERTIFIABLE",
+      "visible_document_ids": [
+        "sec-1318605-000110465925042659",
+        "sec-1318605-000162828025000007",
+        "sec-1318605-000162828025002993",
+        "sec-1318605-000162828025003063",
+        "sec-1318605-000162828025016070",
+        "sec-1318605-000162828025018851",
+        "sec-1318605-000162828025018911"
+      ],
+      "visible_document_versions": [
+        "sec-1318605-000162828025003063|amendment-000110465925042659|sec-1318605-000110465925042659",
+        "sec-1318605-000162828025000007|original-000162828025000007|sec-1318605-000162828025000007",
+        "sec-1318605-000162828025002993|original-000162828025002993|sec-1318605-000162828025002993",
+        "sec-1318605-000162828025003063|original-000162828025003063|sec-1318605-000162828025003063",
+        "sec-1318605-000162828025016070|original-000162828025016070|sec-1318605-000162828025016070",
+        "sec-1318605-000162828025018851|original-000162828025018851|sec-1318605-000162828025018851",
+        "sec-1318605-000162828025018911|original-000162828025018911|sec-1318605-000162828025018911"
+      ],
+      "visible_event_ids": [
+        "23060a72f937eef2330c64251c660fc25ab56042c8956dfe2aeca72d8cce7416"
+      ]
+    }
+  },
+  "docs_used": 7,
+  "events_used": 1,
+  "mapping_status": "SECURITY_MAPPING_PENDING",
+  "market_data_certified": false,
+  "retrieved_at": "2026-08-12T05:45:57.043336+00:00",
+  "text_source_pit_certified": true
+}
