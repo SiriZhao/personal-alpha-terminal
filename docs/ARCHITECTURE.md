@@ -65,3 +65,56 @@ plan. AI failure never degrades Quant readiness.
 The Windows console executable is the only product UI. It does not contain Streamlit, Textual,
 Electron, React, Node, a browser launcher, or a localhost API bridge. User data is written only
 below `%LOCALAPPDATA%\PersonalAlphaTerminal`.
+
+## Production gates matrix (authoritative)
+
+| Gate | PASS behavior | FAIL behavior |
+|---|---|---|
+| CALENDAR | continue | BLOCK (no weekday guess) |
+| DATA | continue | BLOCK (no mock/synthetic fallback) |
+| PIT | continue | BLOCK |
+| FUTURE DATA | continue (zero future rows) | BLOCK |
+| FEATURE | continue | BLOCK |
+| FACTOR | continue | BLOCK |
+| SIGNAL | continue | BLOCK |
+| RESEARCH CERT | normal | policy evaluation |
+| OPERATIONAL POLICY | continue | BLOCK (missing/invalid/expired = BLOCK) |
+| PORTFOLIO | continue | BLOCK |
+| RISK | continue | BLOCK |
+| DECISION | produce manual recommendation list | BLOCK |
+| EXECUTION | manual-only execution plan | no automatic order |
+
+`ALLOW_PROVISIONAL` only lowers the historical research certification threshold.
+It can never bypass DATA, PIT, future-data, SIGNAL, PORTFOLIO, RISK, DECISION or
+EXECUTION gates.
+
+## Runtime artifact governance
+
+`core.retention.RUNTIME_ARTIFACT_POLICY` classifies runtime evidence:
+
+- CRITICAL (never pruned): `var/personal_alpha.db`, `var/operational`,
+  `var/research-data`, `var/backups`, `artifacts`, `reports/validation-artifacts`.
+- DAILY_REPRODUCIBILITY (180 days): `reports/daily-runs`,
+  `reports/data-snapshots`, `reports/research-runs`.
+- DIAGNOSTIC (30 days): `var/logs`, `diagnostics`, `updates`.
+- CACHE (reported, never auto-pruned): `data/cache`.
+
+Operators inspect and prune through:
+
+```text
+python main.py maintenance artifacts status
+python main.py maintenance artifacts cleanup --dry-run
+python main.py maintenance artifacts cleanup --commit
+```
+
+Cleanup is dry-run by default, only ever touches eligible generated evidence, and
+never deletes the real ledger, user decisions, operational policy, research truth
+source, or portfolio history.
+
+## Daily-run artifact manifest
+
+Every successful daily run persists under `reports/daily-runs/<run_id>/` with stage
+manifests plus `run_certificate.json`, which binds `run_id`, analysis/trade dates,
+start/finish timestamps, config hash, universe/data/strategy/portfolio/risk/cost
+identity hashes, operational policy id/decision, research certification state,
+classification, canonical input/result hashes, and per-stage evidence.

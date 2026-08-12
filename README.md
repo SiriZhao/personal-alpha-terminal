@@ -47,6 +47,18 @@ trade or sends an order. Explanations may only restate structured Quant evidence
 
 系统只有一个用户维护的正式组合，默认外部标识为 `main`。券商账户属于外部执行环境；程序内部不设置第二套交易模式。测试只能使用隔离的 `TEST_FIXTURE` 数据库，不能进入正式账户或批准注册表。
 
+## 报告与文档生命周期
+
+- 普通修改只通过 Git commit 记录，不为每次改动生成新的 FINAL/CLOSURE 报告。
+- 当前真相来源仅限 `README.md`、`ARCHITECTURE.md`、`REPOSITORY_GUIDE.md`、
+  `TECH_DEBT.md` 与仍有效的规范文档。
+- 审计记录统一进入 `docs/audits/YYYY-MM-DD_<topic>.md`。
+- 已被取代的会话报告归档到 `docs/history/YYYY-MM-DD-<phase>/` 并登记
+  `docs/history/INDEX.md`。
+- daily-run 等自动产物进入 `reports/` / `var/`，用
+  `python main.py maintenance artifacts status` 与
+  `python main.py maintenance artifacts cleanup --dry-run|--commit` 管理，绝不进入 docs。
+
 ## 初始化与维护组合
 
 现金和持仓从不推测。首次初始化一个可审计的纯现金组合：

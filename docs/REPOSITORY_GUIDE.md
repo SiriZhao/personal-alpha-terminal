@@ -70,3 +70,15 @@ src/personal_alpha_terminal/
 - No auto execution; Charles Schwab/other brokers are manual only.
 - LLM is a structured intelligence/research layer; it never replaces deterministic factors,
   probability, portfolio, or risk logic, and is gated to SHADOW until certified.
+
+## Report lifecycle (mandatory)
+
+- Ordinary changes are recorded by Git commits only. Do not create new
+  `*_FINAL`, `*_CLOSURE`, `*_CHECKPOINT`, `*_REPORT` files for routine work.
+- Current truth lives only in `README.md`, `ARCHITECTURE.md`,
+  `REPOSITORY_GUIDE.md`, `TECH_DEBT.md` and genuinely current specification docs.
+- Audits go to `docs/audits/YYYY-MM-DD_<topic>.md`.
+- Superseded session reports go to `docs/history/YYYY-MM-DD-<phase>/` and are
+  registered in `docs/history/INDEX.md`.
+- Automated run artifacts never enter `docs/`; they stay in the runtime
+  `reports/` / `var/` evidence system and are governed by `maintenance artifacts`.

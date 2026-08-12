@@ -17,23 +17,28 @@
 
 ### TECH-002 — Untracked root-level reports are not governed
 
-- Severity: P1
+- Severity: RESOLVED (2026-08-12)
 - Area: `docs/*.md` (27 untracked files)
-- Description: Multiple uncommitted report docs with strong names (`*_FINAL`, `*_CERTIFICATION`,
-  `*_PRODUCTION_*`) sit at `docs/` root.
-- Why retained: They belong to the uncommitted feature set and may be referenced by its scripts.
-- Risk: Stale/overstated claims can be mistaken for current truth.
-- Recommended future action: Review claims against gates, then commit or move under
-  `docs/history/` with an index.
+- Description: Resolved by archiving session reports under
+  `docs/history/2026-08-12-session/`, creating `docs/history/INDEX.md`, and adding
+  a mandatory report lifecycle to `AGENTS.md`, `README.md`, and
+  `REPOSITORY_GUIDE.md`: ordinary changes use Git commits; only major audits get
+  `docs/audits/YYYY-MM-DD_<topic>.md` reports.
+- Remaining risk: Discipline depends on maintainers following AGENTS.md; no code
+  can enforce documentation habits.
 
 ### TECH-003 — Git-ignored runtime evidence growth
 
-- Severity: P1
+- Severity: RESOLVED (2026-08-12)
 - Area: `reports/`, `var/`
-- Description: Runtime snapshots/logs/db accumulate locally (tens of MB).
-- Why retained: Evidence chain and ledger are intentionally kept locally.
-- Risk: Disk growth; no data-loss risk.
-- Recommended future action: Periodic retention policy review using `core.retention`.
+- Description: Resolved by adding a declarative `RuntimeArtifactPolicy` in
+  `core/retention.py` plus `maintenance artifacts status` and
+  `maintenance artifacts cleanup --dry-run|--commit`. Daily reproducibility
+  evidence is retained 180 days, diagnostics 30 days, and CRITICAL areas (ledger,
+  policy, research truth source, validation artifacts, backups, certification
+  snapshots) are never auto-pruned. Cleanup is dry-run by default.
+- Remaining risk: Operators may still choose `--commit` on a daily area; policy is
+  documented and test-protected, but no automatic hard bound is enforced on disk.
 
 ## P2
 
