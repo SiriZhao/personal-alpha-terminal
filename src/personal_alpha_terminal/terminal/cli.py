@@ -206,6 +206,7 @@ def _record_execution(args: argparse.Namespace) -> int:
         notes=args.notes,
         fill_id=args.fill_id,
         external_reference=args.external_reference,
+        override_provenance=args.override_provenance,
     )
     console.print(result)
     return 0
@@ -1269,6 +1270,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Unique Schwab/manual fill identity; required for multiple partial fills",
     )
     execution.add_argument("--external-reference", default=None)
+    execution.add_argument(
+        "--override-provenance",
+        default=None,
+        help="Explicit user provenance required to record a fill against an "
+        "expired or stale recommendation",
+    )
     cancel_execution = subparsers.add_parser("cancel-execution")
     cancel_execution.add_argument("recommendation_id")
     cancel_execution.add_argument("--run-id", required=True)

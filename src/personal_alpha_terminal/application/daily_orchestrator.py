@@ -953,6 +953,8 @@ class DailyQuantOrchestrator:
                 },
                 "manual_broker": "Charles Schwab",
                 "automatic_execution": False,
+                "lifecycle": workflow.lifecycle,
+                "lifecycle_blocked_symbols": workflow.lifecycle_blocked_symbols,
                 "transaction_cost_assumption": (
                     f"commission {self._effective_config.transaction_cost.commission_bps} bps; "
                     f"spread {self._effective_config.transaction_cost.spread_bps} bps; "

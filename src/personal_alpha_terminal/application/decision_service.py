@@ -89,6 +89,7 @@ class DecisionService:
         notes: str = "",
         fill_id: str | None = None,
         external_reference: str | None = None,
+        override_provenance: str | None = None,
     ) -> str:
         """Record a fill entered manually at Charles Schwab in the real ledger."""
 
@@ -119,6 +120,7 @@ class DecisionService:
                 executed_at=timestamp,
                 external_reference=external_reference,
                 notes=notes,
+                override_provenance=override_provenance,
             )
         )
         if metrics.idempotent_replay:

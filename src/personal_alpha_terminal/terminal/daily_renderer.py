@@ -592,26 +592,82 @@ def _portfolio(result: DailyQuantResult, console: Console) -> None:
         if summary.status == "NOT_INITIALIZED"
         else ""
     )
+    lifecycle = result.provenance.get("lifecycle")
+    lifecycle = lifecycle if isinstance(lifecycle, dict) else {}
+    pnl = lifecycle.get("pnl")
+    pnl = pnl if isinstance(pnl, dict) else {}
+    attribution = lifecycle.get("attribution")
+    attribution = attribution if isinstance(attribution, dict) else {}
+    reconciliation = lifecycle.get("reconciliation")
+    reconciliation = reconciliation if isinstance(reconciliation, list) else []
+    pnl_lines = ""
+    if pnl:
+        pnl_lines = (
+            f"Unrealized P&L {_money(pnl.get('unrealized_pnl'))}   "
+            f"Realized P&L {_money(pnl.get('realized_pnl'))}   "
+            f"Cost basis {_money(pnl.get('total_cost_basis'))}\n"
+        )
+    attribution_lines = ""
+    if attribution:
+        attribution_lines = (
+            f"Beginning NAV {_money(attribution.get('beginning_nav'))}   "
+            f"Ending NAV {_money(attribution.get('ending_nav'))}\n"
+            f"Market P&L {_money(attribution.get('market_pnl'))}   "
+            f"Trading P&L {_money(attribution.get('trading_pnl'))}   "
+            f"Fees {_money(attribution.get('fees'))}\n"
+            f"Portfolio return {_percent(attribution.get('portfolio_return'))}   "
+            f"Benchmark return {_percent(attribution.get('benchmark_return'))}   "
+            f"Active return {_percent(attribution.get('active_return'))}\n"
+        )
+    reconciliation_lines = ""
+    required = [
+        item
+        for item in reconciliation
+        if isinstance(item, dict) and item.get("status") == "RECONCILIATION_REQUIRED"
+    ]
+    if required:
+        reconciliation_lines = (
+            "Corporate action reconciliation required (no auto-adjustment):\n"
+            + "\n".join(
+                f"  {item.get('symbol')}: {item.get('actions')}" for item in required
+            )
+            + "\n"
+        )
     console.print(
         Panel(
-            f"{_t('组合 ID', 'Portfolio ID')} "
+            f"{_t('\u7ec4\u5408 ID', 'Portfolio ID')} "
             f"{result.provenance.get('portfolio_id', 'UNSELECTED')}   "
             f"Status {summary.status}\nNAV {_money(summary.nav)}   Cash {_money(summary.cash)}   "
             f"Invested {_percent(summary.invested_weight)}   "
-            f"Cash weight {_percent(summary.cash_weight)}{onboarding}",
-            title=_t("【投资组合】· 手工维护账本", "LIVE PORTFOLIO · MANUAL LEDGER"),
+            f"Cash weight {_percent(summary.cash_weight)}\n"
+            + pnl_lines
+            + attribution_lines
+            + reconciliation_lines
+            + onboarding,
+            title=_t(
+                "\u300a\u6295\u8d44\u7ec4\u5408\u300b \u00b7 \u624b\u5de5\u7ef4\u62a4\u8d26\u672c",
+                "LIVE PORTFOLIO \u00b7 MANUAL LEDGER",
+            ),
         )
     )
     table = Table()
-    columns = (
-        ("代码", "股数", "价格", "当前权重", "目标权重", "调整")
-        if _is_zh()
-        else ("Ticker", "Shares", "Price", "Current", "Target", "Delta")
+    zh_columns = (
+        "\u4ee3\u7801",
+        "\u80a1\u6570",
+        "\u4ef7\u683c",
+        "\u5f53\u524d\u6743\u91cd",
+        "\u76ee\u6807\u6743\u91cd",
+        "\u8c03\u6574",
     )
+    en_columns = ("Ticker", "Shares", "Price", "Current", "Target", "Delta")
+    columns = zh_columns if _is_zh() else en_columns
     for column in columns:
         table.add_column(column, justify="right" if column != "Ticker" else "left")
     if not summary.positions:
-        table.add_row(_t("当前无持仓", "NO POSITIONS"), "--", "--", "0.00%", "--", "--")
+        table.add_row(
+            _t("\u5f53\u524d\u65e0\u6301\u4ed3", "NO POSITIONS"),
+            "--", "--", "0.00%", "--", "--",
+        )
     for item in summary.positions:
         table.add_row(
             item.symbol,
@@ -623,8 +679,8 @@ def _portfolio(result: DailyQuantResult, console: Console) -> None:
         )
     console.print(table)
     if summary.cash_weight is not None:
-        console.print(f"{_t('现金', 'Cash'):8} {_bar(summary.cash_weight, 20)}")
-        console.print(f"{_t('股票', 'Equity'):8} {_bar(summary.invested_weight or 0.0, 20)}")
+        console.print(f"{_t('\u73b0\u91d1', 'Cash'):8} {_bar(summary.cash_weight, 20)}")
+        console.print(f"{_t('\u80a1\u7968', 'Equity')} {_bar(summary.invested_weight or 0.0, 20)}")
 
 
 def _factors(result: DailyQuantResult, console: Console) -> None:
@@ -845,10 +901,15 @@ def _decisions(result: DailyQuantResult, console: Console) -> None:
         )
         table.add_row(*empty)
     for item in result.final_decisions:
+        shown_action = _semantic_action(
+            item.action,
+            current_weight=item.current_weight,
+            target_weight=item.target_weight,
+        )
         values = (
             (
                 item.symbol,
-                item.action,
+                shown_action,
                 f"{_percent(item.current_weight)} → {_percent(item.target_weight)}",
                 _money(item.estimated_value),
                 item.reason,
@@ -856,7 +917,7 @@ def _decisions(result: DailyQuantResult, console: Console) -> None:
             if narrow
             else (
                 item.symbol,
-                item.action,
+                shown_action,
                 _percent(item.current_weight),
                 _percent(item.target_weight),
                 _signed_percent(item.delta_weight),
@@ -1138,6 +1199,17 @@ def _is_zh() -> bool:
 
 def _t(zh: str, en: str) -> str:
     return zh if _is_zh() else en
+
+
+def _semantic_action(value: str, *, current_weight: float, target_weight: float) -> str:
+    """ROUND 6 user-facing action: SELL of a full position is EXIT."""
+    from personal_alpha_terminal.portfolio.lifecycle import semantic_action
+
+    return semantic_action(
+        value,
+        current_weight=current_weight,
+        target_weight=target_weight,
+    )
 
 
 def _action(value: str) -> str:

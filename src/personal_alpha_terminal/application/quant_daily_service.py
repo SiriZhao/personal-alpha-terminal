@@ -153,6 +153,8 @@ class TodayResult:
     operational_policy_decision: str = "BLOCK"
     operationally_allowed: bool = False
     operational_degraded_reason: str | None = None
+    lifecycle: dict[str, object] | None = None
+    lifecycle_blocked_symbols: tuple[str, ...] = ()
 
 
 class ProductionDailyWorkflow:
@@ -831,6 +833,15 @@ class ProductionDailyWorkflow:
         resolved_strategy_version = (
             assembled.strategy_version if assembled is not None else run.model_version
         )
+        lifecycle, lifecycle_blocked_symbols = self._lifecycle_and_blocked(
+            run.portfolio_id, run.as_of_time
+        )
+        if lifecycle_blocked_symbols:
+            recommendations = tuple(
+                item
+                for item in recommendations
+                if item.symbol not in set(lifecycle_blocked_symbols)
+            )
         return TodayResult(
             run_id=run.id,
             decision_time=run.as_of_time,
@@ -1009,7 +1020,47 @@ class ProductionDailyWorkflow:
                 and run.status in {"generated", "no_decision"}
                 else "operational policy missing or denies provisional advice"
             ),
+            lifecycle=lifecycle,
+            lifecycle_blocked_symbols=lifecycle_blocked_symbols,
         )
+
+    def _lifecycle_and_blocked(
+        self,
+        portfolio_id: int,
+        decision_time: datetime,
+    ) -> tuple[dict[str, object], tuple[str, ...]]:
+        """Compute live lifecycle PnL, attribution and corporate-action state.
+
+        Corporate actions are never auto-applied.  Positions with unreconciled
+        actions are marked RECONCILIATION_REQUIRED and their symbols are removed
+        from today's recommendation list (fail-closed).
+        """
+        from personal_alpha_terminal.portfolio.lifecycle import (
+            PortfolioLifecycleService,
+        )
+
+        service = PortfolioLifecycleService(self.session)
+        try:
+            pnl = service.portfolio_pnl(portfolio_id, as_of=decision_time)
+            attribution = service.daily_attribution(portfolio_id, as_of=decision_time)
+            reconciliations = service.corporate_action_reconciliation(
+                portfolio_id, as_of=decision_time
+            )
+        except (LookupError, RuntimeError, ValueError) as error:
+            return {"status": "UNAVAILABLE", "reason": str(error)}, ()
+        blocked = tuple(
+            item.symbol
+            for item in reconciliations
+            if item.status == "RECONCILIATION_REQUIRED"
+        )
+        lifecycle: dict[str, object] = {
+            "status": "OK",
+            "pnl": pnl.document(),
+            "attribution": attribution.document(),
+            "reconciliation": [item.document() for item in reconciliations],
+            "blocked_symbols": list(blocked),
+        }
+        return lifecycle, blocked
 
     def _identity_hashes(self, data_version: str) -> dict[str, str]:
         return {

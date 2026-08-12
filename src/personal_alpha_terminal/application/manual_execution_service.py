@@ -15,6 +15,11 @@ from personal_alpha_terminal.models import (
     ManualExecutionRecord,
     ManualRebalanceTicketRecord,
     QuantDecisionRecommendation,
+    QuantDecisionRun,
+)
+from personal_alpha_terminal.portfolio.lifecycle import (
+    FillGateDecision,
+    evaluate_fill_gate,
 )
 from personal_alpha_terminal.portfolio.management_repository import (
     PortfolioManagementRepository,
@@ -183,6 +188,9 @@ class ManualFillSubmission:
     executed_at: datetime
     external_reference: str | None = None
     notes: str = ""
+    # Explicit user provenance required to record a fill against an expired or
+    # stale recommendation.  Expiry/staleness can never be silently ignored.
+    override_provenance: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -275,6 +283,23 @@ class ManualExecutionOrderService:
         )
         if recommendation is None:
             raise ValueError("decision recommendation does not exist")
+        latest_run_id = self.session.scalar(
+            select(func.max(QuantDecisionRun.id)).where(
+                QuantDecisionRun.portfolio_id == recommendation.run.portfolio_id,
+                QuantDecisionRun.gate_status == "APPROVED",
+            )
+        )
+        gate = evaluate_fill_gate(
+            recommendation,
+            executed_at=submission.executed_at,
+            latest_approved_run_id=latest_run_id,
+            override_provenance=submission.override_provenance,
+        )
+        if gate.decision in {
+            FillGateDecision.BLOCKED_EXPIRED,
+            FillGateDecision.BLOCKED_STALE,
+        }:
+            raise ValueError(f"manual fill blocked: {gate.reason}")
         order = self.ensure_order(recommendation)
         if order.status in {
             ManualExecutionStatus.FILLED.value,

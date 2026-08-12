@@ -537,6 +537,7 @@ class ApplicationService:
         notes: str = "",
         fill_id: str | None = None,
         external_reference: str | None = None,
+        override_provenance: str | None = None,
     ) -> str:
         with self._factory.begin() as session:
             return DecisionService(session).mark_executed(
@@ -548,6 +549,7 @@ class ApplicationService:
                 notes=notes,
                 fill_id=fill_id,
                 external_reference=external_reference,
+                override_provenance=override_provenance,
             )
 
     def cancel_candidate_execution(self, recommendation_id: str, *, reason: str) -> str:

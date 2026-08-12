@@ -9,7 +9,9 @@ from pathlib import Path
 from personal_alpha_terminal.core.config import Settings
 from personal_alpha_terminal.core.fingerprints import fingerprint
 from personal_alpha_terminal.quant_engine.costs import TransactionCostConfig
-from personal_alpha_terminal.quant_engine.portfolio.construction import PortfolioConstraints
+from personal_alpha_terminal.quant_engine.portfolio.construction import (
+    PortfolioConstraints,
+)
 from personal_alpha_terminal.quant_engine.risk.model import RiskModelConfig
 from personal_alpha_terminal.quant_engine.risk.stress import StressRiskConfig
 from personal_alpha_terminal.quant_engine.strategies.us_adaptive_alpha_core import (
@@ -390,6 +392,13 @@ def resolve_effective_runtime_config(
             maximum_single_name_loss=_number(scalar, "stress_maximum_single_name_loss", 0.05),
             maximum_sector_loss=_number(scalar, "stress_maximum_sector_loss", 0.10),
             warning_ratio=_number(scalar, "stress_warning_ratio", 0.80),
+        ),
+        portfolio_constraints=PortfolioConstraints(
+            no_trade_band=_number(scalar, "no_trade_band", 0.005),
+            minimum_rebalance_weight=_number(
+                scalar, "minimum_rebalance_weight", 0.01
+            ),
+            minimum_trade_value=_number(scalar, "minimum_trade_value", 100.0),
         ),
         settings=settings,
         source_path=path.resolve(),
