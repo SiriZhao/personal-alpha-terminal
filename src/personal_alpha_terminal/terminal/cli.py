@@ -21,6 +21,7 @@ from personal_alpha_terminal.terminal.config import default_config_text, load_co
 from personal_alpha_terminal.terminal.daily_renderer import render_daily_quant_result
 from personal_alpha_terminal.terminal.forward_track_cli import forward_track_command
 from personal_alpha_terminal.terminal.market_sessions import MarketSessionCalendar
+from personal_alpha_terminal.terminal.round7_cli import round7_research_command
 
 if TYPE_CHECKING:
     from personal_alpha_terminal.application import ApplicationService
@@ -1242,6 +1243,28 @@ def build_parser() -> argparse.ArgumentParser:
     round4_research.add_argument("--benchmark", default="SPY")
     round4_research.add_argument("--horizon", type=int, default=21)
     round4_research.add_argument("--output", type=Path, default=Path("var/round4-research"))
+    round7_research = subparsers.add_parser(
+        "round7-research",
+        help="ROUND 7 historical PIT certification and gated research rerun",
+    )
+    round7_research.add_argument("--root", type=Path, default=Path("var/research-data"))
+    round7_actions = round7_research.add_subparsers(
+        dest="round7_action", required=True
+    )
+    round7_actions.add_parser("status", help="Show historical PIT certification status")
+    round7_certify = round7_actions.add_parser(
+        "certify", help="Certify the latest imported research dataset"
+    )
+    round7_certify.add_argument("--required-start", default=None)
+    round7_certify.add_argument("--required-end", default=None)
+    round7_certify.add_argument("--claim-delisting-history", action="store_true")
+    round7_certify.add_argument("--claim-delisting-returns", action="store_true")
+    round7_certify.add_argument("--claim-historical-membership", action="store_true")
+    round7_rerun = round7_actions.add_parser(
+        "rerun", help="Run the gated historical research rerun (certified only)"
+    )
+    round7_rerun.add_argument("--benchmark", default="SPY")
+    round7_rerun.add_argument("--horizon", type=int, default=21)
     subparsers.add_parser("backtest", help="Check the PIT backtest execution gate")
     subparsers.add_parser("init-config")
     data_provider = subparsers.add_parser(
@@ -1378,6 +1401,8 @@ def main(argv: list[str] | None = None) -> int:
             return forward_track_command(args)
         if command == "round4-research":
             return _round4_research_command(args)
+        if command == "round7-research":
+            return round7_research_command(args)
         if command == "backtest":
             return _backtest_status(args.config)
         if command == "explain":
