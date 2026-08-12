@@ -9,6 +9,7 @@ from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.types import TypeEngine
 
 revision: str = "6e2a1c4d9b70"
 down_revision: str | None = "3b7e2d9f4a10"
@@ -16,7 +17,7 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 
-def _id() -> sa.TypeEngine[object]:
+def _id() -> TypeEngine[object]:
     return sa.BigInteger().with_variant(sa.Integer(), "sqlite")
 
 

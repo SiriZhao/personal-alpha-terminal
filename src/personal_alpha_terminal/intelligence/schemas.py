@@ -44,8 +44,15 @@ class EventType(StrEnum):
     MERGER_ACQUISITION = "MERGER_ACQUISITION"
     PARTNERSHIP = "PARTNERSHIP"
     PRODUCT = "PRODUCT"
+    PRODUCT_DELAY = "PRODUCT_DELAY"
+    CUSTOMER_WIN = "CUSTOMER_WIN"
+    CUSTOMER_LOSS = "CUSTOMER_LOSS"
+    SUPPLY_CHAIN = "SUPPLY_CHAIN"
+    PRICING = "PRICING"
     REGULATION = "REGULATION"
     LITIGATION = "LITIGATION"
+    CYBERSECURITY = "CYBERSECURITY"
+    ACCOUNTING_CONCERN = "ACCOUNTING_CONCERN"
     ANALYST_ACTION = "ANALYST_ACTION"
     FINANCING = "FINANCING"
     INSIDER = "INSIDER"
@@ -58,6 +65,8 @@ class EventType(StrEnum):
     DOLLAR = "DOLLAR"
     OIL = "OIL"
     TARIFF = "TARIFF"
+    EXPORT_RESTRICTION = "EXPORT_RESTRICTION"
+    AI_DEMAND = "AI_DEMAND"
     SANCTIONS = "SANCTIONS"
     GEOPOLITICS = "GEOPOLITICS"
     LIQUIDITY = "LIQUIDITY"
@@ -87,6 +96,13 @@ class RawInformation(StrictModel):
     source_url: str | None = None
     source_hash: str | None = None
     data_cutoff: datetime
+    filed_at: datetime | None = None
+    accepted_at: datetime | None = None
+    event_time: datetime | None = None
+    provider_received_at: datetime | None = None
+    available_at: datetime | None = None
+    processed_at: datetime | None = None
+    revision_id: str | None = None
 
     @field_validator("raw_id", "source", "source_identifier", "title")
     @classmethod
@@ -101,6 +117,18 @@ class RawInformation(StrictModel):
     def aware_timestamps(cls, value: datetime, info: Any) -> datetime:
         return _aware(value, info.field_name)
 
+    @field_validator(
+        "filed_at",
+        "accepted_at",
+        "event_time",
+        "provider_received_at",
+        "available_at",
+        "processed_at",
+    )
+    @classmethod
+    def optional_aware_timestamps(cls, value: datetime | None, info: Any) -> datetime | None:
+        return _aware(value, info.field_name) if value is not None else None
+
     @model_validator(mode="after")
     def validate_temporal_lineage(self) -> RawInformation:
         if self.observed_at < self.published_at:
@@ -109,13 +137,34 @@ class RawInformation(StrictModel):
             raise ValueError("information cannot be ingested before observation")
         if self.data_cutoff < self.observed_at or self.data_cutoff > self.ingested_at:
             raise ValueError("data_cutoff must lie between observed_at and ingested_at")
+        available = self.available_at or self.observed_at
+        received = self.provider_received_at or self.observed_at
+        processed = self.processed_at or self.ingested_at
+        if received < self.published_at:
+            raise ValueError("provider_received_at cannot precede publication")
+        required_times = tuple(
+            item
+            for item in (self.published_at, self.filed_at, self.accepted_at, received)
+            if item is not None
+        )
+        if available < max(required_times):
+            raise ValueError("available_at precedes an information availability boundary")
+        if available > self.data_cutoff or processed < self.data_cutoff:
+            raise ValueError("document availability/processing violates the PIT cutoff")
         expected_hash = sha256(
             f"{self.source}|{self.source_identifier}|{self.title}|{self.body}".encode()
         ).hexdigest()
         if self.source_hash is not None and self.source_hash != expected_hash:
             raise ValueError("source_hash does not match immutable raw content")
         object.__setattr__(self, "source_hash", expected_hash)
+        object.__setattr__(self, "provider_received_at", received)
+        object.__setattr__(self, "available_at", available)
+        object.__setattr__(self, "processed_at", processed)
         return self
+
+    def visible_at(self, decision_as_of: datetime) -> bool:
+        _aware(decision_as_of, "decision_as_of")
+        return bool(self.available_at is not None and self.available_at <= decision_as_of)
 
 
 class EventEvidence(StrictModel):
@@ -127,16 +176,21 @@ class EventEvidence(StrictModel):
     observed_at: datetime
     reference: str
     extraction_confidence: float | None = Field(default=None, ge=0, le=1)
+    available_at: datetime | None = None
 
-    @field_validator("published_at", "observed_at")
+    @field_validator("published_at", "observed_at", "available_at")
     @classmethod
-    def evidence_times_are_aware(cls, value: datetime, info: Any) -> datetime:
-        return _aware(value, info.field_name)
+    def evidence_times_are_aware(cls, value: datetime | None, info: Any) -> datetime | None:
+        return _aware(value, info.field_name) if value is not None else None
 
     @model_validator(mode="after")
     def validate_observation(self) -> EventEvidence:
         if self.observed_at < self.published_at:
             raise ValueError("evidence observed_at precedes published_at")
+        if self.available_at is None:
+            object.__setattr__(self, "available_at", self.observed_at)
+        elif self.available_at < self.observed_at:
+            raise ValueError("evidence available_at precedes provider observation")
         return self
 
 
@@ -185,8 +239,16 @@ class UnifiedEvent(StrictModel):
         return _aware(value, info.field_name)
 
     @field_validator(
-        "event_id", "schema_version", "entity", "title", "summary", "source",
-        "source_identifier", "source_hash", "model_version", "prompt_version"
+        "event_id",
+        "schema_version",
+        "entity",
+        "title",
+        "summary",
+        "source",
+        "source_identifier",
+        "source_hash",
+        "model_version",
+        "prompt_version",
     )
     @classmethod
     def event_text_is_present(cls, value: str) -> str:
@@ -208,7 +270,9 @@ class UnifiedEvent(StrictModel):
         if min(item.observed_at for item in self.evidence) < self.published_at:
             raise ValueError("event evidence violates publication boundary")
         if self.backtest_safety is BacktestSafety.BACKTEST_SAFE:
-            if any(item.observed_at > self.data_cutoff for item in self.evidence):
+            if any(
+                (item.available_at or item.observed_at) > self.data_cutoff for item in self.evidence
+            ):
                 raise ValueError("backtest-safe event contains future evidence")
         return self
 
@@ -217,7 +281,9 @@ class UnifiedEvent(StrictModel):
 
     def at_cutoff(self, cutoff: datetime) -> UnifiedEvent | None:
         _aware(cutoff, "cutoff")
-        visible_evidence = tuple(item for item in self.evidence if item.observed_at <= cutoff)
+        visible_evidence = tuple(
+            item for item in self.evidence if (item.available_at or item.observed_at) <= cutoff
+        )
         if self.observed_at > cutoff or not visible_evidence:
             return None
         distinct_sources = len({item.source for item in visible_evidence})
@@ -234,7 +300,9 @@ class UnifiedEvent(StrictModel):
         return self.model_copy(
             update={
                 "evidence": visible_evidence,
-                "data_cutoff": max(item.observed_at for item in visible_evidence),
+                "data_cutoff": max(
+                    item.available_at or item.observed_at for item in visible_evidence
+                ),
                 "confidence": confidence,
             }
         )

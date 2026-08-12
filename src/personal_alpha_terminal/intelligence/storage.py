@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from datetime import datetime
 from hashlib import sha256
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from personal_alpha_terminal.agents.llm.foundation import LLMUsageRecord
 from personal_alpha_terminal.intelligence.narrative import NarrativeResult, NarrativeSnapshot
 from personal_alpha_terminal.intelligence.relationship import (
     RelationshipEdge,
@@ -51,6 +53,32 @@ class DatabaseExtractionCache:
                     payload=payload,
                 )
             )
+
+
+class DatabaseLLMUsageLedger:
+    """Immutable metadata-only LLM call ledger using the research result store."""
+
+    def __init__(self, session: Session) -> None:
+        self.repository = IntelligenceRepository(session)
+
+    def append(self, record: LLMUsageRecord) -> None:
+        payload = asdict(record)
+        payload["generated_at"] = record.generated_at.isoformat()
+        payload["as_of"] = record.as_of.isoformat() if record.as_of else None
+        payload["validation_status"] = record.validation_status.value
+        identity = sha256(
+            f"{record.request_hash}|{record.generated_at.isoformat()}|{record.validation_status}".encode()
+        ).hexdigest()
+        self.repository.add_result(
+            result_id=identity,
+            result_type="LLM_USAGE",
+            schema_version="llm-usage-v1",
+            model_version=record.model,
+            prompt_version=record.prompt_version,
+            data_cutoff=record.as_of or record.generated_at,
+            status=record.validation_status.value,
+            payload=payload,
+        )
 
 
 class IntelligenceRepository:
@@ -142,7 +170,9 @@ class IntelligenceRepository:
                 cluster = materialized.canonical_cluster_id or materialized.event_id
                 current = visible_by_cluster.get(cluster)
                 if current is None or (
-                    len(materialized.evidence), materialized.data_cutoff, materialized.event_id
+                    len(materialized.evidence),
+                    materialized.data_cutoff,
+                    materialized.event_id,
                 ) > (len(current.evidence), current.data_cutoff, current.event_id):
                     visible_by_cluster[cluster] = materialized
         return tuple(
@@ -393,9 +423,7 @@ def _dataclass_payload(value: object) -> dict[str, object]:
 
     if not is_dataclass(value) or isinstance(value, type):
         raise TypeError("research validation must be a dataclass instance")
-    normalized = json.loads(
-        json.dumps(asdict(value), sort_keys=True, default=_json_default)
-    )
+    normalized = json.loads(json.dumps(asdict(value), sort_keys=True, default=_json_default))
     if not isinstance(normalized, dict):
         raise TypeError("research validation payload must be an object")
     return normalized

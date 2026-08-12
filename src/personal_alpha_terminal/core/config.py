@@ -71,6 +71,9 @@ class Settings(BaseSettings):
     custom_api_key: str | None = Field(default=None, validation_alias="CUSTOM_API_KEY")
     openai_model: str = "gpt-5.6-terra"
     deepseek_model: str = "deepseek-v4-flash"
+    deepseek_reasoning_model: str = "deepseek-v4-pro"
+    deepseek_reasoning_mode: Literal["enabled", "disabled"] = "disabled"
+    deepseek_reasoning_effort: Literal["low", "medium", "high", "max"] = "high"
     anthropic_model: str = "claude-sonnet-4-5"
     custom_model: str = "local-model"
     deepseek_base_url: str = "https://api.deepseek.com"
@@ -79,6 +82,12 @@ class Settings(BaseSettings):
     llm_temperature: float = Field(default=0.2, ge=0, le=2)
     llm_timeout_seconds: float = Field(default=60.0, ge=1, le=600)
     llm_max_retries: int = Field(default=2, ge=0, le=10)
+    llm_enabled: bool = True
+    llm_event_intelligence: bool = True
+    llm_filing_intelligence: bool = False
+    llm_relation_graph: bool = False
+    llm_embeddings: bool = False
+    llm_research_agent: bool = False
     intelligence_max_requests_per_run: int = Field(default=100, ge=1, le=10_000)
     intelligence_max_tokens_per_run: int = Field(default=100_000, ge=100, le=10_000_000)
     intelligence_max_cost_per_run: float = Field(default=10.0, ge=0, le=100_000)
@@ -108,27 +117,17 @@ class Settings(BaseSettings):
     intelligence_relationship_maximum_lag: int = Field(default=5, ge=1, le=60)
     intelligence_relationship_fdr_threshold: float = Field(default=0.05, gt=0, lt=1)
     intelligence_relationship_minimum_effect: float = Field(default=0.20, ge=0, le=1)
-    intelligence_relationship_minimum_oos_survival: float = Field(
-        default=0.50, ge=0, le=1
-    )
+    intelligence_relationship_minimum_oos_survival: float = Field(default=0.50, ge=0, le=1)
     intelligence_hypothesis_max_per_run: int = Field(default=25, ge=1, le=1000)
-    intelligence_hypothesis_max_parameter_combinations: int = Field(
-        default=100, ge=1, le=10_000
-    )
-    intelligence_hypothesis_max_threshold_combinations: int = Field(
-        default=25, ge=1, le=1000
-    )
-    intelligence_hypothesis_max_horizon_combinations: int = Field(
-        default=5, ge=1, le=100
-    )
+    intelligence_hypothesis_max_parameter_combinations: int = Field(default=100, ge=1, le=10_000)
+    intelligence_hypothesis_max_threshold_combinations: int = Field(default=25, ge=1, le=1000)
+    intelligence_hypothesis_max_horizon_combinations: int = Field(default=5, ge=1, le=100)
     intelligence_hypothesis_minimum_sample: int = Field(default=60, ge=30, le=10_000)
     intelligence_hypothesis_minimum_oos_sample: int = Field(default=20, ge=10, le=5000)
     intelligence_hypothesis_fdr_threshold: float = Field(default=0.05, gt=0, lt=1)
     intelligence_hypothesis_minimum_effect: float = Field(default=0.001, gt=0, le=1)
     intelligence_hypothesis_minimum_oos_stability: float = Field(default=0.50, ge=0, le=1)
-    intelligence_hypothesis_minimum_regime_stability: float = Field(
-        default=0.50, ge=0, le=1
-    )
+    intelligence_hypothesis_minimum_regime_stability: float = Field(default=0.50, ge=0, le=1)
     intelligence_hypothesis_maximum_drawdown: float = Field(default=0.30, ge=0, le=1)
     intelligence_hypothesis_maximum_turnover: float = Field(default=2.0, ge=0, le=100)
     market_data_default_start: date = date(2010, 1, 1)
@@ -147,24 +146,16 @@ class Settings(BaseSettings):
     # Engineering safety defaults, not optimized strategy parameters.  Reconciliation
     # compares normalized daily returns because free providers do not share one price-
     # adjustment convention.
-    market_data_reconciliation_minimum_coverage: float = Field(
-        default=0.95, ge=0.50, le=1.0
-    )
+    market_data_reconciliation_minimum_coverage: float = Field(default=0.95, ge=0.50, le=1.0)
     market_data_reconciliation_warning_return_tolerance: float = Field(
         default=0.01, ge=0.0, le=0.25
     )
     market_data_reconciliation_blocking_return_tolerance: float = Field(
         default=0.05, ge=0.001, le=1.0
     )
-    market_data_reconciliation_maximum_blocking_ratio: float = Field(
-        default=0.01, ge=0.0, le=0.25
-    )
-    market_data_reconciliation_minimum_overlap_sessions: int = Field(
-        default=20, ge=5, le=500
-    )
-    market_data_reconciliation_preferred_overlap_sessions: int = Field(
-        default=60, ge=5, le=500
-    )
+    market_data_reconciliation_maximum_blocking_ratio: float = Field(default=0.01, ge=0.0, le=0.25)
+    market_data_reconciliation_minimum_overlap_sessions: int = Field(default=20, ge=5, le=500)
+    market_data_reconciliation_preferred_overlap_sessions: int = Field(default=60, ge=5, le=500)
     nasdaq_23h_enabled: bool = Field(
         default=False,
         validation_alias="NASDAQ_23H_ENABLED",
@@ -314,7 +305,13 @@ class Settings(BaseSettings):
         normalized = value.strip()
         return normalized or None
 
-    @field_validator("openai_model", "deepseek_model", "anthropic_model", "custom_model")
+    @field_validator(
+        "openai_model",
+        "deepseek_model",
+        "deepseek_reasoning_model",
+        "anthropic_model",
+        "custom_model",
+    )
     @classmethod
     def validate_llm_model(cls, value: str) -> str:
         normalized = value.strip()
@@ -348,13 +345,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_intelligence_guardrails(self) -> "Settings":
-        if (
-            self.intelligence_scanner_event_weight
-            > self.intelligence_max_event_contribution
-        ):
-            raise ValueError(
-                "scanner event weight exceeds the intelligence contribution guardrail"
-            )
+        if self.intelligence_scanner_event_weight > self.intelligence_max_event_contribution:
+            raise ValueError("scanner event weight exceeds the intelligence contribution guardrail")
         guardrails = (
             (
                 self.intelligence_scanner_narrative_weight,

@@ -53,10 +53,13 @@ class BroadUniverseConfig:
     def __post_init__(self) -> None:
         if self.minimum_price <= 0 or self.minimum_trading_sessions < 1:
             raise ValueError("broad universe price/history thresholds are invalid")
-        if min(
-            self.minimum_average_dollar_volume,
-            self.minimum_median_dollar_volume,
-        ) <= 0:
+        if (
+            min(
+                self.minimum_average_dollar_volume,
+                self.minimum_median_dollar_volume,
+            )
+            <= 0
+        ):
             raise ValueError("broad universe liquidity thresholds are invalid")
         if not 0 <= self.minimum_valid_bar_coverage <= 1:
             raise ValueError("broad universe coverage threshold is invalid")
@@ -208,6 +211,19 @@ class EffectiveRuntimeConfig:
             "allow_calendar_fallback": self.allow_calendar_fallback,
             "portfolio_id": self.portfolio_id,
             "broad_universe": asdict(self.broad_universe),
+            "llm": {
+                "provider": self.settings.llm_provider,
+                "deepseek_model": self.settings.deepseek_model,
+                "deepseek_reasoning_model": self.settings.deepseek_reasoning_model,
+                "deepseek_reasoning_mode": self.settings.deepseek_reasoning_mode,
+                "deepseek_reasoning_effort": self.settings.deepseek_reasoning_effort,
+                "event_intelligence": self.settings.llm_event_intelligence,
+                "filing_intelligence": self.settings.llm_filing_intelligence,
+                "relation_graph": self.settings.llm_relation_graph,
+                "embeddings": self.settings.llm_embeddings,
+                "research_agent": self.settings.llm_research_agent,
+                "event_prompt_version": "event-extraction-v2",
+            },
         }
 
 
@@ -300,21 +316,15 @@ def resolve_effective_runtime_config(
         portfolio_id=_portfolio_key(scalar.get("portfolio_id")),
         broad_universe=BroadUniverseConfig(
             minimum_price=_number(scalar, "universe_minimum_price", 5.0),
-            minimum_trading_sessions=_integer(
-                scalar, "universe_minimum_trading_sessions", 252
-            ),
+            minimum_trading_sessions=_integer(scalar, "universe_minimum_trading_sessions", 252),
             minimum_average_dollar_volume=_number(
                 scalar, "universe_minimum_average_dollar_volume", 10_000_000.0
             ),
             minimum_median_dollar_volume=_number(
                 scalar, "universe_minimum_median_dollar_volume", 10_000_000.0
             ),
-            minimum_valid_bar_coverage=_number(
-                scalar, "universe_minimum_valid_bar_coverage", 0.98
-            ),
-            maximum_missing_ratio=_number(
-                scalar, "universe_maximum_missing_ratio", 0.02
-            ),
+            minimum_valid_bar_coverage=_number(scalar, "universe_minimum_valid_bar_coverage", 0.98),
+            maximum_missing_ratio=_number(scalar, "universe_maximum_missing_ratio", 0.02),
             include_adr=_boolean(scalar, "universe_include_adr", False),
             include_reit=_boolean(scalar, "universe_include_reit", False),
         ),

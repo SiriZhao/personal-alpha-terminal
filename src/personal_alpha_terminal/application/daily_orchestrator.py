@@ -7,6 +7,7 @@ from time import perf_counter
 from uuid import uuid4
 
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from personal_alpha_terminal import __version__
@@ -31,6 +32,9 @@ from personal_alpha_terminal.application.data_certification import (
     DailyDataCertification,
 )
 from personal_alpha_terminal.application.data_service import DataService, SyncRunner
+from personal_alpha_terminal.application.intelligence_service import (
+    IntelligenceApplicationService,
+)
 from personal_alpha_terminal.application.quant_daily_service import (
     ProductionDailyWorkflow,
     TodayResult,
@@ -41,6 +45,12 @@ from personal_alpha_terminal.core.effective_config import (
     EffectiveRuntimeConfig,
     effective_config_from_settings,
 )
+from personal_alpha_terminal.core.fingerprints import fingerprint
+from personal_alpha_terminal.intelligence.factor_registry import (
+    CrossSectionalEventFactorEngine,
+    default_llm_factor_registry,
+)
+from personal_alpha_terminal.intelligence.storage import IntelligenceRepository
 from personal_alpha_terminal.models import Portfolio
 from personal_alpha_terminal.terminal.market_sessions import (
     MarketSession,
@@ -51,6 +61,7 @@ _STAGE_ORDER = (
     "CALENDAR",
     "DATA",
     "PIT",
+    "LLM_INTELLIGENCE",
     "FEATURE",
     "FACTOR",
     "SIGNAL",
@@ -84,9 +95,7 @@ class DailyQuantOrchestrator:
             effective_config = effective_config_from_settings(effective_config)
         self._effective_config = effective_config
         self._settings = effective_config.settings
-        self._snapshot_root = snapshot_root or (
-            effective_config.report_dir / "daily-runs"
-        )
+        self._snapshot_root = snapshot_root or (effective_config.report_dir / "daily-runs")
         self._sync_runner = sync_runner
         self._calendar = MarketSessionCalendar(
             nasdaq_23h_enabled=effective_config.nasdaq_23h_enabled,
@@ -160,15 +169,12 @@ class DailyQuantOrchestrator:
                 )
                 if refresh:
                     sync = data_service.sync_market_data(
-                        start_date=data_service.refresh_start_date(
-                            analysis_date=analysis_date
-                        ),
+                        start_date=data_service.refresh_start_date(analysis_date=analysis_date),
                         end_date=analysis_date,
                     )
                     if sync.status == "BLOCKED":
                         data_failure_reasons.append(
-                            "required provider refresh failed: "
-                            + ", ".join(sync.failed_symbols)
+                            "required provider refresh failed: " + ", ".join(sync.failed_symbols)
                         )
                     if sync.status != "CERTIFIED":
                         warnings.append(f"market refresh completed as {sync.status}")
@@ -232,7 +238,7 @@ class DailyQuantOrchestrator:
                     "output_row_count": certification.valid_bars,
                 },
             )
-        except (OSError, RuntimeError, ValueError) as error:
+        except (OSError, RuntimeError, SQLAlchemyError, ValueError) as error:
             blockers.append(str(error))
             if portfolio_issue is not None:
                 blockers.append(portfolio_issue)
@@ -279,6 +285,15 @@ class DailyQuantOrchestrator:
             )
         quant_duration = perf_counter() - stage_started
         self._merge_quant_stages(stages, workflow_result, quant_duration)
+        stage_started = perf_counter()
+        self._add_llm_intelligence_stage(
+            stages,
+            as_of=effective_decision_time,
+            duration_started=stage_started,
+            warnings=warnings,
+            run_id=run_id,
+            eligible_symbols=tuple(item.symbol for item in workflow_result.factors),
+        )
         blockers.extend(workflow_result.blockers)
         warnings.extend(workflow_result.warnings)
         for name in _STAGE_ORDER:
@@ -305,6 +320,160 @@ class DailyQuantOrchestrator:
             warnings=tuple(dict.fromkeys(warnings)),
         )
         return self._persist_result(result)
+
+    def _add_llm_intelligence_stage(
+        self,
+        stages: dict[str, StageResult],
+        *,
+        as_of: datetime,
+        duration_started: float,
+        warnings: list[str],
+        run_id: str,
+        eligible_symbols: tuple[str, ...],
+    ) -> None:
+        provider, model, configured = self._configured_llm_identity()
+        if not configured:
+            stages["LLM_INTELLIGENCE"] = StageResult(
+                "LLM_INTELLIGENCE",
+                StageStatus.OPTIONAL_UNAVAILABLE,
+                perf_counter() - duration_started,
+                (
+                    "LLM provider is disabled or has no inherited credential; "
+                    "classical Quant Core continues"
+                ),
+                {
+                    "provider": provider,
+                    "model": model,
+                    "processed_documents": 0,
+                    "detected_events": 0,
+                    "factor_status": "SHADOW",
+                    "production_influence": False,
+                    "output_row_count": 0,
+                },
+            )
+            return
+        try:
+            with self._factory.begin() as session:
+                status = IntelligenceApplicationService(session).status(as_of=as_of)
+                events = (
+                    IntelligenceRepository(session).visible_events(as_of)
+                    if self._metadata_count(status, "canonical_event_count")
+                    else ()
+                )
+                observations = (
+                    CrossSectionalEventFactorEngine(
+                        default_llm_factor_registry(model_version=model)
+                    ).build(
+                        events,
+                        as_of=as_of,
+                        eligible_symbols=eligible_symbols,
+                    )
+                    if events
+                    else ()
+                )
+                if observations:
+                    payload: dict[str, object] = {
+                        "run_id": run_id,
+                        "as_of": as_of.isoformat(),
+                        "status": "SHADOW",
+                        "production_influence": False,
+                        "observations": [
+                            {
+                                "symbol": item.symbol,
+                                "factor_name": item.factor_name,
+                                "raw_value": item.raw_value,
+                                "normalized_value": item.normalized_value,
+                                "extraction_confidence": item.extraction_confidence,
+                                "statistical_probability": item.statistical_probability,
+                                "event_ids": item.event_ids,
+                                "observation_hash": item.observation_hash,
+                            }
+                            for item in observations
+                        ],
+                    }
+                    IntelligenceRepository(session).add_result(
+                        result_id=fingerprint(payload),
+                        result_type="LLM_SHADOW_FACTOR_SNAPSHOT",
+                        schema_version="llm-shadow-factor-v1",
+                        model_version=model,
+                        prompt_version="event-extraction-v2",
+                        data_cutoff=as_of,
+                        status="SHADOW",
+                        payload=payload,
+                    )
+            event_count = self._metadata_count(status, "canonical_event_count")
+            raw_count = self._metadata_count(status, "raw_information_count")
+            cache_count = self._metadata_count(status, "cache_entry_count")
+            message = (
+                "PIT-safe structured intelligence loaded in SHADOW mode"
+                if event_count
+                else "provider ready; no certified PIT text is available for this cutoff"
+            )
+            stages["LLM_INTELLIGENCE"] = StageResult(
+                "LLM_INTELLIGENCE",
+                StageStatus.PASS_DEGRADED,
+                perf_counter() - duration_started,
+                message,
+                {
+                    "provider": provider,
+                    "model": model,
+                    "processed_documents": raw_count,
+                    "detected_events": event_count,
+                    "shadow_factor_observations": len(observations),
+                    "cache_entry_count": cache_count,
+                    "factor_status": "SHADOW",
+                    "production_influence": False,
+                    "fallback": "CLASSICAL_CHAMPION",
+                    "fallback_reason": (
+                        "LLM_FACTORS_NOT_PRODUCTION_APPROVED"
+                        if event_count
+                        else "CERTIFIED_PIT_TEXT_UNAVAILABLE"
+                    ),
+                    "output_row_count": event_count,
+                },
+            )
+            warnings.append(
+                "LLM intelligence is SHADOW-only and cannot change production recommendations"
+            )
+        except (OSError, RuntimeError, SQLAlchemyError, ValueError) as error:
+            stages["LLM_INTELLIGENCE"] = StageResult(
+                "LLM_INTELLIGENCE",
+                StageStatus.OPTIONAL_UNAVAILABLE,
+                perf_counter() - duration_started,
+                (
+                    f"LLM intelligence unavailable ({type(error).__name__}); "
+                    "classical Quant Core continues"
+                ),
+                {
+                    "provider": provider,
+                    "model": model,
+                    "factor_status": "UNAVAILABLE",
+                    "production_influence": False,
+                    "fallback": "CLASSICAL_CHAMPION",
+                    "fallback_reason": "LLM_INTELLIGENCE_UNAVAILABLE",
+                    "output_row_count": 0,
+                },
+            )
+
+    def _configured_llm_identity(self) -> tuple[str, str, bool]:
+        selected = self._settings.llm_provider
+        if selected == "deepseek":
+            return "deepseek", self._settings.deepseek_model, bool(self._settings.deepseek_api_key)
+        if selected == "openai":
+            return "openai", self._settings.openai_model, bool(self._settings.openai_api_key)
+        if selected == "anthropic":
+            return (
+                "anthropic",
+                self._settings.anthropic_model,
+                bool(self._settings.anthropic_api_key),
+            )
+        if selected == "custom":
+            return "custom", self._settings.custom_model, bool(self._settings.custom_api_key)
+        if selected == "auto" and self._settings.deepseek_api_key:
+            return "deepseek", self._settings.deepseek_model, True
+        if selected == "mock":
+            return "mock", "deterministic-grounded-mock-v1", False
+        return selected, "NOT_CONFIGURED", False
 
     def _resolve_portfolio(self, requested: int | None) -> int | None:
         if requested is None:
@@ -438,34 +607,25 @@ class DailyQuantOrchestrator:
                     "approved calibrated residual overlay active"
                     if workflow.probability_overlay_active
                     else (
-                        "deterministic base alpha unchanged; "
-                        f"{workflow.probability_overlay_reason}"
+                        f"deterministic base alpha unchanged; {workflow.probability_overlay_reason}"
                     )
                 ),
                 {
                     "overlay_active": workflow.probability_overlay_active,
                     "overlay_state": workflow.probability_overlay_state,
                     "fallback_reason": workflow.probability_overlay_reason,
-                    "position_influence": (
-                        1.0 if workflow.probability_overlay_active else 0.0
-                    ),
+                    "position_influence": (1.0 if workflow.probability_overlay_active else 0.0),
                     "output_row_count": len(workflow.probability_overlay_effects),
                 },
             ),
         )
         first_quant = next(
-            (
-                name
-                for name in _STAGE_ORDER
-                if name in stages and name != "CALENDAR"
-            ),
+            (name for name in _STAGE_ORDER if name in stages and name != "CALENDAR"),
             None,
         )
         if first_quant is not None:
             stage_result = stages[first_quant]
-            stages[first_quant] = replace(
-                stage_result, duration_seconds=duration
-            )
+            stages[first_quant] = replace(stage_result, duration_seconds=duration)
 
     def _build_result(
         self,
@@ -545,22 +705,12 @@ class DailyQuantOrchestrator:
         )
         target_weights = workflow.target.target_weights if workflow.target else {}
         current = workflow.current_weights or {}
-        input_positions = {
-            item.symbol: item for item in workflow.portfolio_positions
-        }
+        input_positions = {item.symbol: item for item in workflow.portfolio_positions}
         positions = tuple(
             PortfolioPositionRow(
                 symbol,
-                (
-                    input_positions[symbol].quantity
-                    if symbol in input_positions
-                    else None
-                ),
-                (
-                    input_positions[symbol].reference_price
-                    if symbol in input_positions
-                    else None
-                ),
+                (input_positions[symbol].quantity if symbol in input_positions else None),
+                (input_positions[symbol].reference_price if symbol in input_positions else None),
                 current.get(symbol, 0.0),
                 target_weights.get(symbol) if workflow.target else None,
                 (
@@ -599,11 +749,7 @@ class DailyQuantOrchestrator:
             None,
             max(target.target_weights.values(), default=0.0) if target else None,
             target.risk_reductions if target else tuple(blockers),
-            (
-                workflow.risk_state.average_correlation
-                if workflow.risk_state is not None
-                else None
-            ),
+            (workflow.risk_state.average_correlation if workflow.risk_state is not None else None),
             (
                 workflow.risk_state.baseline_average_correlation
                 if workflow.risk_state is not None
@@ -666,20 +812,16 @@ class DailyQuantOrchestrator:
             for item in workflow.recommendations
         )
         rejected = [
-            RejectedSignalRow("ALL", self._failed_stage(stages), reason)
-            for reason in blockers
+            RejectedSignalRow("ALL", self._failed_stage(stages), reason) for reason in blockers
         ]
         if target is not None:
             rejected.extend(
-                RejectedSignalRow("PORTFOLIO", "RISK", reason)
-                for reason in target.risk_reductions
+                RejectedSignalRow("PORTFOLIO", "RISK", reason) for reason in target.risk_reductions
             )
         execution = self._execution_plan(workflow, decisions, actionable)
         benchmarks = self._benchmarks(workflow)
         pit_status = (
-            StageStatus.PASS
-            if workflow.data_certification == "APPROVED"
-            else StageStatus.FAIL
+            StageStatus.PASS if workflow.data_certification == "APPROVED" else StageStatus.FAIL
         )
         strategy_data_health = (
             *data_health,
@@ -687,11 +829,7 @@ class DailyQuantOrchestrator:
                 "POINT_IN_TIME_TOTAL_RETURN",
                 analysis_date,
                 data_cutoff.date() if data_cutoff else None,
-                (
-                    (analysis_date - data_cutoff.date()).days
-                    if data_cutoff
-                    else None
-                ),
+                ((analysis_date - data_cutoff.date()).days if data_cutoff else None),
                 None,
                 None,
                 ",".join(workflow.source_ids) or "UNAVAILABLE",
@@ -745,7 +883,7 @@ class DailyQuantOrchestrator:
             market_structure,
             data_cutoff,
             DecisionReadiness.READY if actionable else DecisionReadiness.NOT_ACTIONABLE,
-            "OPTIONAL/OFFLINE" if self._settings.llm_provider == "disabled" else "OPTIONAL",
+            self._llm_status(stages),
             self._ordered_stages(stages),
             strategy_data_health,
             workflow.risk_regime,
@@ -774,12 +912,8 @@ class DailyQuantOrchestrator:
                 "strategy_version": workflow.strategy_version,
                 "factor_version": workflow.strategy_version,
                 "signal_version": workflow.strategy_version,
-                "production_approval_artifact_id": (
-                    workflow.production_approval_artifact_id
-                ),
-                "portfolio_validation_artifact_id": (
-                    workflow.portfolio_validation_artifact_id
-                ),
+                "production_approval_artifact_id": (workflow.production_approval_artifact_id),
+                "portfolio_validation_artifact_id": (workflow.portfolio_validation_artifact_id),
                 "probability_artifact_id": workflow.probability_artifact_id,
                 "portfolio_id": self._effective_config.portfolio_id or "UNSELECTED",
                 "portfolio_snapshot_id": workflow.portfolio_snapshot_id,
@@ -806,9 +940,7 @@ class DailyQuantOrchestrator:
                         {
                             "symbol": item.symbol,
                             "condition_id": item.condition_id,
-                            "base_expected_excess_return": (
-                                item.base_expected_excess_return
-                            ),
+                            "base_expected_excess_return": (item.base_expected_excess_return),
                             "probability_adjustment": item.probability_adjustment,
                             "adjusted_expected_excess_return": (
                                 item.adjusted_expected_excess_return
@@ -897,13 +1029,9 @@ class DailyQuantOrchestrator:
             traces[factor.symbol] = {
                 "data_quality": decision.data_quality if decision else "NOT_CAPTURED",
                 "factor_raw_values": factor.raw_values or "NOT_CAPTURED",
-                "factor_winsorized_values": (
-                    factor.winsorized_values or "NOT_CAPTURED"
-                ),
+                "factor_winsorized_values": (factor.winsorized_values or "NOT_CAPTURED"),
                 "factor_normalized_values": "NOT_CAPTURED",
-                "factor_neutralized_values": (
-                    factor.neutralized_values or factor.components
-                ),
+                "factor_neutralized_values": (factor.neutralized_values or factor.components),
                 "cross_sectional_rank": factor.rank,
                 "composite_alpha": factor.composite,
                 "expected_alpha": factor.expected_alpha,
@@ -975,10 +1103,7 @@ class DailyQuantOrchestrator:
                     evidence.observation_count,
                     evidence.period_return,
                     evidence.annualized_volatility,
-                    (
-                        "Same PIT return dataset and cutoff as the strategy; "
-                        "Nasdaq-100 proxy."
-                    ),
+                    ("Same PIT return dataset and cutoff as the strategy; Nasdaq-100 proxy."),
                     start_date=evidence.start_date,
                     end_date=evidence.end_date,
                     max_drawdown=evidence.max_drawdown,
@@ -1026,20 +1151,14 @@ class DailyQuantOrchestrator:
             for index, item in enumerate(ordered, start=1)
         )
         proceeds = sum(
-            item.estimated_value
-            for item in ordered
-            if item.action in {"SELL", "REDUCE"}
+            item.estimated_value for item in ordered if item.action in {"SELL", "REDUCE"}
         )
         buys = sum(
-            item.estimated_value
-            for item in ordered
-            if item.action in {"BUY", "ADD", "INCREASE"}
+            item.estimated_value for item in ordered if item.action in {"BUY", "ADD", "INCREASE"}
         )
         costs = sum(item.estimated_cost for item in ordered)
         cash_before = workflow.cash_balance
-        cash_after = (
-            cash_before + proceeds - buys - costs if cash_before is not None else None
-        )
+        cash_after = cash_before + proceeds - buys - costs if cash_before is not None else None
         return ExecutionPlan(
             "READY" if legs else "NO_ACTION",
             True,
@@ -1082,9 +1201,12 @@ class DailyQuantOrchestrator:
                 final_decisions=(),
                 execution_plan=replace(result.execution_plan, status="BLOCKED", legs=()),
                 blockers=(*result.blockers, blocker),
-                stages=(*result.stages, StageResult(
-                    "PERSISTENCE", StageStatus.FAIL, perf_counter() - started, blocker, {}
-                )),
+                stages=(
+                    *result.stages,
+                    StageResult(
+                        "PERSISTENCE", StageStatus.FAIL, perf_counter() - started, blocker, {}
+                    ),
+                ),
                 finished_at=datetime.now(UTC),
             )
 
@@ -1126,17 +1248,30 @@ class DailyQuantOrchestrator:
             market_structure,
             self._blocked_data_cutoff(stages),
             DecisionReadiness.NOT_ACTIONABLE,
-            "OPTIONAL/OFFLINE" if self._settings.llm_provider == "disabled" else "OPTIONAL",
+            self._llm_status(stages),
             self._ordered_stages(stages),
             data_health,
             "UNAVAILABLE",
             "quant stages did not reach a calibrated regime input",
             (),
-            (ProbabilityRow(
-                "Validated conditional overlay", "base alpha confidence / position cap", 0,
-                None, None, None, None, None, None, None, None,
-                "INSUFFICIENT EVIDENCE", "NOT CALIBRATED OOS", "NOT_RUN"
-            ),),
+            (
+                ProbabilityRow(
+                    "Validated conditional overlay",
+                    "base alpha confidence / position cap",
+                    0,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    "INSUFFICIENT EVIDENCE",
+                    "NOT CALIBRATED OOS",
+                    "NOT_RUN",
+                ),
+            ),
             (),
             PortfolioSummary(
                 (
@@ -1167,11 +1302,7 @@ class DailyQuantOrchestrator:
             tuple(
                 RejectedSignalRow(
                     "ALL",
-                    (
-                        "PORTFOLIO"
-                        if item.startswith("PORTFOLIO ")
-                        else self._failed_stage(stages)
-                    ),
+                    ("PORTFOLIO" if item.startswith("PORTFOLIO ") else self._failed_stage(stages)),
                     item,
                 )
                 for item in blockers
@@ -1243,9 +1374,7 @@ class DailyQuantOrchestrator:
         reason: str,
         stages: dict[str, StageResult],
     ) -> DailyQuantResult:
-        stages[failed_stage] = StageResult(
-            failed_stage, StageStatus.FAIL, 0.0, reason, {}
-        )
+        stages[failed_stage] = StageResult(failed_stage, StageStatus.FAIL, 0.0, reason, {})
         return self._finalize_blocked(
             run_id,
             started_at,
@@ -1263,6 +1392,21 @@ class DailyQuantOrchestrator:
     @staticmethod
     def _ordered_stages(stages: dict[str, StageResult]) -> tuple[StageResult, ...]:
         return tuple(stages[name] for name in _STAGE_ORDER if name in stages)
+
+    @staticmethod
+    def _llm_status(stages: dict[str, StageResult]) -> str:
+        stage = stages.get("LLM_INTELLIGENCE")
+        if stage is None:
+            return "OPTIONAL_UNAVAILABLE"
+        provider = str(stage.metadata.get("provider", "UNAVAILABLE"))
+        model = str(stage.metadata.get("model", "UNAVAILABLE"))
+        factor_status = str(stage.metadata.get("factor_status", "UNAVAILABLE"))
+        return f"{stage.status.value}/{factor_status}/{provider}/{model}"
+
+    @staticmethod
+    def _metadata_count(payload: dict[str, object], key: str) -> int:
+        value = payload.get(key, 0)
+        return value if isinstance(value, int) and not isinstance(value, bool) else 0
 
     @staticmethod
     def _missing_ratio(manifest: object | None) -> float | None:

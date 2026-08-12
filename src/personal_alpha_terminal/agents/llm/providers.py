@@ -21,6 +21,10 @@ class LLMProvider(Protocol):
 class LLMProviderError(RuntimeError):
     """Raised when a configured external provider cannot return a valid response."""
 
+    def __init__(self, message: str, *, category: str = "PROVIDER_UNAVAILABLE") -> None:
+        super().__init__(message)
+        self.category = category
+
 
 class DisabledProvider:
     name = "disabled"
@@ -66,7 +70,7 @@ class MockProvider:
             "request_echo": asdict(request),
         }
         return LLMResponse(
-            content=json.dumps(payload, ensure_ascii=False, sort_keys=True),
+            content=json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str),
             provider=self.name,
             model=self.model,
             is_mock=True,
@@ -143,28 +147,47 @@ class DeepSeekProvider:
         )
 
     def generate(self, request: LLMRequest) -> LLMResponse:
+        started = time.perf_counter()
         try:
-            response = self._client.chat.completions.create(
-                model=self.model,
-                messages=[
+            kwargs: dict[str, object] = {
+                "model": self.model,
+                "messages": [
                     {"role": "system", "content": request.system_prompt},
                     {"role": "user", "content": request.user_prompt},
                 ],
-                temperature=request.temperature,
-                response_format={"type": "json_object"},
-                stream=False,
+                "temperature": request.temperature,
+                "response_format": {"type": "json_object"},
+                "max_tokens": request.max_tokens,
+                "stream": False,
+                "extra_body": {"thinking": {"type": request.thinking}},
+            }
+            if request.reasoning_effort is not None:
+                kwargs["reasoning_effort"] = request.reasoning_effort
+            response = self._client.chat.completions.create(
+                **kwargs,
             )
             content = response.choices[0].message.content
         except Exception as error:
-            raise LLMProviderError(f"DeepSeek request failed: {type(error).__name__}") from error
+            name = type(error).__name__
+            category = _provider_error_category(error)
+            raise LLMProviderError(f"DeepSeek request failed: {name}", category=category) from error
         if not isinstance(content, str) or not content.strip():
             raise LLMProviderError("DeepSeek returned empty output")
+        usage = getattr(response, "usage", None)
+        prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+        completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+        details = getattr(usage, "prompt_tokens_details", None)
+        cached_tokens = int(getattr(details, "cached_tokens", 0) or 0)
         return LLMResponse(
             content=content.strip(),
             provider=self.name,
             model=self.model,
             is_mock=False,
             request_id=cast(str | None, getattr(response, "id", None)),
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            cached_tokens=cached_tokens,
+            latency_ms=max(0, round((time.perf_counter() - started) * 1000)),
         )
 
 
@@ -242,9 +265,7 @@ class AnthropicProvider:
         response_payload: object = {}
         for attempt in range(self._max_retries + 1):
             try:
-                with self._http_open(
-                    http_request, timeout=self._timeout_seconds
-                ) as response:
+                with self._http_open(http_request, timeout=self._timeout_seconds) as response:
                     response_payload = json.loads(response.read().decode("utf-8"))
                 break
             except (
@@ -304,3 +325,21 @@ def _openai_client(
         timeout=timeout_seconds,
         max_retries=max_retries,
     )
+
+
+def _provider_error_category(error: Exception) -> str:
+    """Classify provider failures without serializing request headers or secrets."""
+
+    name = type(error).__name__.lower()
+    status = getattr(error, "status_code", None)
+    if status in {401, 403} or "authentication" in name or "permission" in name:
+        return "AUTHENTICATION_FAILED"
+    if status == 429 or "ratelimit" in name:
+        return "RATE_LIMITED"
+    if status == 402 or "quota" in name:
+        return "QUOTA_EXCEEDED"
+    if "timeout" in name:
+        return "TIMEOUT"
+    if status is not None and int(status) >= 500:
+        return "PROVIDER_UNAVAILABLE"
+    return "REQUEST_FAILED"

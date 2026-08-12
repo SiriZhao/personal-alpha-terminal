@@ -18,7 +18,7 @@ def build_llm_provider(settings: Settings) -> LLMProvider:
         return MockProvider(fallback_reason="mock mode explicitly selected")
     if selected == "openai":
         if not settings.openai_api_key:
-            return MockProvider(fallback_reason="OPENAI_API_KEY is not configured")
+            return DisabledProvider()
         return OpenAIProvider(
             api_key=settings.openai_api_key,
             model=settings.openai_model,
@@ -27,7 +27,7 @@ def build_llm_provider(settings: Settings) -> LLMProvider:
         )
     if selected == "deepseek":
         if not settings.deepseek_api_key:
-            return MockProvider(fallback_reason="DEEPSEEK_API_KEY is not configured")
+            return DisabledProvider()
         return DeepSeekProvider(
             api_key=settings.deepseek_api_key,
             model=settings.deepseek_model,
@@ -37,7 +37,7 @@ def build_llm_provider(settings: Settings) -> LLMProvider:
         )
     if selected == "anthropic":
         if not settings.anthropic_api_key:
-            return MockProvider(fallback_reason="ANTHROPIC_API_KEY is not configured")
+            return DisabledProvider()
         return AnthropicProvider(
             api_key=settings.anthropic_api_key,
             model=settings.anthropic_model,
@@ -47,7 +47,7 @@ def build_llm_provider(settings: Settings) -> LLMProvider:
         )
     if selected == "custom":
         if not settings.custom_api_key:
-            return MockProvider(fallback_reason="CUSTOM_API_KEY is not configured")
+            return DisabledProvider()
         return CustomOpenAICompatibleProvider(
             api_key=settings.custom_api_key,
             model=settings.custom_model,
@@ -78,4 +78,4 @@ def build_llm_provider(settings: Settings) -> LLMProvider:
             max_retries=settings.llm_max_retries,
             base_url=settings.anthropic_base_url,
         )
-    return MockProvider(fallback_reason="no external LLM API key is configured")
+    return DisabledProvider()

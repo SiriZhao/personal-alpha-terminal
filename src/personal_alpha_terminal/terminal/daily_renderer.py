@@ -40,6 +40,7 @@ def render_daily_quant_result(
         _portfolio(result, console)
         _benchmark(result, console)
         _market(result, console)
+        _ai_intelligence(result, console)
         _data_certification(result, console)
         _pit_universe(result, console)
         _data_health(result, console)
@@ -64,6 +65,47 @@ def capture_daily_quant_result(
     console = Console(file=stream, width=width, color_system=None, force_terminal=False)
     render_daily_quant_result(result, console, locale=locale)
     return stream.getvalue()
+
+
+def _ai_intelligence(result: DailyQuantResult, console: Console) -> None:
+    stage = next(
+        (item for item in result.stages if item.name == "LLM_INTELLIGENCE"),
+        None,
+    )
+    if stage is None:
+        return
+    metadata = stage.metadata
+    table = Table(show_header=False, box=None, pad_edge=False)
+    table.add_column(style="bold cyan")
+    table.add_column()
+    rows = (
+        (_t("状态", "Status"), _status_text(stage.status)),
+        (
+            _t("Provider / 模型", "Provider / model"),
+            f"{metadata.get('provider', '--')} / {metadata.get('model', '--')}",
+        ),
+        (_t("已处理文档", "Processed documents"), str(metadata.get("processed_documents", 0))),
+        (_t("PIT 事件", "PIT events"), str(metadata.get("detected_events", 0))),
+        (
+            _t("SHADOW 因子观测", "SHADOW factor observations"),
+            str(metadata.get("shadow_factor_observations", 0)),
+        ),
+        (_t("因子状态", "Factor status"), str(metadata.get("factor_status", "UNAVAILABLE"))),
+        (
+            _t("生产影响", "Production influence"),
+            _t("否", "NO") if not metadata.get("production_influence") else _t("是", "YES"),
+        ),
+        (_t("安全回退", "Safe fallback"), str(metadata.get("fallback", "CLASSICAL_CHAMPION"))),
+    )
+    for label, value in rows:
+        table.add_row(label, value)
+    console.print(
+        Panel(
+            table,
+            title=_t("【AI 情报（SHADOW）】", "AI INTELLIGENCE (SHADOW)"),
+            border_style="yellow",
+        )
+    )
 
 
 def _layered_status(result: DailyQuantResult) -> str:
@@ -852,17 +894,14 @@ def _benchmark(result: DailyQuantResult, console: Console) -> None:
         )
     console.print(table)
     comparable = [
-        abs(item.period_return)
-        for item in result.benchmarks
-        if item.period_return is not None
+        abs(item.period_return) for item in result.benchmarks if item.period_return is not None
     ]
     scale = max(comparable, default=0.0)
     for item in result.benchmarks:
         if item.period_return is not None:
             normalized = abs(item.period_return) / scale if scale > 0 else 0.0
             console.print(
-                f"{item.name:10} {_bar(normalized, 16)} "
-                f"{_signed_percent(item.period_return)}"
+                f"{item.name:10} {_bar(normalized, 16)} {_signed_percent(item.period_return)}"
             )
     cost = result.provenance.get("transaction_cost_assumption")
     if isinstance(cost, str) and cost:

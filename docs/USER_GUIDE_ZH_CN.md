@@ -1116,23 +1116,20 @@ LLM provider 由环境变量 `PAT_LLM_PROVIDER` 控制，默认 `disabled`。
 **绝对不要把 API Key 写进 Git 或 config.yaml。** 只通过环境变量提供：
 
 ```powershell
-# PowerShell（当前会话）
-$env:PAT_LLM_PROVIDER = "openai"
-$env:OPENAI_API_KEY = "sk-..."
+# PowerShell（当前会话；密钥值不写入文件或聊天）
+$env:PAT_LLM_PROVIDER = "deepseek"
+# DEEPSEEK_API_KEY 必须由启动该进程的操作系统环境预先继承
 PersonalAlphaTerminal.exe daily
 
 # CMD
-set PAT_LLM_PROVIDER=openai
-set OPENAI_API_KEY=sk-...
+set PAT_LLM_PROVIDER=deepseek
+rem DEEPSEEK_API_KEY 必须由启动该进程的操作系统环境预先继承
 ```
 
-也可以把 `.env.example` 复制为 `.env` 并填写（`.env` 已在
-`.gitignore`，不会进版本库）。
-
-支持的密钥环境变量（见 `.env.example`）：
-`OPENAI_API_KEY`、`DEEPSEEK_API_KEY`、`ANTHROPIC_API_KEY`、`CUSTOM_API_KEY`。
-对应模型：`PAT_OPENAI_MODEL`、`PAT_DEEPSEEK_MODEL`、
-`PAT_ANTHROPIC_MODEL`、`PAT_CUSTOM_MODEL`（以及 base URL）。
+当前真实 Provider 只从操作系统/进程环境读取 `DEEPSEEK_API_KEY`；不要把
+密钥写入 `.env`、配置模板、日志或报告。Provider 抽象仍可在未来扩展，
+但当前运行不创建、也不要求其他 Provider 的密钥。模型与 Base URL 使用
+`PAT_DEEPSEEK_MODEL`、`PAT_DEEPSEEK_BASE_URL` 等非秘密配置。
 
 ### 17.4 配置错误 / API 不可用怎么办
 
@@ -1217,7 +1214,6 @@ set OPENAI_API_KEY=sk-...
 > **免责声明**：本软件是研究与决策支持工具，不构成投资建议。
 > 历史表现不保证未来收益。示例中的所有数字仅为格式演示，
 > 不代表任何买卖建议。交易决策与风险由使用者自行承担。
-
 
 
 

@@ -1,0 +1,29 @@
+{
+  "as_of": "2026-08-12",
+  "champion_challenger_status": "NOT_CERTIFIABLE",
+  "deepseek_connectivity": {
+    "completion_tokens": 5,
+    "estimated_cost_usd": 0.00000742,
+    "latency_ms": 10708,
+    "model": "deepseek-v4-flash",
+    "prompt_tokens": 43,
+    "provider": "deepseek",
+    "request_hash_present": true,
+    "response_hash_present": true,
+    "structured_validation": "VALID"
+  },
+  "historical_market_data": "NOT_CERTIFIABLE",
+  "historical_text_data": "NOT_CERTIFIABLE",
+  "llm_factors": [
+    {
+      "factor_name": "llm_event_intensity",
+      "model_version": "deepseek-v4-flash",
+      "production_influence": false,
+      "prompt_version": "event-extraction-v2",
+      "status": "SHADOW"
+    }
+  ],
+  "locked_oos": "NOT_OPENED",
+  "production_promotions": 0,
+  "schema_version": "ai-native-quant-certification-v1"
+}

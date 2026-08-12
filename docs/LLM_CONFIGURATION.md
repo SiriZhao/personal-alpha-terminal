@@ -10,17 +10,19 @@ LLM support is disabled by default and is never required for data, factors, alph
 - Custom HTTPS OpenAI-compatible endpoint
 - Disabled (recommended until explanation output is needed)
 
-Credential environment variables are `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, `ANTHROPIC_API_KEY`, and `CUSTOM_API_KEY`. Prefer Windows Credential Manager through the project credential helper. Never put keys in source code, Git, logs, screenshots, diagnostic bundles, ordinary backups, or the release directory.
+The current real provider is DeepSeek. Its credential is read only from the inherited
+`DEEPSEEK_API_KEY` operating-system/process environment. Do not put the value in an
+`.env` file, source code, Git, logs, screenshots, diagnostic bundles, ordinary
+backups, or the release directory. Other provider adapters remain extensibility
+points; this project does not create or request their credentials for the current
+deployment.
 
 Relevant settings include:
 
 ```text
-PAT_LLM_PROVIDER=disabled|openai|deepseek|anthropic|custom
-PAT_OPENAI_MODEL=<model>
+PAT_LLM_PROVIDER=disabled|deepseek
 PAT_DEEPSEEK_MODEL=<model>
-PAT_ANTHROPIC_MODEL=<model>
-PAT_CUSTOM_MODEL=<model>
-PAT_CUSTOM_BASE_URL=https://example.com/v1
+PAT_DEEPSEEK_BASE_URL=https://api.deepseek.com
 PAT_LLM_TIMEOUT_SECONDS=60
 PAT_LLM_MAX_RETRIES=2
 ```

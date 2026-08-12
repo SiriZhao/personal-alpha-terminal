@@ -1,5 +1,40 @@
 # Personal Alpha Terminal
 
+## AI-native quant intelligence (DeepSeek)
+
+The current external LLM provider is DeepSeek through its OpenAI-compatible API.
+Set `DEEPSEEK_API_KEY` only in the operating-system or process environment and set
+`PAT_LLM_PROVIDER=deepseek`; the repository never stores or logs the credential.
+The default structured-extraction model is `deepseek-v4-flash`, while
+`deepseek-v4-pro` is registered for explicitly routed high-value reasoning tasks.
+Model, base URL, timeout, retry, thinking mode, reasoning effort and feature flags
+are configuration values rather than business-logic constants.
+
+The daily chain now records an `LLM_INTELLIGENCE` stage between PIT evidence and
+the downstream displayed factor chain. Structured event extraction is schema
+validated, prompt/model versioned, content-hash cached and auditable by request and
+response hashes, document IDs, cutoff, tokens, latency and estimated cost. External
+documents are untrusted data: instructions inside filings, transcripts or news can
+never alter the system prompt or create a trade.
+
+LLM event intelligence is currently `SHADOW`. It may create PIT-safe research
+features and challenger evidence, but it has zero production contribution and
+cannot modify Alpha, statistical probability, target weights or recommendations.
+The classical Quant Core remains the safe fallback whenever DeepSeek, a schema, a
+budget, or certified text data is unavailable. Promotion requires certified market
+and historical text data, 252+ locked-OOS sessions, calibration, ablation and
+after-cost incremental alpha. Current historical data remains `NOT_CERTIFIABLE`, so
+no LLM factor is `PRODUCTION_APPROVED`.
+
+Install the declared provider client with:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e ".[ai]"
+```
+
+No LLM selects securities, invents a probability, changes risk limits, confirms a
+trade or sends an order. Explanations may only restate structured Quant evidence.
+
 个人使用、中低频、美股、long-only、每日运行一次的专业量化决策终端。系统只生成经门禁批准的操作建议和外部券商手工执行计划，不连接券商自动下单，不使用 AI/LLM 选股，也不构成投资建议。
 
 ## 唯一正式流程

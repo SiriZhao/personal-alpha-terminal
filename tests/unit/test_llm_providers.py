@@ -9,7 +9,9 @@ from personal_alpha_terminal.agents.llm import (
     AnthropicProvider,
     CustomOpenAICompatibleProvider,
     DeepSeekProvider,
+    DisabledProvider,
     EvidenceItem,
+    LLMProviderError,
     LLMRequest,
     LLMResponse,
     MockProvider,
@@ -28,7 +30,7 @@ def request() -> LLMRequest:
     )
 
 
-def test_factory_uses_mock_when_no_key_is_configured() -> None:
+def test_factory_disables_external_ai_when_no_key_is_configured() -> None:
     provider = build_llm_provider(
         Settings(
             _env_file=None,
@@ -38,23 +40,19 @@ def test_factory_uses_mock_when_no_key_is_configured() -> None:
         )
     )
 
-    response = provider.generate(request())
-
-    assert isinstance(provider, MockProvider)
-    assert response.is_mock
-    assert response.fallback_reason == "no external LLM API key is configured"
-    assert json.loads(response.content)["risk_factors"]
+    assert isinstance(provider, DisabledProvider)
+    with pytest.raises(LLMProviderError, match="disabled"):
+        provider.generate(request())
 
 
-def test_explicit_provider_without_key_falls_back_to_mock() -> None:
+def test_explicit_provider_without_key_is_disabled_not_mocked() -> None:
     provider = build_llm_provider(
         Settings(_env_file=None, llm_provider="deepseek", deepseek_api_key=None)
     )
 
-    response = provider.generate(request())
-
-    assert response.provider == "mock"
-    assert response.fallback_reason == "DEEPSEEK_API_KEY is not configured"
+    assert isinstance(provider, DisabledProvider)
+    with pytest.raises(LLMProviderError, match="disabled"):
+        provider.generate(request())
 
 
 def test_openai_provider_uses_responses_api_without_storage() -> None:
@@ -108,6 +106,43 @@ def test_deepseek_provider_uses_openai_compatible_json_chat() -> None:
     assert response.content == '{"ok": true}'
     assert calls[0]["response_format"] == {"type": "json_object"}
     assert calls[0]["stream"] is False
+
+
+@pytest.mark.parametrize(
+    ("error", "category"),
+    [
+        (TimeoutError("deadline"), "TIMEOUT"),
+        (
+            type("RateLimitError", (RuntimeError,), {"status_code": 429})("slow down"),
+            "RATE_LIMITED",
+        ),
+        (
+            type("ProviderError", (RuntimeError,), {"status_code": 503})("offline"),
+            "PROVIDER_UNAVAILABLE",
+        ),
+    ],
+)
+def test_deepseek_provider_classifies_failures_without_exposing_credentials(
+    error: Exception, category: str
+) -> None:
+    class Completions:
+        @staticmethod
+        def create(**_kwargs: Any) -> SimpleNamespace:
+            raise error
+
+    provider = DeepSeekProvider(
+        api_key="test-only",
+        model="deepseek-v4-flash",
+        timeout_seconds=10,
+        max_retries=0,
+        client=SimpleNamespace(chat=SimpleNamespace(completions=Completions())),
+    )
+
+    with pytest.raises(LLMProviderError) as raised:
+        provider.generate(request())
+
+    assert raised.value.category == category
+    assert "test-only" not in str(raised.value)
 
 
 def test_custom_provider_uses_configured_openai_compatible_client() -> None:
@@ -203,9 +238,7 @@ def test_research_agent_rejects_unsupported_citation() -> None:
                     {
                         "title": "Invalid",
                         "summary": "Unsupported source",
-                        "conclusions": [
-                            {"text": "Buy now", "evidence_ids": ["invented:1"]}
-                        ],
+                        "conclusions": [{"text": "Buy now", "evidence_ids": ["invented:1"]}],
                         "data_sources": ["internet"],
                         "analysis_logic": ["invented"],
                         "risk_factors": ["unknown"],

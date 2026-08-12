@@ -5,6 +5,12 @@ from datetime import UTC, datetime
 from sqlalchemy.orm import Session
 
 from personal_alpha_terminal.agents.llm.factory import build_llm_provider
+from personal_alpha_terminal.agents.llm.foundation import (
+    LLMGateway,
+    ModelRegistry,
+    ModelSpec,
+    deepseek_model_registry,
+)
 from personal_alpha_terminal.core.config import Settings
 from personal_alpha_terminal.intelligence.budget import (
     IntelligenceBudget,
@@ -24,11 +30,20 @@ from personal_alpha_terminal.intelligence.research import (
 )
 from personal_alpha_terminal.intelligence.scanner import DailyOpportunityScanner, ScannerConfig
 from personal_alpha_terminal.intelligence.service import IntelligenceService
-from personal_alpha_terminal.intelligence.storage import DatabaseExtractionCache
+from personal_alpha_terminal.intelligence.storage import (
+    DatabaseExtractionCache,
+    DatabaseLLMUsageLedger,
+)
 
 
 def build_intelligence_service(session: Session, settings: Settings) -> IntelligenceService:
     provider = build_llm_provider(settings)
+    model_registry = (
+        deepseek_model_registry()
+        if provider.name == "deepseek"
+        else ModelRegistry((ModelSpec(provider.name, provider.model, "configured", 0, 0, 0),))
+    )
+    provider = LLMGateway(provider, DatabaseLLMUsageLedger(session), model_registry)
     budget = IntelligenceBudget(
         IntelligenceBudgetConfig(
             max_requests_per_run=settings.intelligence_max_requests_per_run,
@@ -61,30 +76,20 @@ def build_intelligence_service(session: Session, settings: Settings) -> Intellig
             narrative_weight=settings.intelligence_scanner_narrative_weight,
             relationship_weight=settings.intelligence_scanner_relationship_weight,
             hypothesis_weight=settings.intelligence_scanner_hypothesis_weight,
-            max_narrative_feature_contribution=(
-                settings.intelligence_max_narrative_contribution
-            ),
+            max_narrative_feature_contribution=(settings.intelligence_max_narrative_contribution),
             max_relationship_feature_contribution=(
                 settings.intelligence_max_relationship_contribution
             ),
-            max_hypothesis_feature_contribution=(
-                settings.intelligence_max_hypothesis_contribution
-            ),
+            max_hypothesis_feature_contribution=(settings.intelligence_max_hypothesis_contribution),
         )
     )
     narrative_engine = NarrativeDetectionEngine(
         NarrativeConfig(
             half_life_days=settings.intelligence_narrative_half_life_days,
             momentum_window_days=settings.intelligence_narrative_momentum_window_days,
-            maximum_single_event_strength=(
-                settings.intelligence_narrative_single_event_cap
-            ),
-            minimum_emerging_sources=(
-                settings.intelligence_narrative_minimum_emerging_sources
-            ),
-            source_diversity_target=(
-                settings.intelligence_narrative_source_diversity_target
-            ),
+            maximum_single_event_strength=(settings.intelligence_narrative_single_event_cap),
+            minimum_emerging_sources=(settings.intelligence_narrative_minimum_emerging_sources),
+            source_diversity_target=(settings.intelligence_narrative_source_diversity_target),
             entity_breadth_target=settings.intelligence_narrative_entity_breadth_target,
             persistence_target_days=settings.intelligence_narrative_persistence_days,
         )
@@ -96,9 +101,7 @@ def build_intelligence_service(session: Session, settings: Settings) -> Intellig
             maximum_lag=settings.intelligence_relationship_maximum_lag,
             fdr_threshold=settings.intelligence_relationship_fdr_threshold,
             minimum_abs_strength=settings.intelligence_relationship_minimum_effect,
-            minimum_oos_survival=(
-                settings.intelligence_relationship_minimum_oos_survival
-            ),
+            minimum_oos_survival=(settings.intelligence_relationship_minimum_oos_survival),
         )
     )
     hypothesis_engine = HypothesisValidationEngine(
@@ -107,12 +110,8 @@ def build_intelligence_service(session: Session, settings: Settings) -> Intellig
             minimum_oos_sample_size=settings.intelligence_hypothesis_minimum_oos_sample,
             fdr_threshold=settings.intelligence_hypothesis_fdr_threshold,
             minimum_effect_size=settings.intelligence_hypothesis_minimum_effect,
-            minimum_oos_stability=(
-                settings.intelligence_hypothesis_minimum_oos_stability
-            ),
-            minimum_regime_stability=(
-                settings.intelligence_hypothesis_minimum_regime_stability
-            ),
+            minimum_oos_stability=(settings.intelligence_hypothesis_minimum_oos_stability),
+            minimum_regime_stability=(settings.intelligence_hypothesis_minimum_regime_stability),
             maximum_drawdown=settings.intelligence_hypothesis_maximum_drawdown,
             maximum_turnover=settings.intelligence_hypothesis_maximum_turnover,
         ),
@@ -124,9 +123,7 @@ def build_intelligence_service(session: Session, settings: Settings) -> Intellig
             max_threshold_combinations=(
                 settings.intelligence_hypothesis_max_threshold_combinations
             ),
-            max_horizon_combinations=(
-                settings.intelligence_hypothesis_max_horizon_combinations
-            ),
+            max_horizon_combinations=(settings.intelligence_hypothesis_max_horizon_combinations),
         ),
     )
     return IntelligenceService(

@@ -106,10 +106,7 @@ def _actual_quant_output():
     rng = np.random.default_rng(11)
     market = rng.normal(0.0003, 0.009, 180)
     returns = pd.DataFrame(
-        {
-            symbol: 0.75 * market + rng.normal(0.0003, 0.006, 180)
-            for symbol in SYMBOLS
-        },
+        {symbol: 0.75 * market + rng.normal(0.0003, 0.006, 180) for symbol in SYMBOLS},
         index=pd.bdate_range("2025-11-24", periods=180),
     )
     benchmark = pd.Series(market, index=returns.index)
@@ -376,15 +373,13 @@ def test_actual_quant_pipeline_flows_to_terminal_without_recalculation(
     ).run(decision_time=NOW, refresh=False)
 
     assert result.decision_readiness is DecisionReadiness.READY
-    assert result.llm_status == "OPTIONAL/OFFLINE"
+    assert result.llm_status == "OPTIONAL_UNAVAILABLE/SHADOW/disabled/NOT_CONFIGURED"
     assert [(item.symbol, item.action) for item in result.final_decisions] == [
         (item.symbol, item.action) for item in workflow.recommendations
     ]
     execution_symbols = {leg.symbol for leg in result.execution_plan.legs}
     assert all(
-        item.symbol in execution_symbols
-        for item in result.final_decisions
-        if item.action != "HOLD"
+        item.symbol in execution_symbols for item in result.final_decisions if item.action != "HOLD"
     )
     rendered = capture_daily_quant_result(result, width=120)
     narrow = capture_daily_quant_result(result, width=80)
@@ -403,9 +398,7 @@ def test_actual_quant_pipeline_flows_to_terminal_without_recalculation(
     assert certificate.exists()
     certificate_payload = json.loads(certificate.read_text(encoding="utf-8"))
     snapshot = json.loads(
-        next((tmp_path / "runs").glob(f"*_{result.run_id}.json")).read_text(
-            encoding="utf-8"
-        )
+        next((tmp_path / "runs").glob(f"*_{result.run_id}.json")).read_text(encoding="utf-8")
     )
     assert certificate_payload["run_id"] == snapshot["run_id"] == result.run_id
     assert certificate_payload["classification"] == result.run_classification
@@ -425,9 +418,7 @@ def test_blocked_data_certificate_preserves_real_certification_evidence(
     ).run(decision_time=NOW, refresh=False)
 
     assert not result.actionable
-    certificate = json.loads(
-        Path(result.certificate_path or "").read_text(encoding="utf-8")
-    )
+    certificate = json.loads(Path(result.certificate_path or "").read_text(encoding="utf-8"))
     evidence = certificate["data_certification"]
     assert evidence["requested_symbols"] == list(SYMBOLS)
     assert certificate["provenance"]["data_hash"] == "d" * 64
@@ -500,9 +491,7 @@ def test_data_gate_failure_does_not_rollback_sync_manifest_or_universe(
     assert not result.actionable
     with session_factory() as session:
         assert session.query(DataSnapshotManifest).count() == 1
-        assert session.query(MarketUniverseMember).count() == len(
-            MINIMUM_US_RESEARCH_UNIVERSE
-        )
+        assert session.query(MarketUniverseMember).count() == len(MINIMUM_US_RESEARCH_UNIVERSE)
 
 
 def test_missing_portfolio_and_stale_data_fail_closed(
@@ -594,9 +583,7 @@ def test_pit_or_risk_failure_never_reaches_execution_plan(
         blockers=("PIT validation failed before risk model",),
         pipeline_stages=(
             PipelineStage("Data Quality Gate", "VALID", "CERTIFIED"),
-            PipelineStage(
-                "PIT Universe", "BLOCKED", "PIT validation failed before risk model"
-            ),
+            PipelineStage("PIT Universe", "BLOCKED", "PIT validation failed before risk model"),
         ),
         risk=None,
         target=None,
