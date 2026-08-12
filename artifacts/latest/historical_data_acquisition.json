@@ -1,10 +1,10 @@
 {
-  "acquisition_id": "historical-acquisition-e5fb4cb3401c7a8ef963",
-  "actual_price_end": "2026-08-10",
+  "acquisition_id": "historical-acquisition-f186c8c477aff91b6f25",
+  "actual_price_end": "2026-08-11",
   "actual_price_start": "2024-08-07",
   "benchmark_rows": {
-    "QQQ": 503,
-    "SPY": 503
+    "QQQ": 504,
+    "SPY": 504
   },
   "blockers": [
     "HISTORICAL_MEMBERSHIP_INCOMPLETE",
@@ -18,8 +18,8 @@
     "BENCHMARK_PIT_TOTAL_RETURN_CONVENTION_INCOMPLETE"
   ],
   "calendar_early_closes": 23,
-  "calendar_end": "2026-08-10",
-  "calendar_sessions": 2917,
+  "calendar_end": "2026-08-11",
+  "calendar_sessions": 2918,
   "calendar_start": "2015-01-02",
   "classification": "NOT_CERTIFIABLE",
   "corporate_action_rows": 3,
@@ -28,29 +28,29 @@
   "delisted_count": 0,
   "historical_membership_rows": 0,
   "historical_security_count": 0,
-  "inventory_hash": "e4821ccdd95b426f27dc9fa4e03f49bc1703baefb74b5ad907be0757cbac35f5",
+  "inventory_hash": "9946445a484e2552de28a473718315dc5ff3f0c14ee9d549b3d0427bce233fd8",
   "layer_content_hashes": {
-    "benchmark_raw_live_only": "b4ec0c9433a2bc9f5923cbb289ef0108b2efa18073fedaf15ca269159d7b264c",
-    "current_directory_live_only": "4af011716456c1a37851b7c43a3002db5f77049592331fce3ace16a0701bc57e",
+    "benchmark_raw_live_only": "491ef8a70bc1b3ce3d78e28e079830c1ffb84183761797702b1f7bf189332283",
+    "current_directory_live_only": "7972f2c66f1e909a6fc34c904c04b2e9e0d836474f9a27a731a3c5ad18240ea7",
     "delisting_lifecycle": null,
     "historical_membership": null,
     "historical_security_master": null,
-    "live_prices_inventory_only": "5f866f25b4517ec162e1cd28ce6d7d3f552c11bb476e95a4afc66ac285e6763d",
+    "live_prices_inventory_only": "6158881d7408df34b161cdce60c8f26eb7ac1caa0f9ff1051d4cfc3042ecf663",
     "pit_corporate_actions": null,
     "pit_total_return": null,
     "provider_capability_matrix": "1527fc397a005553e0a267b6f7b38c7f9b95f4b4a5ead60e513062c18dc9c75e",
-    "xnys_calendar": "cdf903af70f519ad665a2d5c806276571913afab5d9171f5e9d9deb868984acb"
+    "xnys_calendar": "c6973f087357ee97343d995ae5b5172dac36422e2adf9c797173fcfb2e2a5cff"
   },
-  "live_price_rows": 9055,
+  "live_price_rows": 9073,
   "live_security_count": 18,
-  "manifest_hash": "e5fb4cb3401c7a8ef9638394c7b3c7f311c9b992900a90aadc3eea14f12842a1",
+  "manifest_hash": "f186c8c477aff91b6f253a2c43c57a9d29cd8983140a0df2e8bba2fb65e1ce9b",
   "membership_coverage_pct": 0.0,
   "membership_sessions_covered": 0,
-  "observed_at": "2026-08-11 16:59:53.836827+00:00",
+  "observed_at": "2026-08-12 04:14:23.901554+00:00",
   "oos_lock_status": "NOT_CREATED_RESEARCH_DATA_NOT_CERTIFIED",
-  "pit_total_return_rows": 216,
+  "pit_total_return_rows": 234,
   "production_eligible": false,
-  "research_baseline_id": "historical-research-baseline-8fb51f1a7b2fdaa0561a",
+  "research_baseline_id": "historical-research-baseline-083e7004b2cfcc4bf4f6",
   "research_dataset_content_hash": null,
   "unknown_lifecycle_count": 8833
 }

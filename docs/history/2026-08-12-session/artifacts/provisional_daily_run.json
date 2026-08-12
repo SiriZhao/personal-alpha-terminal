@@ -1,0 +1,2502 @@
+{
+  "analysis_date": "2026-08-11",
+  "benchmarks": [
+    {
+      "annualized_volatility": 0.17842512397663005,
+      "end_date": "2026-08-11",
+      "max_drawdown": -0.18998904170121056,
+      "name": "SPY",
+      "note": "Same PIT return dataset; no unsupported long-horizon annualization is shown.",
+      "observation_count": 376,
+      "period_return": 0.27396879982682387,
+      "start_date": "2025-02-11",
+      "status": "PIT PROXY"
+    },
+    {
+      "annualized_volatility": 0.2314782606397531,
+      "end_date": "2026-08-11",
+      "max_drawdown": -0.22883306906757606,
+      "name": "QQQ",
+      "note": "Same PIT return dataset and cutoff as the strategy; Nasdaq-100 proxy.",
+      "observation_count": 376,
+      "period_return": 0.3574870325932886,
+      "start_date": "2025-02-11",
+      "status": "PIT PROXY"
+    }
+  ],
+  "blockers": [],
+  "candidates": [
+    {
+      "components": {
+        "low_volatility": -0.0,
+        "momentum": 1.7103509436033293,
+        "trend": 0.31965467247653195
+      },
+      "composite": 0.6766685386932871,
+      "evidence_coverage": 1.0,
+      "expected_alpha": 0.011221069679049572,
+      "neutralization_evidence": {
+        "momentum_12_1": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        },
+        "trend_slope": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        },
+        "volatility": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        }
+      },
+      "neutralized_values": {
+        "low_volatility": -0.0,
+        "momentum": 1.7103509436033293,
+        "trend": 0.31965467247653195
+      },
+      "rank": 1,
+      "raw_values": {
+        "momentum_12_1": 0.7501241857821888,
+        "trend_slope": 0.5125474126707357,
+        "volatility": 0.382712962227898
+      },
+      "status": "PROVISIONAL_OPERATIONAL_APPROVED",
+      "symbol": "GOOGL",
+      "winsorized_values": {
+        "momentum_12_1": 0.7290873016439772,
+        "trend_slope": 0.5125474126707357,
+        "volatility": 0.382712962227898
+      }
+    },
+    {
+      "components": {
+        "low_volatility": 0.5753887862228252,
+        "momentum": 0.6744897501960817,
+        "trend": 0.8299048221914992
+      },
+      "composite": 0.693261119536802,
+      "evidence_coverage": 1.0,
+      "expected_alpha": 0.007687430540196638,
+      "neutralization_evidence": {
+        "momentum_12_1": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        },
+        "trend_slope": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        },
+        "volatility": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        }
+      },
+      "neutralized_values": {
+        "low_volatility": 0.5753887862228252,
+        "momentum": 0.6744897501960817,
+        "trend": 0.8299048221914992
+      },
+      "rank": 2,
+      "raw_values": {
+        "momentum_12_1": 0.38351859471937666,
+        "trend_slope": 0.7040870337804461,
+        "volatility": 0.31651816251833503
+      },
+      "status": "PROVISIONAL_OPERATIONAL_APPROVED",
+      "symbol": "AAPL",
+      "winsorized_values": {
+        "momentum_12_1": 0.38351859471937666,
+        "trend_slope": 0.695919611814946,
+        "volatility": 0.31651816251833503
+      }
+    },
+    {
+      "components": {
+        "low_volatility": 1.1282287111544687,
+        "momentum": 0.9851699537403683,
+        "trend": -0.7252074512550993
+      },
+      "composite": 0.4627304045465792,
+      "evidence_coverage": 1.0,
+      "expected_alpha": 0.005991854790985849,
+      "neutralization_evidence": {
+        "momentum_12_1": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        },
+        "trend_slope": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        },
+        "volatility": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        }
+      },
+      "neutralized_values": {
+        "low_volatility": 1.1282287111544687,
+        "momentum": 0.9851699537403683,
+        "trend": -0.7252074512550993
+      },
+      "rank": 3,
+      "raw_values": {
+        "momentum_12_1": 0.4871631340545439,
+        "trend_slope": 0.13704793356585182,
+        "volatility": 0.2529174650794243
+      },
+      "status": "PROVISIONAL_OPERATIONAL_APPROVED",
+      "symbol": "JNJ",
+      "winsorized_values": {
+        "momentum_12_1": 0.4871631340545439,
+        "trend_slope": 0.13704793356585182,
+        "volatility": 0.2529174650794243
+      }
+    },
+    {
+      "components": {
+        "low_volatility": 1.3982643887681783,
+        "momentum": 0.0,
+        "trend": 0.17821939423913896
+      },
+      "composite": 0.5254945943357724,
+      "evidence_coverage": 1.0,
+      "expected_alpha": 0.003331186960253773,
+      "neutralization_evidence": {
+        "momentum_12_1": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        },
+        "trend_slope": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        },
+        "volatility": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        }
+      },
+      "neutralized_values": {
+        "low_volatility": 1.3982643887681783,
+        "momentum": 0.0,
+        "trend": 0.17821939423913896
+      },
+      "rank": 4,
+      "raw_values": {
+        "momentum_12_1": 0.15850528956554544,
+        "trend_slope": 0.46171881806581133,
+        "volatility": 0.2191502068395901
+      },
+      "status": "PROVISIONAL_OPERATIONAL_APPROVED",
+      "symbol": "JPM",
+      "winsorized_values": {
+        "momentum_12_1": 0.15850528956554544,
+        "trend_slope": 0.46171881806581133,
+        "volatility": 0.22185158749877684
+      }
+    },
+    {
+      "components": {
+        "low_volatility": 0.8873211089676533,
+        "momentum": 0.5832777739275645,
+        "trend": -1.389753495406524
+      },
+      "composite": 0.026948462496231246,
+      "evidence_coverage": 1.0,
+      "expected_alpha": 0.0011050483752811215,
+      "neutralization_evidence": {
+        "momentum_12_1": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        },
+        "trend_slope": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        },
+        "volatility": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        }
+      },
+      "neutralized_values": {
+        "low_volatility": 0.8873211089676533,
+        "momentum": 0.5832777739275645,
+        "trend": -1.389753495406524
+      },
+      "rank": 5,
+      "raw_values": {
+        "momentum_12_1": 0.3530898028158298,
+        "trend_slope": -0.10177467063466528,
+        "volatility": 0.2806323438832871
+      },
+      "status": "PROVISIONAL_OPERATIONAL_APPROVED",
+      "symbol": "XOM",
+      "winsorized_values": {
+        "momentum_12_1": 0.3530898028158298,
+        "trend_slope": -0.10177467063466528,
+        "volatility": 0.2806323438832871
+      }
+    },
+    {
+      "components": {
+        "low_volatility": -0.5336206890853946,
+        "momentum": -0.1437268601804729,
+        "trend": 0.5685488181106949
+      },
+      "composite": -0.03626624371839087,
+      "evidence_coverage": 1.0,
+      "expected_alpha": -0.0002239560849215419,
+      "neutralization_evidence": {
+        "momentum_12_1": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        },
+        "trend_slope": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        },
+        "volatility": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        }
+      },
+      "neutralized_values": {
+        "low_volatility": -0.5336206890853946,
+        "momentum": -0.1437268601804729,
+        "trend": 0.5685488181106949
+      },
+      "rank": 6,
+      "raw_values": {
+        "momentum_12_1": 0.11055725797694227,
+        "trend_slope": 0.6019942592116942,
+        "volatility": 0.44410260950755065
+      },
+      "status": "PROVISIONAL_OPERATIONAL_APPROVED",
+      "symbol": "AMZN",
+      "winsorized_values": {
+        "momentum_12_1": 0.11055725797694227,
+        "trend_slope": 0.6019942592116942,
+        "volatility": 0.44410260950755065
+      }
+    },
+    {
+      "components": {
+        "low_volatility": -0.2483840690265855,
+        "momentum": -0.13337091795552156,
+        "trend": 0.0
+      },
+      "composite": -0.12725166232736904,
+      "evidence_coverage": 1.0,
+      "expected_alpha": -0.0012969936457863003,
+      "neutralization_evidence": {
+        "momentum_12_1": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        },
+        "trend_slope": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        },
+        "volatility": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        }
+      },
+      "neutralized_values": {
+        "low_volatility": -0.2483840690265855,
+        "momentum": -0.13337091795552156,
+        "trend": 0.0
+      },
+      "rank": 7,
+      "raw_values": {
+        "momentum_12_1": 0.11401205441727513,
+        "trend_slope": 0.3976708559632315,
+        "volatility": 0.41128796072273116
+      },
+      "status": "PROVISIONAL_OPERATIONAL_APPROVED",
+      "symbol": "NVDA",
+      "winsorized_values": {
+        "momentum_12_1": 0.11401205441727513,
+        "trend_slope": 0.3976708559632315,
+        "volatility": 0.41128796072273116
+      }
+    },
+    {
+      "components": {
+        "low_volatility": -0.6889301332613492,
+        "momentum": -1.2025086127501294,
+        "trend": -0.6744897501960817
+      },
+      "composite": -0.8553094987358535,
+      "evidence_coverage": 1.0,
+      "expected_alpha": -0.01061638119361172,
+      "neutralization_evidence": {
+        "momentum_12_1": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        },
+        "trend_slope": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        },
+        "volatility": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        }
+      },
+      "neutralized_values": {
+        "low_volatility": -0.6889301332613492,
+        "momentum": -1.2025086127501294,
+        "trend": -0.6744897501960817
+      },
+      "rank": 8,
+      "raw_values": {
+        "momentum_12_1": -0.2510343910864242,
+        "trend_slope": 0.1552747119096229,
+        "volatility": 0.46211442629559063
+      },
+      "status": "PROVISIONAL_OPERATIONAL_APPROVED",
+      "symbol": "MSFT",
+      "winsorized_values": {
+        "momentum_12_1": -0.24265786725365657,
+        "trend_slope": 0.1552747119096229,
+        "volatility": 0.461969967711938
+      }
+    },
+    {
+      "components": {
+        "low_volatility": -0.6744897501960817,
+        "momentum": -0.9137540707396344,
+        "trend": -1.5049476045280143
+      },
+      "composite": -1.0310638084879102,
+      "evidence_coverage": 1.0,
+      "expected_alpha": -0.011346346738414012,
+      "neutralization_evidence": {
+        "momentum_12_1": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        },
+        "trend_slope": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        },
+        "volatility": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        }
+      },
+      "neutralized_values": {
+        "low_volatility": -0.6744897501960817,
+        "momentum": -0.9137540707396344,
+        "trend": -1.5049476045280143
+      },
+      "rank": 9,
+      "raw_values": {
+        "momentum_12_1": -0.14632784317682856,
+        "trend_slope": -0.14677262756146486,
+        "volatility": 0.46030869399993246
+      },
+      "status": "PROVISIONAL_OPERATIONAL_APPROVED",
+      "symbol": "META",
+      "winsorized_values": {
+        "momentum_12_1": -0.14632784317682856,
+        "trend_slope": -0.1431727910073209,
+        "volatility": 0.46030869399993246
+      }
+    }
+  ],
+  "certificate_path": "E:\\CSDIY\\Vibe Coding Project\\personal-alpha-terminal\\reports\\daily-runs\\daily-e8ee28b3ba9444f4bb81658b61dd6b16\\run_certificate.json",
+  "config_hash": "4fb9712640e972c91c733617da298f833c845515bc551f28b1d2abb13896cf75",
+  "data_cutoff": "2026-08-11T20:30:00+00:00",
+  "data_health": [
+    {
+      "age_days": 0,
+      "as_of": "2026-08-11",
+      "certification_state": "PASS",
+      "content_hash": "fca2e8ce398f67fe95ff9562b2ff1de01ede6ce4fdecb1ee57a8ac1fe29ab8ba",
+      "coverage": 1.0,
+      "cutoff": "2026-08-11T20:30:00+00:00",
+      "data_version": "US-20260812T041448Z-fca2e8ce398f",
+      "dataset": "LIVE_RAW_OHLCV",
+      "dataset_id": "market-data:US:raw-ohlcv",
+      "detail": "snapshot=US-20260812T041448Z-fca2e8ce398f; quality=passed",
+      "expected_date": "2026-08-11",
+      "latest_date": "2026-08-11",
+      "member_count": null,
+      "missing_ratio": null,
+      "provider": "yahoo_finance",
+      "quality_status": "PASS",
+      "row_count": 108,
+      "snapshot_id": "US-20260812T041448Z-fca2e8ce398f",
+      "source": "yahoo_finance",
+      "status": "PASS"
+    },
+    {
+      "age_days": 0,
+      "as_of": "2026-08-11",
+      "certification_state": "PASS",
+      "content_hash": "fca2e8ce398f67fe95ff9562b2ff1de01ede6ce4fdecb1ee57a8ac1fe29ab8ba",
+      "coverage": null,
+      "cutoff": "2026-08-11T20:30:00+00:00",
+      "data_version": "6a4f071c81ac17309e7c3619683cd23cd75b2398e3bd6730d4aa63ec1002e892",
+      "dataset": "POINT_IN_TIME_TOTAL_RETURN",
+      "dataset_id": "research-data:US:pit-total-return",
+      "detail": "data_version=6a4f071c81ac17309e7c3619683cd23cd75b2398e3bd6730d4aa63ec1002e892",
+      "expected_date": "2026-08-11",
+      "latest_date": "2026-08-11",
+      "member_count": null,
+      "missing_ratio": null,
+      "provider": "yahoo_finance",
+      "quality_status": "PASS",
+      "row_count": 9,
+      "snapshot_id": "US-20260812T041448Z-fca2e8ce398f",
+      "source": "quality-run:18,universe-snapshot:3",
+      "status": "PASS"
+    },
+    {
+      "age_days": 0,
+      "as_of": "2026-08-11",
+      "certification_state": "PASS",
+      "content_hash": "fca2e8ce398f67fe95ff9562b2ff1de01ede6ce4fdecb1ee57a8ac1fe29ab8ba",
+      "coverage": 1.0,
+      "cutoff": "2026-08-11T20:30:00+00:00",
+      "data_version": "6a4f071c81ac17309e7c3619683cd23cd75b2398e3bd6730d4aa63ec1002e892",
+      "dataset": "CERTIFIED_US_UNIVERSE",
+      "dataset_id": "universe:US:certified-live",
+      "detail": "members=9; valid=9",
+      "expected_date": "2026-08-11",
+      "latest_date": "2026-08-11",
+      "member_count": 9,
+      "missing_ratio": null,
+      "provider": "yahoo_finance",
+      "quality_status": "PASS",
+      "row_count": null,
+      "snapshot_id": "3",
+      "source": "quality-run:18,universe-snapshot:3",
+      "status": "PASS"
+    }
+  ],
+  "decision_readiness": "READY",
+  "decision_traces": {
+    "AAPL": {
+      "calibrated_probability": "NOT_CAPTURED",
+      "composite_alpha": 0.693261119536802,
+      "cross_sectional_rank": 2,
+      "current_weight": 0.0,
+      "data_quality": "VALID",
+      "delta_weight": 0.05999999999999998,
+      "evidence_coverage": 1.0,
+      "expected_alpha": 0.007687430540196638,
+      "factor_neutralized_values": {
+        "low_volatility": 0.5753887862228252,
+        "momentum": 0.6744897501960817,
+        "trend": 0.8299048221914992
+      },
+      "factor_normalized_values": "NOT_CAPTURED",
+      "factor_raw_values": {
+        "momentum_12_1": 0.38351859471937666,
+        "trend_slope": 0.7040870337804461,
+        "volatility": 0.31651816251833503
+      },
+      "factor_winsorized_values": {
+        "momentum_12_1": 0.38351859471937666,
+        "trend_slope": 0.695919611814946,
+        "volatility": 0.31651816251833503
+      },
+      "final_action": "BUY",
+      "final_trade_target": 0.06,
+      "portfolio_optimized_target": "NOT_CAPTURED",
+      "raw_alpha_target": "NOT_CAPTURED",
+      "rejection_reason": null,
+      "risk_adjusted_target": 0.05999999999999998,
+      "target_weight": 0.05999999999999998
+    },
+    "AMZN": {
+      "calibrated_probability": "NOT_CAPTURED",
+      "composite_alpha": -0.03626624371839087,
+      "cross_sectional_rank": 6,
+      "current_weight": 0.0,
+      "data_quality": "NOT_CAPTURED",
+      "delta_weight": null,
+      "evidence_coverage": 1.0,
+      "expected_alpha": -0.0002239560849215419,
+      "factor_neutralized_values": {
+        "low_volatility": -0.5336206890853946,
+        "momentum": -0.1437268601804729,
+        "trend": 0.5685488181106949
+      },
+      "factor_normalized_values": "NOT_CAPTURED",
+      "factor_raw_values": {
+        "momentum_12_1": 0.11055725797694227,
+        "trend_slope": 0.6019942592116942,
+        "volatility": 0.44410260950755065
+      },
+      "factor_winsorized_values": {
+        "momentum_12_1": 0.11055725797694227,
+        "trend_slope": 0.6019942592116942,
+        "volatility": 0.44410260950755065
+      },
+      "final_action": "REJECTED_OR_HOLD",
+      "final_trade_target": null,
+      "portfolio_optimized_target": "NOT_CAPTURED",
+      "raw_alpha_target": "NOT_CAPTURED",
+      "rejection_reason": "PROVISIONAL_OPERATIONAL_APPROVED",
+      "risk_adjusted_target": null,
+      "target_weight": null
+    },
+    "GOOGL": {
+      "calibrated_probability": "NOT_CAPTURED",
+      "composite_alpha": 0.6766685386932871,
+      "cross_sectional_rank": 1,
+      "current_weight": 0.0,
+      "data_quality": "VALID",
+      "delta_weight": 0.12,
+      "evidence_coverage": 1.0,
+      "expected_alpha": 0.011221069679049572,
+      "factor_neutralized_values": {
+        "low_volatility": -0.0,
+        "momentum": 1.7103509436033293,
+        "trend": 0.31965467247653195
+      },
+      "factor_normalized_values": "NOT_CAPTURED",
+      "factor_raw_values": {
+        "momentum_12_1": 0.7501241857821888,
+        "trend_slope": 0.5125474126707357,
+        "volatility": 0.382712962227898
+      },
+      "factor_winsorized_values": {
+        "momentum_12_1": 0.7290873016439772,
+        "trend_slope": 0.5125474126707357,
+        "volatility": 0.382712962227898
+      },
+      "final_action": "BUY",
+      "final_trade_target": 0.12,
+      "portfolio_optimized_target": "NOT_CAPTURED",
+      "raw_alpha_target": "NOT_CAPTURED",
+      "rejection_reason": null,
+      "risk_adjusted_target": 0.12,
+      "target_weight": 0.12
+    },
+    "JNJ": {
+      "calibrated_probability": "NOT_CAPTURED",
+      "composite_alpha": 0.4627304045465792,
+      "cross_sectional_rank": 3,
+      "current_weight": 0.0,
+      "data_quality": "VALID",
+      "delta_weight": 0.12,
+      "evidence_coverage": 1.0,
+      "expected_alpha": 0.005991854790985849,
+      "factor_neutralized_values": {
+        "low_volatility": 1.1282287111544687,
+        "momentum": 0.9851699537403683,
+        "trend": -0.7252074512550993
+      },
+      "factor_normalized_values": "NOT_CAPTURED",
+      "factor_raw_values": {
+        "momentum_12_1": 0.4871631340545439,
+        "trend_slope": 0.13704793356585182,
+        "volatility": 0.2529174650794243
+      },
+      "factor_winsorized_values": {
+        "momentum_12_1": 0.4871631340545439,
+        "trend_slope": 0.13704793356585182,
+        "volatility": 0.2529174650794243
+      },
+      "final_action": "BUY",
+      "final_trade_target": 0.12,
+      "portfolio_optimized_target": "NOT_CAPTURED",
+      "raw_alpha_target": "NOT_CAPTURED",
+      "rejection_reason": null,
+      "risk_adjusted_target": 0.12,
+      "target_weight": 0.12
+    },
+    "JPM": {
+      "calibrated_probability": "NOT_CAPTURED",
+      "composite_alpha": 0.5254945943357724,
+      "cross_sectional_rank": 4,
+      "current_weight": 0.0,
+      "data_quality": "NOT_CAPTURED",
+      "delta_weight": null,
+      "evidence_coverage": 1.0,
+      "expected_alpha": 0.003331186960253773,
+      "factor_neutralized_values": {
+        "low_volatility": 1.3982643887681783,
+        "momentum": 0.0,
+        "trend": 0.17821939423913896
+      },
+      "factor_normalized_values": "NOT_CAPTURED",
+      "factor_raw_values": {
+        "momentum_12_1": 0.15850528956554544,
+        "trend_slope": 0.46171881806581133,
+        "volatility": 0.2191502068395901
+      },
+      "factor_winsorized_values": {
+        "momentum_12_1": 0.15850528956554544,
+        "trend_slope": 0.46171881806581133,
+        "volatility": 0.22185158749877684
+      },
+      "final_action": "REJECTED_OR_HOLD",
+      "final_trade_target": null,
+      "portfolio_optimized_target": "NOT_CAPTURED",
+      "raw_alpha_target": "NOT_CAPTURED",
+      "rejection_reason": "PROVISIONAL_OPERATIONAL_APPROVED",
+      "risk_adjusted_target": null,
+      "target_weight": null
+    },
+    "META": {
+      "calibrated_probability": "NOT_CAPTURED",
+      "composite_alpha": -1.0310638084879102,
+      "cross_sectional_rank": 9,
+      "current_weight": 0.0,
+      "data_quality": "NOT_CAPTURED",
+      "delta_weight": null,
+      "evidence_coverage": 1.0,
+      "expected_alpha": -0.011346346738414012,
+      "factor_neutralized_values": {
+        "low_volatility": -0.6744897501960817,
+        "momentum": -0.9137540707396344,
+        "trend": -1.5049476045280143
+      },
+      "factor_normalized_values": "NOT_CAPTURED",
+      "factor_raw_values": {
+        "momentum_12_1": -0.14632784317682856,
+        "trend_slope": -0.14677262756146486,
+        "volatility": 0.46030869399993246
+      },
+      "factor_winsorized_values": {
+        "momentum_12_1": -0.14632784317682856,
+        "trend_slope": -0.1431727910073209,
+        "volatility": 0.46030869399993246
+      },
+      "final_action": "REJECTED_OR_HOLD",
+      "final_trade_target": null,
+      "portfolio_optimized_target": "NOT_CAPTURED",
+      "raw_alpha_target": "NOT_CAPTURED",
+      "rejection_reason": "PROVISIONAL_OPERATIONAL_APPROVED",
+      "risk_adjusted_target": null,
+      "target_weight": null
+    },
+    "MSFT": {
+      "calibrated_probability": "NOT_CAPTURED",
+      "composite_alpha": -0.8553094987358535,
+      "cross_sectional_rank": 8,
+      "current_weight": 0.0,
+      "data_quality": "NOT_CAPTURED",
+      "delta_weight": null,
+      "evidence_coverage": 1.0,
+      "expected_alpha": -0.01061638119361172,
+      "factor_neutralized_values": {
+        "low_volatility": -0.6889301332613492,
+        "momentum": -1.2025086127501294,
+        "trend": -0.6744897501960817
+      },
+      "factor_normalized_values": "NOT_CAPTURED",
+      "factor_raw_values": {
+        "momentum_12_1": -0.2510343910864242,
+        "trend_slope": 0.1552747119096229,
+        "volatility": 0.46211442629559063
+      },
+      "factor_winsorized_values": {
+        "momentum_12_1": -0.24265786725365657,
+        "trend_slope": 0.1552747119096229,
+        "volatility": 0.461969967711938
+      },
+      "final_action": "REJECTED_OR_HOLD",
+      "final_trade_target": null,
+      "portfolio_optimized_target": "NOT_CAPTURED",
+      "raw_alpha_target": "NOT_CAPTURED",
+      "rejection_reason": "PROVISIONAL_OPERATIONAL_APPROVED",
+      "risk_adjusted_target": null,
+      "target_weight": null
+    },
+    "NVDA": {
+      "calibrated_probability": "NOT_CAPTURED",
+      "composite_alpha": -0.12725166232736904,
+      "cross_sectional_rank": 7,
+      "current_weight": 0.0,
+      "data_quality": "NOT_CAPTURED",
+      "delta_weight": null,
+      "evidence_coverage": 1.0,
+      "expected_alpha": -0.0012969936457863003,
+      "factor_neutralized_values": {
+        "low_volatility": -0.2483840690265855,
+        "momentum": -0.13337091795552156,
+        "trend": 0.0
+      },
+      "factor_normalized_values": "NOT_CAPTURED",
+      "factor_raw_values": {
+        "momentum_12_1": 0.11401205441727513,
+        "trend_slope": 0.3976708559632315,
+        "volatility": 0.41128796072273116
+      },
+      "factor_winsorized_values": {
+        "momentum_12_1": 0.11401205441727513,
+        "trend_slope": 0.3976708559632315,
+        "volatility": 0.41128796072273116
+      },
+      "final_action": "REJECTED_OR_HOLD",
+      "final_trade_target": null,
+      "portfolio_optimized_target": "NOT_CAPTURED",
+      "raw_alpha_target": "NOT_CAPTURED",
+      "rejection_reason": "PROVISIONAL_OPERATIONAL_APPROVED",
+      "risk_adjusted_target": null,
+      "target_weight": null
+    },
+    "XOM": {
+      "calibrated_probability": "NOT_CAPTURED",
+      "composite_alpha": 0.026948462496231246,
+      "cross_sectional_rank": 5,
+      "current_weight": 0.0,
+      "data_quality": "NOT_CAPTURED",
+      "delta_weight": null,
+      "evidence_coverage": 1.0,
+      "expected_alpha": 0.0011050483752811215,
+      "factor_neutralized_values": {
+        "low_volatility": 0.8873211089676533,
+        "momentum": 0.5832777739275645,
+        "trend": -1.389753495406524
+      },
+      "factor_normalized_values": "NOT_CAPTURED",
+      "factor_raw_values": {
+        "momentum_12_1": 0.3530898028158298,
+        "trend_slope": -0.10177467063466528,
+        "volatility": 0.2806323438832871
+      },
+      "factor_winsorized_values": {
+        "momentum_12_1": 0.3530898028158298,
+        "trend_slope": -0.10177467063466528,
+        "volatility": 0.2806323438832871
+      },
+      "final_action": "REJECTED_OR_HOLD",
+      "final_trade_target": null,
+      "portfolio_optimized_target": "NOT_CAPTURED",
+      "raw_alpha_target": "NOT_CAPTURED",
+      "rejection_reason": "PROVISIONAL_OPERATIONAL_APPROVED",
+      "risk_adjusted_target": null,
+      "target_weight": null
+    }
+  },
+  "execution_plan": {
+    "broker": "Charles Schwab (manual only)",
+    "estimated_buys": 30000.0,
+    "estimated_cash_after": 69983.45536437728,
+    "estimated_cash_before": 100000.0,
+    "estimated_cost": 16.54463562271804,
+    "estimated_proceeds": 0,
+    "legs": [
+      {
+        "action": "BUY",
+        "earliest_execution_time": "2026-08-12T13:30:00",
+        "estimated_cost": 3.3035104457562223,
+        "estimated_quantity": 19,
+        "estimated_value": 6000.0,
+        "sequence": 1,
+        "symbol": "AAPL"
+      },
+      {
+        "action": "BUY",
+        "earliest_execution_time": "2026-08-12T13:30:00",
+        "estimated_cost": 6.612029726770756,
+        "estimated_quantity": 34,
+        "estimated_value": 12000.0,
+        "sequence": 2,
+        "symbol": "GOOGL"
+      },
+      {
+        "action": "BUY",
+        "earliest_execution_time": "2026-08-12T13:30:00",
+        "estimated_cost": 6.6290954501910635,
+        "estimated_quantity": 46,
+        "estimated_value": 12000.0,
+        "sequence": 3,
+        "symbol": "JNJ"
+      }
+    ],
+    "manual_execution_required": true,
+    "status": "READY",
+    "turnover": 0.29999999999999993
+  },
+  "factors": [
+    {
+      "components": {
+        "low_volatility": -0.0,
+        "momentum": 1.7103509436033293,
+        "trend": 0.31965467247653195
+      },
+      "composite": 0.6766685386932871,
+      "evidence_coverage": 1.0,
+      "expected_alpha": 0.011221069679049572,
+      "neutralization_evidence": {
+        "momentum_12_1": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        },
+        "trend_slope": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        },
+        "volatility": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        }
+      },
+      "neutralized_values": {
+        "low_volatility": -0.0,
+        "momentum": 1.7103509436033293,
+        "trend": 0.31965467247653195
+      },
+      "rank": 1,
+      "raw_values": {
+        "momentum_12_1": 0.7501241857821888,
+        "trend_slope": 0.5125474126707357,
+        "volatility": 0.382712962227898
+      },
+      "status": "PROVISIONAL_OPERATIONAL_APPROVED",
+      "symbol": "GOOGL",
+      "winsorized_values": {
+        "momentum_12_1": 0.7290873016439772,
+        "trend_slope": 0.5125474126707357,
+        "volatility": 0.382712962227898
+      }
+    },
+    {
+      "components": {
+        "low_volatility": 0.5753887862228252,
+        "momentum": 0.6744897501960817,
+        "trend": 0.8299048221914992
+      },
+      "composite": 0.693261119536802,
+      "evidence_coverage": 1.0,
+      "expected_alpha": 0.007687430540196638,
+      "neutralization_evidence": {
+        "momentum_12_1": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        },
+        "trend_slope": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        },
+        "volatility": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        }
+      },
+      "neutralized_values": {
+        "low_volatility": 0.5753887862228252,
+        "momentum": 0.6744897501960817,
+        "trend": 0.8299048221914992
+      },
+      "rank": 2,
+      "raw_values": {
+        "momentum_12_1": 0.38351859471937666,
+        "trend_slope": 0.7040870337804461,
+        "volatility": 0.31651816251833503
+      },
+      "status": "PROVISIONAL_OPERATIONAL_APPROVED",
+      "symbol": "AAPL",
+      "winsorized_values": {
+        "momentum_12_1": 0.38351859471937666,
+        "trend_slope": 0.695919611814946,
+        "volatility": 0.31651816251833503
+      }
+    },
+    {
+      "components": {
+        "low_volatility": 1.1282287111544687,
+        "momentum": 0.9851699537403683,
+        "trend": -0.7252074512550993
+      },
+      "composite": 0.4627304045465792,
+      "evidence_coverage": 1.0,
+      "expected_alpha": 0.005991854790985849,
+      "neutralization_evidence": {
+        "momentum_12_1": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        },
+        "trend_slope": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        },
+        "volatility": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        }
+      },
+      "neutralized_values": {
+        "low_volatility": 1.1282287111544687,
+        "momentum": 0.9851699537403683,
+        "trend": -0.7252074512550993
+      },
+      "rank": 3,
+      "raw_values": {
+        "momentum_12_1": 0.4871631340545439,
+        "trend_slope": 0.13704793356585182,
+        "volatility": 0.2529174650794243
+      },
+      "status": "PROVISIONAL_OPERATIONAL_APPROVED",
+      "symbol": "JNJ",
+      "winsorized_values": {
+        "momentum_12_1": 0.4871631340545439,
+        "trend_slope": 0.13704793356585182,
+        "volatility": 0.2529174650794243
+      }
+    },
+    {
+      "components": {
+        "low_volatility": 1.3982643887681783,
+        "momentum": 0.0,
+        "trend": 0.17821939423913896
+      },
+      "composite": 0.5254945943357724,
+      "evidence_coverage": 1.0,
+      "expected_alpha": 0.003331186960253773,
+      "neutralization_evidence": {
+        "momentum_12_1": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        },
+        "trend_slope": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        },
+        "volatility": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        }
+      },
+      "neutralized_values": {
+        "low_volatility": 1.3982643887681783,
+        "momentum": 0.0,
+        "trend": 0.17821939423913896
+      },
+      "rank": 4,
+      "raw_values": {
+        "momentum_12_1": 0.15850528956554544,
+        "trend_slope": 0.46171881806581133,
+        "volatility": 0.2191502068395901
+      },
+      "status": "PROVISIONAL_OPERATIONAL_APPROVED",
+      "symbol": "JPM",
+      "winsorized_values": {
+        "momentum_12_1": 0.15850528956554544,
+        "trend_slope": 0.46171881806581133,
+        "volatility": 0.22185158749877684
+      }
+    },
+    {
+      "components": {
+        "low_volatility": 0.8873211089676533,
+        "momentum": 0.5832777739275645,
+        "trend": -1.389753495406524
+      },
+      "composite": 0.026948462496231246,
+      "evidence_coverage": 1.0,
+      "expected_alpha": 0.0011050483752811215,
+      "neutralization_evidence": {
+        "momentum_12_1": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        },
+        "trend_slope": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        },
+        "volatility": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        }
+      },
+      "neutralized_values": {
+        "low_volatility": 0.8873211089676533,
+        "momentum": 0.5832777739275645,
+        "trend": -1.389753495406524
+      },
+      "rank": 5,
+      "raw_values": {
+        "momentum_12_1": 0.3530898028158298,
+        "trend_slope": -0.10177467063466528,
+        "volatility": 0.2806323438832871
+      },
+      "status": "PROVISIONAL_OPERATIONAL_APPROVED",
+      "symbol": "XOM",
+      "winsorized_values": {
+        "momentum_12_1": 0.3530898028158298,
+        "trend_slope": -0.10177467063466528,
+        "volatility": 0.2806323438832871
+      }
+    },
+    {
+      "components": {
+        "low_volatility": -0.5336206890853946,
+        "momentum": -0.1437268601804729,
+        "trend": 0.5685488181106949
+      },
+      "composite": -0.03626624371839087,
+      "evidence_coverage": 1.0,
+      "expected_alpha": -0.0002239560849215419,
+      "neutralization_evidence": {
+        "momentum_12_1": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        },
+        "trend_slope": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        },
+        "volatility": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        }
+      },
+      "neutralized_values": {
+        "low_volatility": -0.5336206890853946,
+        "momentum": -0.1437268601804729,
+        "trend": 0.5685488181106949
+      },
+      "rank": 6,
+      "raw_values": {
+        "momentum_12_1": 0.11055725797694227,
+        "trend_slope": 0.6019942592116942,
+        "volatility": 0.44410260950755065
+      },
+      "status": "PROVISIONAL_OPERATIONAL_APPROVED",
+      "symbol": "AMZN",
+      "winsorized_values": {
+        "momentum_12_1": 0.11055725797694227,
+        "trend_slope": 0.6019942592116942,
+        "volatility": 0.44410260950755065
+      }
+    },
+    {
+      "components": {
+        "low_volatility": -0.2483840690265855,
+        "momentum": -0.13337091795552156,
+        "trend": 0.0
+      },
+      "composite": -0.12725166232736904,
+      "evidence_coverage": 1.0,
+      "expected_alpha": -0.0012969936457863003,
+      "neutralization_evidence": {
+        "momentum_12_1": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        },
+        "trend_slope": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        },
+        "volatility": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        }
+      },
+      "neutralized_values": {
+        "low_volatility": -0.2483840690265855,
+        "momentum": -0.13337091795552156,
+        "trend": 0.0
+      },
+      "rank": 7,
+      "raw_values": {
+        "momentum_12_1": 0.11401205441727513,
+        "trend_slope": 0.3976708559632315,
+        "volatility": 0.41128796072273116
+      },
+      "status": "PROVISIONAL_OPERATIONAL_APPROVED",
+      "symbol": "NVDA",
+      "winsorized_values": {
+        "momentum_12_1": 0.11401205441727513,
+        "trend_slope": 0.3976708559632315,
+        "volatility": 0.41128796072273116
+      }
+    },
+    {
+      "components": {
+        "low_volatility": -0.6889301332613492,
+        "momentum": -1.2025086127501294,
+        "trend": -0.6744897501960817
+      },
+      "composite": -0.8553094987358535,
+      "evidence_coverage": 1.0,
+      "expected_alpha": -0.01061638119361172,
+      "neutralization_evidence": {
+        "momentum_12_1": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        },
+        "trend_slope": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        },
+        "volatility": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        }
+      },
+      "neutralized_values": {
+        "low_volatility": -0.6889301332613492,
+        "momentum": -1.2025086127501294,
+        "trend": -0.6744897501960817
+      },
+      "rank": 8,
+      "raw_values": {
+        "momentum_12_1": -0.2510343910864242,
+        "trend_slope": 0.1552747119096229,
+        "volatility": 0.46211442629559063
+      },
+      "status": "PROVISIONAL_OPERATIONAL_APPROVED",
+      "symbol": "MSFT",
+      "winsorized_values": {
+        "momentum_12_1": -0.24265786725365657,
+        "trend_slope": 0.1552747119096229,
+        "volatility": 0.461969967711938
+      }
+    },
+    {
+      "components": {
+        "low_volatility": -0.6744897501960817,
+        "momentum": -0.9137540707396344,
+        "trend": -1.5049476045280143
+      },
+      "composite": -1.0310638084879102,
+      "evidence_coverage": 1.0,
+      "expected_alpha": -0.011346346738414012,
+      "neutralization_evidence": {
+        "momentum_12_1": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        },
+        "trend_slope": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        },
+        "volatility": {
+          "coverage": 1.0,
+          "degrees_of_freedom": 7,
+          "eligible_count": 9,
+          "group_count": 1,
+          "insufficient_groups": [],
+          "method": "within-sector median centering",
+          "minimum_group_size": 2,
+          "status": "DEGRADED"
+        }
+      },
+      "neutralized_values": {
+        "low_volatility": -0.6744897501960817,
+        "momentum": -0.9137540707396344,
+        "trend": -1.5049476045280143
+      },
+      "rank": 9,
+      "raw_values": {
+        "momentum_12_1": -0.14632784317682856,
+        "trend_slope": -0.14677262756146486,
+        "volatility": 0.46030869399993246
+      },
+      "status": "PROVISIONAL_OPERATIONAL_APPROVED",
+      "symbol": "META",
+      "winsorized_values": {
+        "momentum_12_1": -0.14632784317682856,
+        "trend_slope": -0.1431727910073209,
+        "volatility": 0.46030869399993246
+      }
+    }
+  ],
+  "final_decisions": [
+    {
+      "action": "BUY",
+      "confidence": 0.0,
+      "current_weight": 0.0,
+      "data_quality": "VALID",
+      "data_version": "6a4f071c81ac17309e7c3619683cd23cd75b2398e3bd6730d4aa63ec1002e892",
+      "delta_weight": 0.06,
+      "earliest_execution_time": "2026-08-12T13:30:00",
+      "estimated_cost": 3.3035104457562223,
+      "estimated_quantity": 19,
+      "estimated_value": 6000.0,
+      "expected_alpha": 0.007687430540196638,
+      "expiry": "2026-08-19T13:30:00",
+      "model_version": "constrained-alpha-risk-v1",
+      "reason": "validated expected alpha remained positive after covariance, risk, liquidity, turnover and cost constraints; quality_constrained_medium_term_momentum:USAdaptiveAlphaCoreV1:1.0.0:427671e52a53",
+      "recommendation_id": "7bddc505a0b8efd86486:US:XNAS:AAPL",
+      "risk_contribution": 0.20269938854917344,
+      "symbol": "AAPL",
+      "target_weight": 0.06
+    },
+    {
+      "action": "BUY",
+      "confidence": 0.0,
+      "current_weight": 0.0,
+      "data_quality": "VALID",
+      "data_version": "6a4f071c81ac17309e7c3619683cd23cd75b2398e3bd6730d4aa63ec1002e892",
+      "delta_weight": 0.12,
+      "earliest_execution_time": "2026-08-12T13:30:00",
+      "estimated_cost": 6.612029726770756,
+      "estimated_quantity": 34,
+      "estimated_value": 12000.0,
+      "expected_alpha": 0.011221069679049572,
+      "expiry": "2026-08-19T13:30:00",
+      "model_version": "constrained-alpha-risk-v1",
+      "reason": "validated expected alpha remained positive after covariance, risk, liquidity, turnover and cost constraints; quality_constrained_medium_term_momentum:USAdaptiveAlphaCoreV1:1.0.0:427671e52a53",
+      "recommendation_id": "7bddc505a0b8efd86486:US:XNAS:GOOGL",
+      "risk_contribution": 0.5816650043967024,
+      "symbol": "GOOGL",
+      "target_weight": 0.12
+    },
+    {
+      "action": "BUY",
+      "confidence": 0.0,
+      "current_weight": 0.0,
+      "data_quality": "VALID",
+      "data_version": "6a4f071c81ac17309e7c3619683cd23cd75b2398e3bd6730d4aa63ec1002e892",
+      "delta_weight": 0.12,
+      "earliest_execution_time": "2026-08-12T13:30:00",
+      "estimated_cost": 6.6290954501910635,
+      "estimated_quantity": 46,
+      "estimated_value": 12000.0,
+      "expected_alpha": 0.005991854790985849,
+      "expiry": "2026-08-19T13:30:00",
+      "model_version": "constrained-alpha-risk-v1",
+      "reason": "validated expected alpha remained positive after covariance, risk, liquidity, turnover and cost constraints; quality_constrained_medium_term_momentum:USAdaptiveAlphaCoreV1:1.0.0:427671e52a53",
+      "recommendation_id": "7bddc505a0b8efd86486:US:XNYS:JNJ",
+      "risk_contribution": 0.2156356070541241,
+      "symbol": "JNJ",
+      "target_weight": 0.12
+    }
+  ],
+  "finished_at": "2026-08-12T07:24:33.338906+00:00",
+  "llm_status": "OPTIONAL_UNAVAILABLE/SHADOW/disabled/NOT_CONFIGURED",
+  "market_regime": "REGIME_OPTIONAL_UNAVAILABLE",
+  "market_regime_detail": "REGIME OPTIONAL: no market-regime run recorded; core pipeline unaffected.",
+  "market_session": "CLOSED",
+  "market_structure": "LEGACY_US_EQUITY",
+  "model_versions": [
+    "USAdaptiveAlphaCoreV1:1.0.0:427671e52a53",
+    "constrained-alpha-risk-v1"
+  ],
+  "operational_approval_artifact_id": "provisional-operational-71031e297db8e1f83b9c",
+  "operational_readiness": "PROVISIONAL_ACTIONABLE",
+  "portfolio": {
+    "cash": 100000.0,
+    "cash_weight": 1.0,
+    "invested_weight": 0.0,
+    "nav": 100000.0,
+    "positions": [
+      {
+        "current_weight": 0.0,
+        "delta_weight": 0.05999999999999998,
+        "price": null,
+        "shares": null,
+        "symbol": "AAPL",
+        "target_weight": 0.05999999999999998
+      },
+      {
+        "current_weight": 0.0,
+        "delta_weight": 0.12,
+        "price": null,
+        "shares": null,
+        "symbol": "GOOGL",
+        "target_weight": 0.12
+      },
+      {
+        "current_weight": 0.0,
+        "delta_weight": 0.12,
+        "price": null,
+        "shares": null,
+        "symbol": "JNJ",
+        "target_weight": 0.12
+      }
+    ],
+    "status": "TARGET_COMPUTED"
+  },
+  "probabilities": [
+    {
+      "average_return": null,
+      "base_probability": null,
+      "condition": "Validated conditional residual overlay",
+      "conditional_probability": null,
+      "credible_interval": null,
+      "hits": null,
+      "lift": null,
+      "median_return": null,
+      "oos_status": "PROBABILITY_ARTIFACT_MISSING",
+      "reliability": "INSUFFICIENT EVIDENCE",
+      "return_std": null,
+      "sample_size": 0,
+      "status": "PASS_DEGRADED",
+      "target": "benchmark-relative return; advisory fallback"
+    }
+  ],
+  "provenance": {
+    "automatic_execution": false,
+    "build_identifier": "1.1.0",
+    "build_time": "SOURCE_RUNTIME",
+    "cost_assumptions": {
+      "commission_bps": 0.5,
+      "impact_coefficient_bps": 10.0,
+      "model_version": "us-daily-cost-v1",
+      "slippage_bps": 3.0,
+      "spread_bps": 4.0
+    },
+    "data_hash": "fca2e8ce398f67fe95ff9562b2ff1de01ede6ce4fdecb1ee57a8ac1fe29ab8ba",
+    "data_snapshot_id": "US-20260812T041448Z-fca2e8ce398f",
+    "database_run_id": 21,
+    "dependency_lock_hash": "f3b12fb91ec763825658b8e891f43d08d52b80da7f8c06fbe0e9e3c909db8574",
+    "deterministic_core_model": "USAdaptiveAlphaCoreV1:1.0.0:427671e52a53",
+    "factor_version": "USAdaptiveAlphaCoreV1:1.0.0:427671e52a53",
+    "full_research_certified": false,
+    "git_commit": "e53fad55583b58652c2eb3ac499844762978cbe8",
+    "identity_hashes": {
+      "canonical_run_config_hash": "4fb9712640e972c91c733617da298f833c845515bc551f28b1d2abb13896cf75",
+      "cost_model_hash": "ad9592a0b1739a0a99c3ff982d4377f057b0ab2e780267d1ffcb59ffb8392e9b",
+      "data_version_hash": "6a4f071c81ac17309e7c3619683cd23cd75b2398e3bd6730d4aa63ec1002e892",
+      "model_approval_hash": "NOT_APPROVED",
+      "portfolio_constraint_hash": "1bf268818bf213af5ac8c4bc0e37d8670688df8aabee3fce0169af3ba07a9f65",
+      "risk_model_hash": "3e322b866b573a1ca64725c4fbba98c86e7bd85fa2a1b3ce8a75b64163730713",
+      "runtime_config_hash": "9da57710c39d8438aec277bc3d054873fc2cec3acbdb9802a21cadfb45af1adc",
+      "strategy_parameter_hash": "427671e52a5391d97cd01fd855aec3bbafa7c762c072aeee253406fa993416b6"
+    },
+    "llm_model": "OPTIONAL_OFFLINE",
+    "manual_broker": "Charles Schwab",
+    "ml_model": "NOT_REQUIRED",
+    "model_hash": "USAdaptiveAlphaCoreV1:1.0.0:427671e52a53",
+    "operational_approval_artifact_id": "provisional-operational-71031e297db8e1f83b9c",
+    "operational_readiness": "PROVISIONAL_ACTIONABLE",
+    "portfolio_id": "main",
+    "portfolio_snapshot_id": "3cdbef92c4a917b37c1f718123bdfe796a0d9bd0556eea434f6514652653b675",
+    "portfolio_validation_artifact_id": "provisional-operational-71031e297db8e1f83b9c",
+    "probability_artifact_id": "OPTIONAL_UNAVAILABLE",
+    "probability_calibration_status": "PROBABILITY_NOT_CALIBRATED",
+    "probability_overlay": {
+      "active": false,
+      "effects": [],
+      "reason": "PROBABILITY_ARTIFACT_MISSING",
+      "state": "RESEARCH_ONLY"
+    },
+    "production_approval_artifact_id": "NOT_APPROVED",
+    "randomness": "NOT_USED",
+    "research_certification_state": "NOT_CERTIFIABLE",
+    "research_data_version": "6a4f071c81ac17309e7c3619683cd23cd75b2398e3bd6730d4aa63ec1002e892",
+    "signal_version": "USAdaptiveAlphaCoreV1:1.0.0:427671e52a53",
+    "source_ids": [
+      "quality-run:18",
+      "universe-snapshot:3"
+    ],
+    "strategy_version": "USAdaptiveAlphaCoreV1:1.0.0:427671e52a53",
+    "transaction_cost_assumption": "commission 0.5 bps; spread 4.0 bps; slippage 3.0 bps; impact 10.0 bps; GROSS benchmark returns shown pre-cost (no live strategy track record)",
+    "universe_count": 9,
+    "universe_evidence": {
+      "alpha_symbols": [
+        "AAPL",
+        "AMZN",
+        "GOOGL",
+        "META",
+        "MSFT",
+        "NVDA",
+        "JNJ",
+        "JPM",
+        "XOM"
+      ],
+      "data_eligible": 9,
+      "directory_hash": "7972f2c66f1e909a6fc34c904c04b2e9e0d836474f9a27a731a3c5ad18240ea7",
+      "directory_provider": "nasdaq_trader_symbol_directory",
+      "directory_version": "7972f2c66f1e909a6fc34c904c04b2e9e0d836474f9a27a731a3c5ad18240ea7",
+      "eligibility_hash": "6ca4eb602abaaab74e8d70115aa5e6fc277e51397418ca62a4f74b62216b3a71",
+      "factor_eligible": 9,
+      "historical_use_allowed": false,
+      "liquidity_eligible": 9,
+      "pit_status": "CURRENT_PIT_ONLY",
+      "raw_listed_equities": 7475,
+      "raw_listed_securities": 8833,
+      "reference_symbols": [
+        "GLD",
+        "IWD",
+        "IWM",
+        "SGOV",
+        "SPY",
+        "VTI",
+        "QQQ",
+        "TLT"
+      ],
+      "rules_fingerprint": "184f3c38efec25ff755ec304b32c67e42814a8a2eaaaf6d692f8763f1dd3a00a",
+      "security_type_eligible": 4957,
+      "signal_eligible": 9,
+      "survivorship_status": "UNVERIFIED",
+      "universe_date": "2026-08-12",
+      "warnings": []
+    },
+    "universe_version": "3"
+  },
+  "rejected_signals": [
+    {
+      "reason": "size_neutralization:degraded",
+      "rejected_by": "RISK",
+      "symbol": "PORTFOLIO"
+    }
+  ],
+  "research_certification_state": "NOT_CERTIFIABLE",
+  "risk": {
+    "baseline_average_correlation": null,
+    "cash_target": 0.7,
+    "correlation_baseline_window": 0,
+    "correlation_jump": null,
+    "correlation_recent_window": 0,
+    "correlation_sample_count": 0,
+    "correlation_status": "NOT_APPLICABLE",
+    "drawdown": null,
+    "expected_volatility": 0.05498836037281595,
+    "exposure_multiplier": null,
+    "gross_exposure": 0.3,
+    "hhi": 0.0324,
+    "largest_target_weight": 0.12,
+    "reasons": [
+      "size_neutralization:degraded"
+    ],
+    "recent_average_correlation": null,
+    "size_exposure_status": "NOT_VALIDATED",
+    "status": "PASS",
+    "stress_failures": [],
+    "stress_status": "PASS",
+    "stress_warnings": [],
+    "target_volatility": 0.15,
+    "turnover": 0.29999999999999993
+  },
+  "run_id": "daily-e8ee28b3ba9444f4bb81658b61dd6b16",
+  "stages": [
+    {
+      "duration_seconds": 0.14656420000028447,
+      "message": "CLOSED; trade date 2026-08-12",
+      "metadata": {
+        "structure": "LEGACY_US_EQUITY",
+        "timezone": "America/New_York"
+      },
+      "name": "CALENDAR",
+      "status": "PASS"
+    },
+    {
+      "duration_seconds": 1.3473431000002165,
+      "message": "canonical required market data certified",
+      "metadata": {
+        "adjustment_status": "raw_ohlcv; adjusted_close_research_only",
+        "blockers": [],
+        "certified_symbols": [
+          "AAPL",
+          "AMZN",
+          "GLD",
+          "GOOGL",
+          "IWD",
+          "IWM",
+          "JNJ",
+          "JPM",
+          "META",
+          "MSFT",
+          "NVDA",
+          "QQQ",
+          "SGOV",
+          "SPY",
+          "TLT",
+          "VTI",
+          "XOM",
+          "^VIX"
+        ],
+        "corporate_action_status": "PASS",
+        "coverage": 1.0,
+        "data_hash": "fca2e8ce398f67fe95ff9562b2ff1de01ede6ce4fdecb1ee57a8ac1fe29ab8ba",
+        "decision_timestamp_convention": "daily close inputs available after provider publication; next-session manual execution",
+        "duplicate_rows": 0,
+        "evidence_paths": {
+          "certification_matrix": "data_certification_matrix.json",
+          "corporate_actions": "corporate_action_certificate.json",
+          "provider_reconciliation_optional": "provider_reconciliation_report.json"
+        },
+        "expected_bars": 108,
+        "fallback_provider": null,
+        "fallback_usage": [],
+        "freshness_status": "PASS",
+        "future_rows": 0,
+        "invalid_ohlc": 0,
+        "latest_completed_session": "2026-08-11",
+        "latest_date": "2026-08-11",
+        "latest_timestamp": "2026-08-11T20:30:00+00:00",
+        "matched_bars": 108,
+        "missing_bars": 0,
+        "missing_symbols": [],
+        "nan_counts": {
+          "close": 0,
+          "high": 0,
+          "low": 0,
+          "open": 0
+        },
+        "optional_certified": 3,
+        "optional_missing_symbols": [],
+        "optional_total": 3,
+        "output_row_count": 108,
+        "pit_cutoff": "2026-08-11T20:30:00+00:00",
+        "pit_integrity_status": "PASS",
+        "primary_valid_symbols": [
+          "AAPL",
+          "AMZN",
+          "GLD",
+          "GOOGL",
+          "IWD",
+          "IWM",
+          "JNJ",
+          "JPM",
+          "META",
+          "MSFT",
+          "NVDA",
+          "QQQ",
+          "SGOV",
+          "SPY",
+          "TLT",
+          "VTI",
+          "XOM",
+          "^VIX"
+        ],
+        "provider": "yahoo_finance",
+        "provider_reconciliation": "NOT_REQUIRED",
+        "quarantined_bars": 0,
+        "received_bars": 108,
+        "received_symbols": [
+          "AAPL",
+          "AMZN",
+          "GLD",
+          "GOOGL",
+          "IWD",
+          "IWM",
+          "JNJ",
+          "JPM",
+          "META",
+          "MSFT",
+          "NVDA",
+          "QQQ",
+          "SGOV",
+          "SPY",
+          "TLT",
+          "VTI",
+          "XOM",
+          "^VIX"
+        ],
+        "refresh": false,
+        "rejected_symbols": [],
+        "requested_symbols": [
+          "AAPL",
+          "AMZN",
+          "GLD",
+          "GOOGL",
+          "IWD",
+          "IWM",
+          "JNJ",
+          "JPM",
+          "META",
+          "MSFT",
+          "NVDA",
+          "QQQ",
+          "SGOV",
+          "SPY",
+          "TLT",
+          "VTI",
+          "XOM",
+          "^VIX"
+        ],
+        "required_certified": 15,
+        "required_total": 15,
+        "secondary_checked_symbols": [
+          "AAPL",
+          "AMZN",
+          "GLD",
+          "GOOGL",
+          "IWD",
+          "IWM",
+          "JNJ",
+          "JPM",
+          "META",
+          "MSFT",
+          "NVDA",
+          "QQQ",
+          "SGOV",
+          "SPY",
+          "TLT",
+          "VTI",
+          "XOM",
+          "^VIX"
+        ],
+        "snapshot_id": "US-20260812T041448Z-fca2e8ce398f",
+        "stale_symbols": [],
+        "status": "PASS",
+        "symbol_matrix": [
+          {
+            "calendar": "PASS",
+            "corporate_action": "PASS",
+            "cross_provider": "NOT_REQUIRED",
+            "failure_category": null,
+            "final": "CERTIFIED",
+            "freshness": "PASS",
+            "large_divergence_ratio": null,
+            "max_return_diff": null,
+            "median_return_diff": null,
+            "ohlc": "PASS",
+            "overlap_rows": 0,
+            "pit": "PASS",
+            "primary": "PASS",
+            "primary_latest_session": null,
+            "reason": "",
+            "required": true,
+            "secondary": "NOT_RUN_OPTIONAL",
+            "secondary_candidates_attempted": [],
+            "secondary_latest_session": null,
+            "secondary_provider": "none",
+            "symbol": "SPY"
+          },
+          {
+            "calendar": "PASS",
+            "corporate_action": "PASS",
+            "cross_provider": "NOT_REQUIRED",
+            "failure_category": null,
+            "final": "CERTIFIED",
+            "freshness": "PASS",
+            "large_divergence_ratio": null,
+            "max_return_diff": null,
+            "median_return_diff": null,
+            "ohlc": "PASS",
+            "overlap_rows": 0,
+            "pit": "PASS",
+            "primary": "PASS",
+            "primary_latest_session": null,
+            "reason": "",
+            "required": true,
+            "secondary": "NOT_RUN_OPTIONAL",
+            "secondary_candidates_attempted": [],
+            "secondary_latest_session": null,
+            "secondary_provider": "none",
+            "symbol": "QQQ"
+          },
+          {
+            "calendar": "PASS",
+            "corporate_action": "PASS",
+            "cross_provider": "NOT_REQUIRED",
+            "failure_category": null,
+            "final": "CERTIFIED",
+            "freshness": "PASS",
+            "large_divergence_ratio": null,
+            "max_return_diff": null,
+            "median_return_diff": null,
+            "ohlc": "PASS",
+            "overlap_rows": 0,
+            "pit": "PASS",
+            "primary": "PASS",
+            "primary_latest_session": null,
+            "reason": "",
+            "required": true,
+            "secondary": "NOT_RUN_OPTIONAL",
+            "secondary_candidates_attempted": [],
+            "secondary_latest_session": null,
+            "secondary_provider": "none",
+            "symbol": "IWD"
+          },
+          {
+            "calendar": "PASS",
+            "corporate_action": "PASS",
+            "cross_provider": "NOT_REQUIRED",
+            "failure_category": null,
+            "final": "CERTIFIED",
+            "freshness": "PASS",
+            "large_divergence_ratio": null,
+            "max_return_diff": null,
+            "median_return_diff": null,
+            "ohlc": "PASS",
+            "overlap_rows": 0,
+            "pit": "PASS",
+            "primary": "PASS",
+            "primary_latest_session": null,
+            "reason": "",
+            "required": true,
+            "secondary": "NOT_RUN_OPTIONAL",
+            "secondary_candidates_attempted": [],
+            "secondary_latest_session": null,
+            "secondary_provider": "none",
+            "symbol": "IWM"
+          },
+          {
+            "calendar": "PASS",
+            "corporate_action": "PASS",
+            "cross_provider": "NOT_REQUIRED",
+            "failure_category": null,
+            "final": "CERTIFIED",
+            "freshness": "PASS",
+            "large_divergence_ratio": null,
+            "max_return_diff": null,
+            "median_return_diff": null,
+            "ohlc": "PASS",
+            "overlap_rows": 0,
+            "pit": "PASS",
+            "primary": "PASS",
+            "primary_latest_session": null,
+            "reason": "",
+            "required": true,
+            "secondary": "NOT_RUN_OPTIONAL",
+            "secondary_candidates_attempted": [],
+            "secondary_latest_session": null,
+            "secondary_provider": "none",
+            "symbol": "VTI"
+          },
+          {
+            "calendar": "PASS",
+            "corporate_action": "PASS",
+            "cross_provider": "NOT_REQUIRED",
+            "failure_category": null,
+            "final": "CERTIFIED",
+            "freshness": "PASS",
+            "large_divergence_ratio": null,
+            "max_return_diff": null,
+            "median_return_diff": null,
+            "ohlc": "PASS",
+            "overlap_rows": 0,
+            "pit": "PASS",
+            "primary": "PASS",
+            "primary_latest_session": null,
+            "reason": "",
+            "required": true,
+            "secondary": "NOT_RUN_OPTIONAL",
+            "secondary_candidates_attempted": [],
+            "secondary_latest_session": null,
+            "secondary_provider": "none",
+            "symbol": "TLT"
+          },
+          {
+            "calendar": "PASS",
+            "corporate_action": "PASS",
+            "cross_provider": "NOT_REQUIRED",
+            "failure_category": null,
+            "final": "CERTIFIED",
+            "freshness": "PASS",
+            "large_divergence_ratio": null,
+            "max_return_diff": null,
+            "median_return_diff": null,
+            "ohlc": "PASS",
+            "overlap_rows": 0,
+            "pit": "PASS",
+            "primary": "PASS",
+            "primary_latest_session": null,
+            "reason": "",
+            "required": true,
+            "secondary": "NOT_RUN_OPTIONAL",
+            "secondary_candidates_attempted": [],
+            "secondary_latest_session": null,
+            "secondary_provider": "none",
+            "symbol": "GLD"
+          },
+          {
+            "calendar": "PASS",
+            "corporate_action": "PASS",
+            "cross_provider": "NOT_REQUIRED",
+            "failure_category": null,
+            "final": "CERTIFIED",
+            "freshness": "PASS",
+            "large_divergence_ratio": null,
+            "max_return_diff": null,
+            "median_return_diff": null,
+            "ohlc": "PASS",
+            "overlap_rows": 0,
+            "pit": "PASS",
+            "primary": "PASS",
+            "primary_latest_session": null,
+            "reason": "",
+            "required": true,
+            "secondary": "NOT_RUN_OPTIONAL",
+            "secondary_candidates_attempted": [],
+            "secondary_latest_session": null,
+            "secondary_provider": "none",
+            "symbol": "SGOV"
+          },
+          {
+            "calendar": "PASS",
+            "corporate_action": "PASS",
+            "cross_provider": "NOT_REQUIRED",
+            "failure_category": null,
+            "final": "CERTIFIED",
+            "freshness": "PASS",
+            "large_divergence_ratio": null,
+            "max_return_diff": null,
+            "median_return_diff": null,
+            "ohlc": "PASS",
+            "overlap_rows": 0,
+            "pit": "PASS",
+            "primary": "PASS",
+            "primary_latest_session": null,
+            "reason": "",
+            "required": true,
+            "secondary": "NOT_RUN_OPTIONAL",
+            "secondary_candidates_attempted": [],
+            "secondary_latest_session": null,
+            "secondary_provider": "none",
+            "symbol": "^VIX"
+          },
+          {
+            "calendar": "PASS",
+            "corporate_action": "PASS",
+            "cross_provider": "NOT_REQUIRED",
+            "failure_category": null,
+            "final": "CERTIFIED",
+            "freshness": "PASS",
+            "large_divergence_ratio": null,
+            "max_return_diff": null,
+            "median_return_diff": null,
+            "ohlc": "PASS",
+            "overlap_rows": 0,
+            "pit": "PASS",
+            "primary": "PASS",
+            "primary_latest_session": null,
+            "reason": "",
+            "required": true,
+            "secondary": "NOT_RUN_OPTIONAL",
+            "secondary_candidates_attempted": [],
+            "secondary_latest_session": null,
+            "secondary_provider": "none",
+            "symbol": "AAPL"
+          },
+          {
+            "calendar": "PASS",
+            "corporate_action": "PASS",
+            "cross_provider": "NOT_REQUIRED",
+            "failure_category": null,
+            "final": "CERTIFIED",
+            "freshness": "PASS",
+            "large_divergence_ratio": null,
+            "max_return_diff": null,
+            "median_return_diff": null,
+            "ohlc": "PASS",
+            "overlap_rows": 0,
+            "pit": "PASS",
+            "primary": "PASS",
+            "primary_latest_session": null,
+            "reason": "",
+            "required": true,
+            "secondary": "NOT_RUN_OPTIONAL",
+            "secondary_candidates_attempted": [],
+            "secondary_latest_session": null,
+            "secondary_provider": "none",
+            "symbol": "MSFT"
+          },
+          {
+            "calendar": "PASS",
+            "corporate_action": "PASS",
+            "cross_provider": "NOT_REQUIRED",
+            "failure_category": null,
+            "final": "CERTIFIED",
+            "freshness": "PASS",
+            "large_divergence_ratio": null,
+            "max_return_diff": null,
+            "median_return_diff": null,
+            "ohlc": "PASS",
+            "overlap_rows": 0,
+            "pit": "PASS",
+            "primary": "PASS",
+            "primary_latest_session": null,
+            "reason": "",
+            "required": true,
+            "secondary": "NOT_RUN_OPTIONAL",
+            "secondary_candidates_attempted": [],
+            "secondary_latest_session": null,
+            "secondary_provider": "none",
+            "symbol": "NVDA"
+          },
+          {
+            "calendar": "PASS",
+            "corporate_action": "PASS",
+            "cross_provider": "NOT_REQUIRED",
+            "failure_category": null,
+            "final": "CERTIFIED",
+            "freshness": "PASS",
+            "large_divergence_ratio": null,
+            "max_return_diff": null,
+            "median_return_diff": null,
+            "ohlc": "PASS",
+            "overlap_rows": 0,
+            "pit": "PASS",
+            "primary": "PASS",
+            "primary_latest_session": null,
+            "reason": "",
+            "required": true,
+            "secondary": "NOT_RUN_OPTIONAL",
+            "secondary_candidates_attempted": [],
+            "secondary_latest_session": null,
+            "secondary_provider": "none",
+            "symbol": "AMZN"
+          },
+          {
+            "calendar": "PASS",
+            "corporate_action": "PASS",
+            "cross_provider": "NOT_REQUIRED",
+            "failure_category": null,
+            "final": "CERTIFIED",
+            "freshness": "PASS",
+            "large_divergence_ratio": null,
+            "max_return_diff": null,
+            "median_return_diff": null,
+            "ohlc": "PASS",
+            "overlap_rows": 0,
+            "pit": "PASS",
+            "primary": "PASS",
+            "primary_latest_session": null,
+            "reason": "",
+            "required": true,
+            "secondary": "NOT_RUN_OPTIONAL",
+            "secondary_candidates_attempted": [],
+            "secondary_latest_session": null,
+            "secondary_provider": "none",
+            "symbol": "GOOGL"
+          },
+          {
+            "calendar": "PASS",
+            "corporate_action": "PASS",
+            "cross_provider": "NOT_REQUIRED",
+            "failure_category": null,
+            "final": "CERTIFIED",
+            "freshness": "PASS",
+            "large_divergence_ratio": null,
+            "max_return_diff": null,
+            "median_return_diff": null,
+            "ohlc": "PASS",
+            "overlap_rows": 0,
+            "pit": "PASS",
+            "primary": "PASS",
+            "primary_latest_session": null,
+            "reason": "",
+            "required": true,
+            "secondary": "NOT_RUN_OPTIONAL",
+            "secondary_candidates_attempted": [],
+            "secondary_latest_session": null,
+            "secondary_provider": "none",
+            "symbol": "META"
+          },
+          {
+            "calendar": "PASS",
+            "corporate_action": "PASS",
+            "cross_provider": "NOT_REQUIRED",
+            "failure_category": null,
+            "final": "CERTIFIED",
+            "freshness": "PASS",
+            "large_divergence_ratio": null,
+            "max_return_diff": null,
+            "median_return_diff": null,
+            "ohlc": "PASS",
+            "overlap_rows": 0,
+            "pit": "PASS",
+            "primary": "PASS",
+            "primary_latest_session": null,
+            "reason": "",
+            "required": false,
+            "secondary": "NOT_RUN_OPTIONAL",
+            "secondary_candidates_attempted": [],
+            "secondary_latest_session": null,
+            "secondary_provider": "none",
+            "symbol": "JPM"
+          },
+          {
+            "calendar": "PASS",
+            "corporate_action": "PASS",
+            "cross_provider": "NOT_REQUIRED",
+            "failure_category": null,
+            "final": "CERTIFIED",
+            "freshness": "PASS",
+            "large_divergence_ratio": null,
+            "max_return_diff": null,
+            "median_return_diff": null,
+            "ohlc": "PASS",
+            "overlap_rows": 0,
+            "pit": "PASS",
+            "primary": "PASS",
+            "primary_latest_session": null,
+            "reason": "",
+            "required": false,
+            "secondary": "NOT_RUN_OPTIONAL",
+            "secondary_candidates_attempted": [],
+            "secondary_latest_session": null,
+            "secondary_provider": "none",
+            "symbol": "JNJ"
+          },
+          {
+            "calendar": "PASS",
+            "corporate_action": "PASS",
+            "cross_provider": "NOT_REQUIRED",
+            "failure_category": null,
+            "final": "CERTIFIED",
+            "freshness": "PASS",
+            "large_divergence_ratio": null,
+            "max_return_diff": null,
+            "median_return_diff": null,
+            "ohlc": "PASS",
+            "overlap_rows": 0,
+            "pit": "PASS",
+            "primary": "PASS",
+            "primary_latest_session": null,
+            "reason": "",
+            "required": false,
+            "secondary": "NOT_RUN_OPTIONAL",
+            "secondary_candidates_attempted": [],
+            "secondary_latest_session": null,
+            "secondary_provider": "none",
+            "symbol": "XOM"
+          }
+        ],
+        "timezone_violations": 0,
+        "unexpected_bars": 0,
+        "valid_bars": 108,
+        "warnings": []
+      },
+      "name": "DATA",
+      "status": "PASS"
+    },
+    {
+      "duration_seconds": 0.0,
+      "message": "no future observations",
+      "metadata": {
+        "output_row_count": 1,
+        "source": "Point-in-Time Inputs"
+      },
+      "name": "PIT",
+      "status": "PASS"
+    },
+    {
+      "duration_seconds": 7.499998901039362e-06,
+      "message": "LLM provider is disabled or has no inherited credential; classical Quant Core continues",
+      "metadata": {
+        "detected_events": 0,
+        "factor_status": "SHADOW",
+        "model": "NOT_CONFIGURED",
+        "output_row_count": 0,
+        "processed_documents": 0,
+        "production_influence": false,
+        "provider": "disabled"
+      },
+      "name": "LLM_INTELLIGENCE",
+      "status": "OPTIONAL_UNAVAILABLE"
+    },
+    {
+      "duration_seconds": 0.0,
+      "message": "PIT price features computed",
+      "metadata": {
+        "feature_names": [
+          "low_volatility",
+          "momentum",
+          "trend"
+        ],
+        "missing_count": 0,
+        "output_row_count": 9,
+        "valid_count": 9
+      },
+      "name": "FEATURE",
+      "status": "PASS"
+    },
+    {
+      "duration_seconds": 0.0,
+      "message": "9 cross-sectional observations",
+      "metadata": {
+        "cross_sectional_sample_size": 9,
+        "factor_names": [
+          "low_volatility",
+          "momentum",
+          "trend"
+        ],
+        "output_row_count": 9
+      },
+      "name": "FACTOR",
+      "status": "PASS"
+    },
+    {
+      "duration_seconds": 0.0,
+      "message": "9 provisional operational signals",
+      "metadata": {
+        "output_row_count": 3,
+        "source": "Alpha Signals"
+      },
+      "name": "SIGNAL",
+      "status": "PASS"
+    },
+    {
+      "duration_seconds": 0.0,
+      "message": "deterministic base alpha unchanged; PROBABILITY_ARTIFACT_MISSING",
+      "metadata": {
+        "fallback_reason": "PROBABILITY_ARTIFACT_MISSING",
+        "output_row_count": 0,
+        "overlay_active": false,
+        "overlay_state": "RESEARCH_ONLY",
+        "position_influence": 0.0
+      },
+      "name": "PROBABILITY",
+      "status": "PASS_DEGRADED"
+    },
+    {
+      "duration_seconds": 0.0,
+      "message": "constrained-alpha-risk-v1",
+      "metadata": {
+        "output_row_count": 1,
+        "source": "Portfolio Construction"
+      },
+      "name": "PORTFOLIO",
+      "status": "PASS"
+    },
+    {
+      "duration_seconds": 0.0,
+      "message": "base",
+      "metadata": {
+        "output_row_count": 1,
+        "source": "Risk Budget"
+      },
+      "name": "RISK",
+      "status": "PASS"
+    },
+    {
+      "duration_seconds": 0.0,
+      "message": "manual review required; automatic execution disabled",
+      "metadata": {
+        "output_row_count": 3,
+        "source": "Daily Decision"
+      },
+      "name": "DECISION",
+      "status": "PASS"
+    },
+    {
+      "duration_seconds": 0.0,
+      "message": "3 proposals",
+      "metadata": {
+        "output_row_count": 3,
+        "source": "Trade Generator"
+      },
+      "name": "EXECUTION",
+      "status": "PASS"
+    },
+    {
+      "duration_seconds": 0.0,
+      "message": "immutable snapshot and stage evidence saved",
+      "metadata": {
+        "output_row_count": 1
+      },
+      "name": "PERSISTENCE",
+      "status": "PASS"
+    }
+  ],
+  "started_at": "2026-08-12T07:24:31.708953+00:00",
+  "trade_date": "2026-08-12",
+  "version": "1.1.0",
+  "warnings": []
+}

@@ -1,8 +1,8 @@
 {
   "adv_cutoff_convention": "STRICTLY_BEFORE_UNIVERSE_DATE",
-  "analysis_date": "2026-08-10",
-  "artifact_hash": "b88938d429e006e3db40fbce58a2af22d985f030c37f7a87478731696d7a8f9b",
-  "artifact_id": "broad-us-current-2026-08-10-50106330e837",
+  "analysis_date": "2026-08-11",
+  "artifact_hash": "c0956b790064f9839e38b161f2c1ff42025f8fb8374f7202d9680e59f442a350",
+  "artifact_id": "broad-us-current-2026-08-11-6ca4eb602aba",
   "blockers": [
     "HISTORICAL_MEMBERSHIP_INCOMPLETE",
     "DELISTING_HISTORY_INCOMPLETE",
@@ -10,7 +10,7 @@
     "CORPORATE_ACTION_PIT_HISTORY_INCOMPLETE",
     "PIT_TOTAL_RETURN_HISTORY_INCOMPLETE"
   ],
-  "certified_universe_snapshot_id": "2",
+  "certified_universe_snapshot_id": "3",
   "configured_filters": {
     "include_adr": false,
     "include_reit": false,
@@ -31,19 +31,19 @@
     "signal_eligible": 9
   },
   "current_daily_selection_status": "PASS",
-  "daily_data_hash": "a31b42e3ca6d340602801a55ba71b067124756d7111365f5a125eab3d7931dd5",
-  "daily_data_snapshot_id": "US-20260811T155901Z-a31b42e3ca6d",
-  "decision_cutoff": "2026-08-10T20:30:00+00:00",
-  "directory_content_hash": "4af011716456c1a37851b7c43a3002db5f77049592331fce3ace16a0701bc57e",
-  "directory_manifest_hash": "7dd0d911d9c2338c29f018c30600dae5941cac15807e2a172da8111aa8161048",
-  "eligibility_content_hash": "50106330e837e47b4fd6afbb2bb0d8d33bcbe7acf4f08cd5cb6a49a88ace476b",
+  "daily_data_hash": "fca2e8ce398f67fe95ff9562b2ff1de01ede6ce4fdecb1ee57a8ac1fe29ab8ba",
+  "daily_data_snapshot_id": "US-20260812T041448Z-fca2e8ce398f",
+  "decision_cutoff": "2026-08-11T20:30:00+00:00",
+  "directory_content_hash": "7972f2c66f1e909a6fc34c904c04b2e9e0d836474f9a27a731a3c5ad18240ea7",
+  "directory_manifest_hash": "2ea5217f24dda076b8cc9488fb85f1294aacf96d232a4951c72604f8088c8099",
+  "eligibility_content_hash": "6ca4eb602abaaab74e8d70115aa5e6fc277e51397418ca62a4f74b62216b3a71",
   "eligible_for_strategy_production_approval": false,
   "fixed_bootstrap_list_is_alpha_universe": false,
-  "generated_at": "2026-08-11T17:43:29.373641+00:00",
+  "generated_at": "2026-08-12T04:14:58.735120+00:00",
   "historical_research_status": "NOT_CERTIFIABLE",
   "historical_use_allowed": false,
   "pit_status": "CURRENT_PIT_ONLY",
-  "pit_total_return_version": "5401d022821c598582ae1834f256b1aacbd5690b9d0e11403fc7c94d8943c81c",
+  "pit_total_return_version": "6a4f071c81ac17309e7c3619683cd23cd75b2398e3bd6730d4aa63ec1002e892",
   "provider": "nasdaq_trader_symbol_directory",
   "provider_capabilities": {
     "common_stock_classification": "CONSERVATIVE_NAME_RULES",
@@ -57,9 +57,9 @@
     "prices": false,
     "total_return_vintages": false
   },
-  "provider_retrieved_at": "2026-08-11T16:59:53.836827+00:00",
+  "provider_retrieved_at": "2026-08-12T04:14:23.901554+00:00",
   "provider_scope": "CURRENT_LISTINGS_ONLY",
-  "provider_source_timestamp": "FILE CREATION TIME: 0811202612:11;FILE CREATION TIME: 0811202612:11",
+  "provider_source_timestamp": "FILE CREATION TIME: 0811202621:31;FILE CREATION TIME: 0811202621:31",
   "rules_fingerprint": "184f3c38efec25ff755ec304b32c67e42814a8a2eaaaf6d692f8763f1dd3a00a",
   "schema_version": "broad-universe-certification-v1",
   "scope_classification": "CURRENT_DAILY_PIT_PARTIAL",
@@ -72,8 +72,8 @@
     "macro_regime": "OPTIONAL_UNAVAILABLE",
     "risk_reference": "ETF_OR_CURRENT_HOLDING_NOT_ALPHA_RANKED"
   },
-  "source_git_commit": "678b877a4a51e1da866ef216a0f7ed5b062e9381",
-  "source_run_certificate": "reports/daily-runs/daily-fd0d8ad42f6b48ea9f60be834d8d11d7/run_certificate.json",
-  "source_run_id": "daily-fd0d8ad42f6b48ea9f60be834d8d11d7",
+  "source_git_commit": "e53fad55583b58652c2eb3ac499844762978cbe8",
+  "source_run_certificate": "reports/daily-runs/daily-5b9f4d3812f14b329429fc2e79fc8796/run_certificate.json",
+  "source_run_id": "daily-5b9f4d3812f14b329429fc2e79fc8796",
   "survivorship_status": "UNVERIFIED"
 }

@@ -11,8 +11,8 @@
     "minimum_net_sharpe_improvement": 0.0,
     "minimum_walk_forward_folds": 4
   },
-  "artifact_hash": "af6f16e3e45ebd9d3ac0792e1a0828eb8d5cfbdb9605e4e31e1cc69a701c7299",
-  "artifact_id": "probability-overlay-2026-08-10-02e15f97f29a",
+  "artifact_hash": "5e421b281fe488373ff08192d724f38614df76936ffe4706a7461f442ca264b1",
+  "artifact_id": "probability-overlay-2026-08-11-97423b6bd112",
   "blockers": [
     "PROBABILITY_ARTIFACT_MISSING",
     "RESEARCH_DATA_NOT_CERTIFIED",
@@ -32,7 +32,7 @@
   },
   "fallback_reason": "PROBABILITY_ARTIFACT_MISSING",
   "fallback_strategy": "BASE_FACTOR_ALPHA",
-  "generated_at": "2026-08-11T17:43:29.373641+00:00",
+  "generated_at": "2026-08-12T04:14:58.735120+00:00",
   "mechanism_if_approved": "OOS_NET_RESIDUAL_SHRINKAGE",
   "production_approved": false,
   "production_effects": {
@@ -42,15 +42,15 @@
     "recommendation_may_change": false,
     "target_weight_may_change": false
   },
-  "research_data_version": "5401d022821c598582ae1834f256b1aacbd5690b9d0e11403fc7c94d8943c81c",
+  "research_data_version": "6a4f071c81ac17309e7c3619683cd23cd75b2398e3bd6730d4aa63ec1002e892",
   "schema_version": "probability-overlay-certification-v1",
-  "source_git_commit": "678b877a4a51e1da866ef216a0f7ed5b062e9381",
-  "source_run_certificate": "reports/daily-runs/daily-fd0d8ad42f6b48ea9f60be834d8d11d7/run_certificate.json",
-  "source_run_id": "daily-fd0d8ad42f6b48ea9f60be834d8d11d7",
+  "source_git_commit": "e53fad55583b58652c2eb3ac499844762978cbe8",
+  "source_run_certificate": "reports/daily-runs/daily-5b9f4d3812f14b329429fc2e79fc8796/run_certificate.json",
+  "source_run_id": "daily-5b9f4d3812f14b329429fc2e79fc8796",
   "state": "RESEARCH_ONLY",
   "strategy_parameter_hash": "427671e52a5391d97cd01fd855aec3bbafa7c762c072aeee253406fa993416b6",
   "strategy_version": "USAdaptiveAlphaCoreV1:1.0.0:427671e52a53",
-  "universe_version": "2",
+  "universe_version": "3",
   "walk_forward": {
     "base_metrics": null,
     "benchmark": "SPY",

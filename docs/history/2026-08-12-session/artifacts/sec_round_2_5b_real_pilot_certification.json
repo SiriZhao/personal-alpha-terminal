@@ -1,0 +1,188 @@
+{
+  "LLM_RESEARCH_DATA_DEPENDENCY": "SECURITY_MAPPING_PENDING",
+  "acquisition": {
+    "amendments": 1,
+    "cik": 1318605,
+    "company": "Tesla, Inc.",
+    "coverage_end": "2025-04-30",
+    "coverage_start": "2025-01-02",
+    "documents": 7,
+    "forms": {
+      "10-K": 1,
+      "10-K/A": 1,
+      "10-Q": 1,
+      "8-K": 4
+    },
+    "issuers": 1,
+    "pilot": "real-pilot-tesla-2025-h1",
+    "status": "ACQUIRED_NOT_FULLY_MAPPED"
+  },
+  "certification_id": "sec-round-2.5b-real-pilot-2026-08-12",
+  "deepseek_extraction": {
+    "actual_usage": [
+      {
+        "as_of": "2025-01-29 21:09:13+00:00",
+        "cached_tokens": 11776,
+        "completion_tokens": 237,
+        "error_category": null,
+        "estimated_cost_usd": 0.0001014328,
+        "generated_at": "2026-08-12 05:45:00.810069+00:00",
+        "input_document_ids": [
+          "sec-1318605-000162828025002993"
+        ],
+        "latency_ms": 2957,
+        "model": "deepseek-v4-flash",
+        "prompt_tokens": 11791,
+        "prompt_version": "event-extraction-v2",
+        "provider": "deepseek",
+        "request_hash": "c52a04d65319b8ea1c2238837589df1f83d05be5ad671c847db40985aca66d51",
+        "response_hash": "ae991de8c1e678c00806ef9716778da100187fb5269846e5616ed7d064ee0636",
+        "retry_count": 0,
+        "run_id": null,
+        "task_type": "EVENT_EXTRACTION",
+        "validation_status": "VALID"
+      }
+    ],
+    "budget_ceiling": {
+      "max_cost_usd": 0.2,
+      "max_requests": 2,
+      "max_tokens": 25000
+    },
+    "documents": 1,
+    "event_id": "23060a72f937eef2330c64251c660fc25ab56042c8956dfe2aeca72d8cce7416",
+    "source_hash": "0f54d01b541dd48733a5ecb13aacad3b25a7b367c896bd80a05424c9214dde43",
+    "status": "READY"
+  },
+  "evidence_paths": {
+    "deepseek_pilot": "artifacts/latest/sec-edgar-deepseek-pilot.json",
+    "events": "var/research-data/text-corpus/events/real-pilot-tesla-2025-h1.jsonl",
+    "landing_zone": "var/research-data/text-corpus/raw/sec/real-pilot-tesla-2025-h1",
+    "manifest": "artifacts/latest/sec-edgar-corpus/1b8fe9e3b99eeaafb1e097f4d34a06633ef1897a353b6e06abd843bf255e9e00.json",
+    "replay_pilot": "artifacts/latest/sec-edgar-real-replay-pilot.json"
+  },
+  "generated_at": "2026-08-12T05:48:32.550264+00:00",
+  "historical_replay": {
+    "checks": {
+      "all_checks": true,
+      "amendment_version_linked_to_original": true,
+      "c1_before_jan29_future_invisible_hash": true,
+      "c1_before_jan29_repeated_deterministic": true,
+      "c1_event_invisible": true,
+      "c1_visible_is_early_8k_only": true,
+      "c2_after_original_10k_before_amendment_future_invisible_hash": true,
+      "c2_after_original_10k_before_amendment_repeated_deterministic": true,
+      "c2_event_visible": true,
+      "c2_sees_original_10k_not_amendment": true,
+      "c3_before_amendment_future_invisible_hash": true,
+      "c3_before_amendment_repeated_deterministic": true,
+      "c3_hides_amendment": true,
+      "c4_after_amendment_future_invisible_hash": true,
+      "c4_after_amendment_repeated_deterministic": true,
+      "c4_reveals_amendment": true
+    },
+    "cutoffs": {
+      "c1_before_jan29": {
+        "cutoff": "2025-01-29T21:00:00+00:00",
+        "replay_hash": "a03e491c9a45397dd4ba7370f13f97128bca82ef0e116562ed1a60d4157d6943",
+        "status": "NOT_CERTIFIABLE",
+        "visible_document_ids": [
+          "sec-1318605-000162828025000007"
+        ],
+        "visible_document_versions": [
+          "sec-1318605-000162828025000007|original-000162828025000007|sec-1318605-000162828025000007"
+        ],
+        "visible_event_ids": []
+      },
+      "c2_after_original_10k_before_amendment": {
+        "cutoff": "2025-01-30T02:00:00+00:00",
+        "replay_hash": "743cab40605dfd3c0e3ee090f425490d0ba961e9e62f1c7adfedcc3eba2ae8d7",
+        "status": "NOT_CERTIFIABLE",
+        "visible_document_ids": [
+          "sec-1318605-000162828025000007",
+          "sec-1318605-000162828025002993",
+          "sec-1318605-000162828025003063"
+        ],
+        "visible_document_versions": [
+          "sec-1318605-000162828025000007|original-000162828025000007|sec-1318605-000162828025000007",
+          "sec-1318605-000162828025002993|original-000162828025002993|sec-1318605-000162828025002993",
+          "sec-1318605-000162828025003063|original-000162828025003063|sec-1318605-000162828025003063"
+        ],
+        "visible_event_ids": [
+          "23060a72f937eef2330c64251c660fc25ab56042c8956dfe2aeca72d8cce7416"
+        ]
+      },
+      "c3_before_amendment": {
+        "cutoff": "2025-04-30T21:00:00+00:00",
+        "replay_hash": "88e795b347e9406a978e1c1a26341883d25da9d3bac926cf9ac2b0ab13aa0572",
+        "status": "NOT_CERTIFIABLE",
+        "visible_document_ids": [
+          "sec-1318605-000162828025000007",
+          "sec-1318605-000162828025002993",
+          "sec-1318605-000162828025003063",
+          "sec-1318605-000162828025016070",
+          "sec-1318605-000162828025018851",
+          "sec-1318605-000162828025018911"
+        ],
+        "visible_document_versions": [
+          "sec-1318605-000162828025000007|original-000162828025000007|sec-1318605-000162828025000007",
+          "sec-1318605-000162828025002993|original-000162828025002993|sec-1318605-000162828025002993",
+          "sec-1318605-000162828025003063|original-000162828025003063|sec-1318605-000162828025003063",
+          "sec-1318605-000162828025016070|original-000162828025016070|sec-1318605-000162828025016070",
+          "sec-1318605-000162828025018851|original-000162828025018851|sec-1318605-000162828025018851",
+          "sec-1318605-000162828025018911|original-000162828025018911|sec-1318605-000162828025018911"
+        ],
+        "visible_event_ids": [
+          "23060a72f937eef2330c64251c660fc25ab56042c8956dfe2aeca72d8cce7416"
+        ]
+      },
+      "c4_after_amendment": {
+        "cutoff": "2025-05-01T00:00:00+00:00",
+        "replay_hash": "6aa9bc76fd29226f65eb7846608f5fbb9df083775adb41c3b4cebf51e43607d5",
+        "status": "NOT_CERTIFIABLE",
+        "visible_document_ids": [
+          "sec-1318605-000110465925042659",
+          "sec-1318605-000162828025000007",
+          "sec-1318605-000162828025002993",
+          "sec-1318605-000162828025003063",
+          "sec-1318605-000162828025016070",
+          "sec-1318605-000162828025018851",
+          "sec-1318605-000162828025018911"
+        ],
+        "visible_document_versions": [
+          "sec-1318605-000162828025003063|amendment-000110465925042659|sec-1318605-000110465925042659",
+          "sec-1318605-000162828025000007|original-000162828025000007|sec-1318605-000162828025000007",
+          "sec-1318605-000162828025002993|original-000162828025002993|sec-1318605-000162828025002993",
+          "sec-1318605-000162828025003063|original-000162828025003063|sec-1318605-000162828025003063",
+          "sec-1318605-000162828025016070|original-000162828025016070|sec-1318605-000162828025016070",
+          "sec-1318605-000162828025018851|original-000162828025018851|sec-1318605-000162828025018851",
+          "sec-1318605-000162828025018911|original-000162828025018911|sec-1318605-000162828025018911"
+        ],
+        "visible_event_ids": [
+          "23060a72f937eef2330c64251c660fc25ab56042c8956dfe2aeca72d8cce7416"
+        ]
+      }
+    },
+    "market_data_certified": false,
+    "text_source_pit_certified": true
+  },
+  "manifest": {
+    "blockers": [
+      "SYMBOL_MAPPING_INCOMPLETE"
+    ],
+    "certification_state": "SECURITY_MAPPING_PENDING",
+    "corpus_id": "sec-edgar-real-pilot-tesla-2025-h1",
+    "extraction_coverage": 0.14285714285714285,
+    "manifest_hash": "1b8fe9e3b99eeaafb1e097f4d34a06633ef1897a353b6e06abd843bf255e9e00",
+    "mapped_security_count": 0,
+    "raw_content_hash": "4e4489094e3249cff89d40ac34f8aeb733e219de9ec44ae33b907b79035e26a3",
+    "unmapped_issuer_count": 1
+  },
+  "statuses": {
+    "FULL_RESEARCH_CORPUS": "NOT_CERTIFIABLE",
+    "PIT_SOURCE_CERTIFICATION": "PASS",
+    "REAL_DEEPSEEK_EXTRACTION": "PASS",
+    "REAL_HISTORICAL_REPLAY": "PASS",
+    "SECURITY_MAPPING": "PENDING",
+    "SEC_SOURCE_ACQUISITION": "PASS"
+  }
+}

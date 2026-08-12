@@ -4,23 +4,14 @@
 
 ### TECH-001 — Provisional operational approval changes production semantics
 
-- Severity: P0
+- Severity: RESOLVED (2026-08-12)
 - Area: `terminal/cli.py` + `application/quant_daily_service.py` + `application/operational_readiness.py`
-- Description: Uncommitted work auto-creates a `provisional-operational-*` approval on each
-  daily run, which then classifies the run as `PROVISIONAL_ACTIONABLE` and can emit BUY/ADD
-  recommendations without locked-OOS/full production certification. The artifact itself is
-  immutable, hash-bound, and explicitly sets `full_research_certified=false` with
-  `research_certification_state=NOT_CERTIFIABLE`, so it is not a forged full approval, but it
-  does replace the earlier `NON_ACTIONABLE` behavior.
-- Why retained: The work is uncommitted, covered by its own tests (727 total pass), and may be an
-  intentional product decision from the prior session; removing or weakening it without user
-  decision would itself change semantics.
-- Risk: Users may mistake provisional actionability for certified production approval, or the
-  strategy may trade before historical certification evidence exists.
-- Recommended future action: Decide and record one of: (a) keep provisional mode but require
-  explicit user opt-in and make terminal wording unmistakably provisional; (b) gate it behind a
-  strict data/cost/risk evidence set; or (c) remove the auto-approval while retaining research
-  provider/EDGAR code.
+- Description: Resolved by binding provisional operational advice to an explicit, persistent
+  `OperationalPolicy` (`operational-policy set`), removing the daily-run auto-issuing hook, and
+  hardening the pipeline so provisional signals cannot become production-approved without an
+  explicit policy. Data/PIT/signal/risk gates remain absolute.
+- Remaining risk: An operator who explicitly issues `ALLOW_PROVISIONAL` accepts degraded
+  recommendations; the terminal always labels them as provisional and non-research-certified.
 
 ## P1
 
