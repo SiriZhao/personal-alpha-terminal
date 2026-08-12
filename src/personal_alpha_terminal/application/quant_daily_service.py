@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass, field, replace
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal
 from hashlib import sha256
 from math import floor
@@ -277,7 +277,7 @@ class ProductionDailyWorkflow:
                     benchmark_definition=research.benchmark_symbol,
                 )
             )
-            provisional_policy = self._operational_policy()
+            provisional_policy = self._operational_policy(decision_time)
             if portfolio_approval is not None:
                 validation_id = portfolio_approval.validation_id
                 operational_mode = False
@@ -658,14 +658,14 @@ class ProductionDailyWorkflow:
             ),
         )
 
-    def _operational_policy(self) -> OperationalPolicy | None:
+    def _operational_policy(self, decision_time: datetime) -> OperationalPolicy | None:
         policy = self.operational_store.load()
         if policy is None:
             return None
         allowed, _reason = policy.allows(
             self._operational_identity(),
             "NOT_CERTIFIABLE",
-            now=datetime.now(UTC),
+            now=decision_time,
         )
         return policy if allowed else None
 

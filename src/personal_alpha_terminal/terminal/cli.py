@@ -948,6 +948,51 @@ def _verify_recommendation_run(config_path: Path, run_id: str, recommendation_id
         )
 
 
+def _maintenance_command(args: argparse.Namespace) -> int:
+    from personal_alpha_terminal.core.retention import (
+        apply_runtime_cleanup,
+        plan_runtime_cleanup,
+        runtime_artifact_status,
+    )
+
+    config = load_config(args.config)
+    root = config.report_dir.parent
+    if args.maintenance_action != "artifacts":
+        raise ValueError("unsupported maintenance action")
+    if args.artifacts_action == "status":
+        table = Table(title="RUNTIME ARTIFACT GOVERNANCE")
+        for column in ("Area", "Category", "Retention days", "Files", "Size MB", "Oldest days"):
+            table.add_column(
+                column,
+                justify="right" if column not in {"Area", "Category"} else "left",
+            )
+        for row in runtime_artifact_status(root):
+            table.add_row(
+                str(row["area"]),
+                str(row["category"]),
+                str(row["retention_days"] or "NEVER"),
+                str(row["files"]),
+                f"{int(str(row['bytes'])) / 1_000_000:.2f}",
+                str(row["oldest_days"]),
+            )
+        console.print(table)
+        console.print(
+            "CRITICAL / CACHE areas are never eligible for automatic cleanup. "
+            "Use `maintenance artifacts cleanup --dry-run` before any deletion."
+        )
+        return 0
+    if args.artifacts_action == "cleanup":
+        if args.commit:
+            removed = apply_runtime_cleanup(root)
+            console.print(f"Removed {len(removed)} expired generated artifact files.")
+            return 0
+        planned = plan_runtime_cleanup(root, dry_run=True)
+        console.print(f"DRY-RUN: {len(planned)} files would be removed.")
+        console.print("No files were deleted. Re-run with --commit to apply.")
+        return 0
+    raise ValueError("unsupported artifacts action")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="PersonalAlphaTerminal")
     parser.add_argument("--config", type=Path, default=Path("config.yaml"))
@@ -989,6 +1034,37 @@ def build_parser() -> argparse.ArgumentParser:
     operational_policy_set.add_argument("--reason", required=True)
     operational_policy_set.add_argument("--expires-at", default=None)
     operational_policy_set.add_argument("--force", action="store_true")
+    maintenance = subparsers.add_parser(
+        "maintenance",
+        help="Inspect and safely manage regenerable runtime evidence",
+    )
+    maintenance_actions = maintenance.add_subparsers(
+        dest="maintenance_action",
+        required=True,
+    )
+    artifacts = maintenance_actions.add_parser(
+        "artifacts",
+        help="Runtime artifact inventory and retention",
+    )
+    artifacts_actions = artifacts.add_subparsers(
+        dest="artifacts_action",
+        required=True,
+    )
+    artifacts_actions.add_parser("status", help="Show categorized artifact inventory")
+    artifacts_cleanup = artifacts_actions.add_parser(
+        "cleanup",
+        help="Show or apply retention policy; dry-run by default",
+    )
+    artifacts_cleanup.add_argument(
+        "--commit",
+        action="store_true",
+        help="Actually remove expired generated artifacts (never critical evidence)",
+    )
+    artifacts_cleanup.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show what would be removed without deleting (default behavior)",
+    )
     subparsers.add_parser("version", help="Show application version")
     subparsers.add_parser("research", help="Run the audited local research pipeline")
     research_data = subparsers.add_parser(
@@ -1116,6 +1192,8 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if command == "operational-policy":
             return _operational_policy_command(args)
+        if command == "maintenance":
+            return _maintenance_command(args)
         if command == "version":
             from personal_alpha_terminal import __version__
 

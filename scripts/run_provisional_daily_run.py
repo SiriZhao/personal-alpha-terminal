@@ -44,16 +44,6 @@ def main() -> int:
 
     strategy = USAdaptiveAlphaCoreV1(config.strategy)
     identity = build_operational_identity(config, strategy)
-    policy = OperationalPolicyStore(config.operational_policy_path).load()
-    if policy is None:
-        raise ValueError(
-            "no explicit operational policy exists; run `operational-policy set "
-            "--decision ALLOW_PROVISIONAL --reason ...` before a provisional run"
-        )
-    allowed, reason = policy.allows(identity, "NOT_CERTIFIABLE", now=datetime.now(UTC))
-    if not allowed:
-        raise ValueError(f"operational policy denies provisional run: {reason}")
-
     decision_time = (
         datetime.fromisoformat(args.decision_time)
         if args.decision_time
@@ -61,6 +51,16 @@ def main() -> int:
     )
     if decision_time.tzinfo is None:
         decision_time = decision_time.replace(tzinfo=UTC)
+
+    policy = OperationalPolicyStore(config.operational_policy_path).load()
+    if policy is None:
+        raise ValueError(
+            "no explicit operational policy exists; run `operational-policy set "
+            "--decision ALLOW_PROVISIONAL --reason ...` before a provisional run"
+        )
+    allowed, reason = policy.allows(identity, "NOT_CERTIFIABLE", now=decision_time)
+    if not allowed:
+        raise ValueError(f"operational policy denies provisional run: {reason}")
 
     service = ApplicationService(
         get_session_factory(),

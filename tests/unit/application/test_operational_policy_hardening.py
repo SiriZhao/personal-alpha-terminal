@@ -242,6 +242,46 @@ def test_identity_change_invalidates_policy() -> None:
     assert reason == "OPERATIONAL_POLICY_IDENTITY_MISMATCH"
 
 
+@pytest.mark.parametrize(
+    "field",
+    [
+        "strategy_name",
+        "strategy_version",
+        "factor_config_hash",
+        "operational_universe_policy",
+        "required_factor_lookbacks",
+        "portfolio_config_hash",
+        "risk_config_hash",
+        "cost_model_hash",
+    ],
+)
+def test_any_bound_identity_change_invalidates_policy(field: str) -> None:
+    policy = _policy()
+    identity = _identity()
+    if field == "strategy_name":
+        changed = replace(identity, strategy_name="OtherStrategy")
+    elif field == "strategy_version":
+        changed = replace(identity, strategy_version="2.0.0")
+    elif field == "factor_config_hash":
+        changed = replace(identity, factor_config_hash="other")
+    elif field == "operational_universe_policy":
+        changed = replace(identity, operational_universe_policy="other")
+    elif field == "required_factor_lookbacks":
+        changed = replace(identity, required_factor_lookbacks=(("momentum", 126),))
+    elif field == "portfolio_config_hash":
+        changed = replace(identity, portfolio_config_hash="other")
+    elif field == "risk_config_hash":
+        changed = replace(identity, risk_config_hash="other")
+    else:
+        changed = replace(identity, cost_model_hash="other")
+
+    allowed, _policy_id, reason = classify_operational_state(
+        changed, "NOT_CERTIFIABLE", policy, now=NOW
+    )
+    assert not allowed
+    assert reason == "OPERATIONAL_POLICY_IDENTITY_MISMATCH"
+
+
 def test_expired_policy_fails_closed() -> None:
     policy = _policy(expires_at=NOW - timedelta(hours=1))
     allowed, _policy_id, reason = classify_operational_state(

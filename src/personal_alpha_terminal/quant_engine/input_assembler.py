@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, replace
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, datetime, timedelta
 
 import numpy as np
 import pandas as pd
@@ -263,7 +263,7 @@ class ProductionDailyQuantInputAssembler:
             approval = None
         operational_policy = None
         if broad_universe_production_eligible and approval is None:
-            operational_policy = self._operational_policy()
+            operational_policy = self._operational_policy(decision_time)
         approval_data_version = (
             approval.data_version if approval is not None else 'NOT_APPROVED'
         )
@@ -453,14 +453,14 @@ class ProductionDailyQuantInputAssembler:
             ),
         )
 
-    def _operational_policy(self) -> OperationalPolicy | None:
+    def _operational_policy(self, decision_time: datetime) -> OperationalPolicy | None:
         policy = self.operational_store.load()
         if policy is None:
             return None
         allowed, _reason = policy.allows(
             self._operational_identity(),
             "NOT_CERTIFIABLE",
-            now=datetime.now(UTC),
+            now=decision_time,
         )
         return policy if allowed else None
 
