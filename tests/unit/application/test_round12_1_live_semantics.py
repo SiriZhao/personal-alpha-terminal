@@ -496,3 +496,27 @@ def test_legacy_windows_stdout_smoke() -> None:
     assert completed.returncode == 0, completed.stderr
     assert "\u88ab\u62d2\u7edd\u4fe1\u53f7 / \u95e8\u7981\u539f\u56e0" in completed.stdout
     assert "\u6700\u7ec8\u6709\u6548\u51b3\u7b56" in completed.stdout
+
+
+def test_zh_renderer_today_overview_is_before_actions() -> None:
+    rendered = capture_daily_quant_result(_result_with_decision(0.8), locale="zh-CN", width=160)
+    assert "\u3010\u4eca\u65e5\u603b\u89c8\u3011" in rendered
+    assert "\u3010\u4eca\u65e5\u64cd\u4f5c\u6e05\u5355\u3011" in rendered
+    overview = "\u3010\u4eca\u65e5\u603b\u89c8\u3011"
+    actions = "\u3010\u4eca\u65e5\u64cd\u4f5c\u6e05\u5355\u3011"
+    assert rendered.index(overview) < rendered.index(actions)
+
+
+def test_zh_renderer_overview_answers_key_fields() -> None:
+    rendered = capture_daily_quant_result(_result_with_decision(0.8), locale="zh-CN", width=160)
+    labels = (
+        "\u4eca\u65e5\u72b6\u6001",
+        "\u64cd\u4f5c",
+        "\u9884\u8ba1\u91d1\u989d",
+        "\u6700\u65e9\u6267\u884c",
+        "LLM \u53c2\u4e0e",
+        "Probability \u53c2\u4e0e",
+        "\u95e8\u7981",
+    )
+    for label in labels:
+        assert label in rendered

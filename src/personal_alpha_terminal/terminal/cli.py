@@ -1329,7 +1329,13 @@ def _maintenance_command(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="PersonalAlphaTerminal")
+    parser = argparse.ArgumentParser(
+        prog="PersonalAlphaTerminal",
+        epilog=(
+            "\u5e38\u7528\u547d\u4ee4\uff1a daily / refresh / doctor"
+            " / intelligence status / portfolio-list"
+        ),
+    )
     parser.add_argument("--config", type=Path, default=Path("config.yaml"))
     parser.add_argument("--no-refresh", action="store_true")
     parser.add_argument("--locale", choices=("zh-CN", "en-US"), default="zh-CN")

@@ -36,6 +36,7 @@ def render_daily_quant_result(
                 border_style="cyan",
             )
         )
+        _overview(result, console)
         _today_actions(result, console)
         _operational_status(result, console)
         _portfolio(result, console)
@@ -246,6 +247,57 @@ def _header(result: DailyQuantResult) -> str:
         f"{_layered_status(result)}"
     )
 
+
+def _overview(result: DailyQuantResult, console: Console) -> None:
+    """First-screen summary; detailed panels remain unchanged below."""
+    actions = tuple(result.final_decisions)
+    buys = sum(item.action in {"BUY", "ADD", "INCREASE"} for item in actions)
+    sells = sum(item.action in {"SELL", "REDUCE"} for item in actions)
+    earliest = min(
+        (item.earliest_execution_time for item in actions),
+        default=None,
+    )
+    estimated = sum(item.estimated_value for item in actions)
+    llm_stage = next((item for item in result.stages if item.name == "LLM_INTELLIGENCE"), None)
+    llm_meta = llm_stage.metadata if llm_stage is not None else {}
+    llm_participation = bool(llm_meta.get("production_influence"))
+    probability = result.provenance.get("probability_overlay", {})
+    probability = probability if isinstance(probability, dict) else {}
+    probability_active = bool(probability.get("active"))
+    degraded = [
+        f"{item.name}={item.status.value}"
+        for item in result.stages
+        if item.status in {StageStatus.PASS_DEGRADED, StageStatus.FAIL_BLOCKING}
+    ]
+    action_zh = "\u53ef\u64cd\u4f5c" if result.actionable else "\u4e0d\u53ef\u64cd\u4f5c"
+    earliest_text = earliest.isoformat() if earliest else "--"
+    participation_zh = "\u53c2\u4e0e" if llm_participation else "\u4e0d\u53c2\u4e0e"
+    probability_state = str(probability.get("state", "FALLBACK_CLASSICAL"))
+    body = _t(
+        f"\u4eca\u65e5\u72b6\u6001\uff1a{action_zh}\n"
+        f"\u64cd\u4f5c\uff1a{len(actions)} \u9879   \u4e70\u5165 {buys}   \u5356\u51fa {sells}\n"
+        f"\u9884\u8ba1\u91d1\u989d {_money(estimated)}   \u6700\u65e9\u6267\u884c {earliest_text}\n"
+        f"LLM \u53c2\u4e0e\uff1a{'YES' if llm_participation else 'NO'}   "
+        f"\u751f\u4ea7\u5f71\u54cd\uff1a{participation_zh}\n"
+        f"Probability \u53c2\u4e0e\uff1a{'YES' if probability_active else 'NO'}   "
+        f"\u72b6\u6001\uff1a{probability_state}\n"
+        f"\u95e8\u7981\uff1a{'; '.join(degraded) or 'none'}",
+        f"Today: {'ACTIONABLE' if result.actionable else 'NOT_ACTIONABLE'}\n"
+        f"Actions {len(actions)}   Buy/Add {buys}   Sell/Reduce {sells}\n"
+        f"Estimated value {_money(estimated)}   Earliest {earliest_text}\n"
+        f"LLM participation: {'YES' if llm_participation else 'NO'}   "
+        f"Production influence: {'YES' if llm_participation else 'NO'}\n"
+        f"Probability participation: {'YES' if probability_active else 'NO'}   "
+        f"State: {probability_state}\n"
+        f"Gates: {'; '.join(degraded) or 'none'}",
+    )
+    console.print(
+        Panel(
+            body,
+            title=_t("\u3010\u4eca\u65e5\u603b\u89c8\u3011", "TODAY OVERVIEW"),
+            border_style="cyan",
+        )
+    )
 
 def _today_actions(result: DailyQuantResult, console: Console) -> None:
     title = _t("【今日操作清单】", "TODAY ACTION LIST")
