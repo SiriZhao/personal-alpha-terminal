@@ -38,8 +38,8 @@ def _database(path: Path, value: str = "original") -> None:
 
 
 def test_version_is_stable_terminal_baseline_110() -> None:
-    assert __version__ == "1.1.0"
-    assert __build_version__ == "1.1.0"
+    assert __version__ == "1.2.0-rc.1"
+    assert __build_version__ == "1.2.0-rc.1"
 
 
 def test_disabled_ai_does_not_silently_call_mock() -> None:
