@@ -1,4 +1,4 @@
-# Personal Alpha Terminal
+# Personal Alpha Terminal`n`n- 中文版：[README.zh-CN.md](README.zh-CN.md)
 
 ## AI-native quant intelligence (DeepSeek)
 

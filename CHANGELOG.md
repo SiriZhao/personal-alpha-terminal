@@ -121,3 +121,19 @@
 ### Known limitations
 
 真实数据认证、历史危机验证、PostgreSQL 损坏恢复、独立 Windows VM、商业签名和实盘认证均未完成。
+
+## Unreleased — 2026-08-14
+
+### Added
+
+- ROUND14 PIT feature/outcome-separated dataset and LLM alpha locked-OOS research protocol.
+- ROUND15 conditional probability alpha 2.0 research protocol with fallback artifact.
+- ROUND16 Chinese terminal overview and complete Chinese user guide.
+- ROUND17 repository storage inventory and safe cache/temp cleanup manifest.
+
+### Research status
+
+- ROUND14 verdict: ROUND14_LLM_ALPHA_NOT_PROVED.
+- ROUND15 verdict: PROBABILITY_FALLBACK_CLASSICAL.
+- LLM production influence remains NONE.
+- Probability production weight remains 0.
