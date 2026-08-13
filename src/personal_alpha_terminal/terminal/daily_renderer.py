@@ -90,6 +90,10 @@ def _ai_intelligence(result: DailyQuantResult, console: Console) -> None:
             f"{metadata.get('provider', '--')} / {metadata.get('model', '--')}",
         ),
         (
+            _t("LLM 连接", "Connectivity"),
+            str(metadata.get("connectivity", "NOT_TESTED")),
+        ),
+        (
             _t("\u5df2\u5904\u7406\u6587\u6863", "Processed documents"),
             str(metadata.get("processed_documents", 0)),
         ),
@@ -290,11 +294,36 @@ def _operational_status(result: DailyQuantResult, console: Console) -> None:
         if result.operationally_allowed
         else _t("未配置 / 拒绝", "NOT_CONFIGURED / BLOCKED")
     )
+    if not result.operationally_allowed:
+        policy = (
+            f"{result.operational_policy_decision} "
+            f"({result.operational_policy_id}; {result.operational_policy_reason})"
+        )
     final_state = (
         _t("可操作（降级）", "ACTIONABLE (DEGRADED)")
         if result.operationally_allowed
         else _t("不可操作", "NOT_ACTIONABLE")
     )
+    if result.operationally_allowed:
+        policy_explanation = _t(
+            "当前建议未获得完整历史研究认证，但已根据显式 Operational Policy "
+            "允许进入生产建议。该状态不代表研究认证通过。",
+            "Current advice is allowed by an explicit Operational Policy but is not "
+            "full research certification. This status does not mean research is certified.",
+        )
+    elif result.operational_policy_id != "NOT_CONFIGURED":
+        policy_explanation = _t(
+            "已保存的 Operational Policy 当前不生效，生产建议保持阻断。"
+            f"原因：{result.operational_policy_reason}。",
+            "The stored Operational Policy is not effective; production recommendations "
+            f"remain blocked. Reason: {result.operational_policy_reason}.",
+        )
+    else:
+        policy_explanation = _t(
+            "当前没有生效的 Operational Policy，生产建议保持阻断。",
+            "No effective Operational Policy is configured; production recommendations "
+            "remain blocked.",
+        )
     body = _t(
         f"【研究认证】{research}\n"
         f"【生产数据】{data}\n"
@@ -303,8 +332,7 @@ def _operational_status(result: DailyQuantResult, console: Console) -> None:
         f"【风控】{risk}\n"
         f"【运行策略】{policy}\n"
         f"【最终状态】{final_state}\n\n"
-        "当前建议未获得完整历史研究认证，但已根据显式 Operational Policy "
-        "允许进入生产建议。该状态不代表研究认证通过。",
+        f"{policy_explanation}",
         f"Research certification: {research}\n"
         f"Data: {data}\n"
         f"PIT: {pit}\n"
@@ -312,8 +340,7 @@ def _operational_status(result: DailyQuantResult, console: Console) -> None:
         f"Risk: {risk}\n"
         f"Operational policy: {policy}\n"
         f"Final: {final_state}\n\n"
-        "Current advice is allowed by an explicit Operational Policy but is not "
-        "full research certification. This status does not mean research is certified.",
+        f"{policy_explanation}",
     )
     console.print(
         Panel(
@@ -430,9 +457,12 @@ def _data_certification(result: DailyQuantResult, console: Console) -> None:
         f"Status {stage.status.value if stage else 'NOT_RUN'}   "
         f"Provider {evidence.get('provider', 'UNAVAILABLE')}\n"
         f"Snapshot {evidence.get('snapshot_id', 'UNAVAILABLE')}   "
-        f"Requested {_item_count(evidence.get('requested_symbols'))}   "
-        f"Received {_item_count(evidence.get('received_symbols'))}   "
-        f"Valid {_item_count(evidence.get('certified_symbols'))}   "
+        "Refresh requested symbols "
+        f"{_item_count(evidence.get('requested_symbols'))}   "
+        "Provider-returned symbols "
+        f"{_item_count(evidence.get('received_symbols'))}   "
+        "PIT-certified symbols "
+        f"{_item_count(evidence.get('certified_symbols'))}   "
         f"Rejected {_item_count(evidence.get('rejected_symbols'))}   "
         f"Missing {_item_count(evidence.get('missing_symbols'))}   "
         f"Stale {_item_count(evidence.get('stale_symbols'))}\n"
@@ -443,7 +473,9 @@ def _data_certification(result: DailyQuantResult, console: Console) -> None:
         f"missing {evidence.get('missing_bars', 0)}   "
         f"received {evidence.get('received_bars', 0)}   "
         f"valid {evidence.get('valid_bars', 0)}   "
-        f"coverage {_percent(_as_float(evidence.get('coverage')))}\n"
+        "Certified-bar coverage "
+        f"{_percent(_as_float(evidence.get('coverage')))}   "
+        f"Cache reused {evidence.get('cache_reused', 'NOT_REPORTED')}\n"
         f"Latest {evidence.get('latest_timestamp', 'UNAVAILABLE')}   "
         f"PIT cutoff {result.data_cutoff.isoformat() if result.data_cutoff else 'UNAVAILABLE'}\n"
         f"Corporate actions {evidence.get('corporate_action_status', 'NOT_CERTIFIED')}   "
@@ -564,7 +596,11 @@ def _pit_universe(result: DailyQuantResult, console: Console) -> None:
     security_ok = funnel.get(
         "security_type_eligible", universe.get("security_type_eligible", 0)
     )
-    data_ok = funnel.get("data_eligible", universe.get("data_eligible", 0))
+    price_ok = funnel.get("latest_price_covered", "UNAVAILABLE")
+    history_ok = funnel.get("history_sufficient", "UNAVAILABLE")
+    pit_ok = funnel.get(
+        "pit_eligible", funnel.get("data_eligible", universe.get("data_eligible", 0))
+    )
     liq_ok = funnel.get(
         "liquidity_eligible", universe.get("liquidity_eligible", 0)
     )
@@ -574,6 +610,10 @@ def _pit_universe(result: DailyQuantResult, console: Console) -> None:
     tradable_ok = funnel.get(
         "signal_eligible", universe.get("signal_eligible", 0)
     )
+    alpha_positive = universe.get("alpha_positive", "UNAVAILABLE")
+    candidate_count = universe.get("candidate_count", "UNAVAILABLE")
+    optimizer_input = universe.get("optimizer_input", candidate_count)
+    final_holdings = len(result.portfolio.positions)
     console.print(
         Panel(
             f"Status {stage.status.value if stage else 'NOT_RUN'}   "
@@ -582,9 +622,13 @@ def _pit_universe(result: DailyQuantResult, console: Console) -> None:
             f"Survivorship {universe.get('survivorship_status', 'UNVERIFIED')}\n"
             "Current operational universe funnel\n"
             f"US listed securities {listed}   Listed equities {equities}\n"
-            f"Security type {security_ok}   Data {data_ok}   "
-            f"Liquidity {liq_ok}\n"
-            f"Factor eligible {factor_ok}   Operational tradable {tradable_ok}   "
+            f"Security type eligible {security_ok}   Latest-price covered {price_ok}\n"
+            f"History-sufficient {history_ok}   PIT eligible {pit_ok}   "
+            f"Liquidity eligible {liq_ok}\n"
+            f"Factor eligible {factor_ok}   Alpha positive {alpha_positive}   "
+            f"Candidate pool {candidate_count}\n"
+            f"Optimizer input {optimizer_input}   Final holdings {final_holdings}   "
+            f"Operational tradable {tradable_ok}   "
             f"Quarantine {quarantine_count}\n"
             + candidate_lines
             + historical_lines
@@ -825,11 +869,54 @@ def _factors(result: DailyQuantResult, console: Console) -> None:
 def _probability(result: DailyQuantResult, console: Console) -> None:
     overlay = result.provenance.get("probability_overlay", {})
     overlay = overlay if isinstance(overlay, dict) else {}
+    active = bool(overlay.get("active", False))
+    runtime_state = "ACTIVE_CALIBRATED" if active else "FALLBACK_CLASSICAL"
     console.print(
+        f"Probability {runtime_state}   "
         f"Overlay {overlay.get('state', 'RESEARCH_ONLY')}   "
-        f"Active {bool(overlay.get('active', False))}   "
+        f"Active {active}   "
         f"Reason {overlay.get('reason', 'UNAVAILABLE')}"
     )
+    changed = [
+        trace
+        for trace in (result.decision_traces or {}).values()
+        if trace.get("decision_changed_without_probability") is True
+    ]
+    console.print(
+        "If Probability is disabled, today's recommendation changes: "
+        f"{'YES' if changed else 'NO'}"
+    )
+    traces = [
+        trace
+        for trace in (result.decision_traces or {}).values()
+        if "target_without_probability" in trace
+    ]
+    if traces:
+        trace_table = Table(title="Probability -> Target Weight counterfactual")
+        trace_columns = (
+            "Ticker",
+            "Base alpha",
+            "P(cond)",
+            "Target off",
+            "Target on",
+            "Impact",
+            "Decision off",
+            "Final",
+        )
+        for column in trace_columns:
+            trace_table.add_column(column, overflow="fold")
+        for trace in traces[:10]:
+            trace_table.add_row(
+                str(trace.get("ticker", "--")),
+                _signed_percent(_as_float(trace.get("base_alpha"))),
+                _percent(_as_float(trace.get("conditional_probability"))),
+                _percent(_as_float(trace.get("target_without_probability"))),
+                _percent(_as_float(trace.get("target_with_probability"))),
+                _signed_percent(_as_float(trace.get("probability_weight_impact"))),
+                str(trace.get("decision_without_probability", "--")),
+                str(trace.get("final_decision", "--")),
+            )
+        console.print(trace_table)
     table = Table(
         title=_t(
             "条件概率 · 仅作支持证据 · 未校准时不可调整仓位",

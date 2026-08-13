@@ -146,11 +146,14 @@ class TodayResult:
     probability_overlay_state: str = "RESEARCH_ONLY"
     probability_overlay_reason: str = "PROBABILITY_ARTIFACT_MISSING"
     probability_overlay_effects: tuple[ProbabilityOverlayEffect, ...] = ()
+    probability_counterfactual: dict[str, dict[str, object]] = field(default_factory=dict)
     operational_approval_artifact_id: str = 'NOT_APPROVED'
     operational_readiness: str = OperationalReadiness.BLOCKED.value
     research_certification_state: str = "NOT_CERTIFIABLE"
     operational_policy_id: str = "NOT_CONFIGURED"
     operational_policy_decision: str = "BLOCK"
+    operational_policy_effective: bool = False
+    operational_policy_reason: str = "OPERATIONAL_POLICY_NOT_CONFIGURED"
     operationally_allowed: bool = False
     operational_degraded_reason: str | None = None
     lifecycle: dict[str, object] | None = None
@@ -294,6 +297,12 @@ class ProductionDailyWorkflow:
                 operational_mode=operational_mode,
             )
             output = self.pipeline.run(assembled.inputs)
+            classical_output = self.pipeline.run(
+                replace(
+                    assembled.inputs,
+                    alpha_signals=assembled.classical_alpha_signals,
+                )
+            )
         except (ArithmeticError, LookupError, RuntimeError, ValueError) as error:
             blocker = str(error) or type(error).__name__
             run = self._persist_blocked(
@@ -369,6 +378,7 @@ class ProductionDailyWorkflow:
                 assembled.parameter_fingerprint,
                 assembled=assembled,
                 output=output,
+                classical_output=classical_output,
                 regime_link=regime_link,
             )
 
@@ -392,6 +402,7 @@ class ProductionDailyWorkflow:
                 assembled.parameter_fingerprint,
                 assembled=assembled,
                 output=output,
+                classical_output=classical_output,
                 regime_link=regime_link,
             )
 
@@ -468,6 +479,7 @@ class ProductionDailyWorkflow:
             assembled.parameter_fingerprint,
             assembled=assembled,
             output=output,
+            classical_output=classical_output,
             regime_link=regime_link,
         )
 
@@ -698,7 +710,7 @@ class ProductionDailyWorkflow:
         operational_policy_id = research.operational_policy_id
         operational_policy_decision = research.operational_policy_decision
         operationally_allowed = bool(
-            operational_policy_id != "NOT_CONFIGURED"
+            research.operational_policy_effective
             and strategy_blocker is None
             and blocker is None
         )
@@ -778,12 +790,14 @@ class ProductionDailyWorkflow:
             research_certification_state="NOT_CERTIFIABLE",
             operational_policy_id=operational_policy_id,
             operational_policy_decision=operational_policy_decision,
+            operational_policy_effective=research.operational_policy_effective,
+            operational_policy_reason=research.operational_policy_reason,
             operationally_allowed=operationally_allowed,
-            operational_degraded_reason=(
-                "research_certification_state=NOT_CERTIFIABLE; "
-                "explicit operational policy allows provisional production advice"
-                if operational
-                else "operational policy missing or denies provisional advice"
+            operational_degraded_reason=_operational_degraded_reason(
+                allowed=operational,
+                policy_effective=research.operational_policy_effective,
+                policy_reason=research.operational_policy_reason,
+                blocker=strategy_blocker or blocker,
             ),
         )
 
@@ -847,6 +861,7 @@ class ProductionDailyWorkflow:
         *,
         assembled: AssembledDailyInput | None = None,
         output: DailyQuantOutput | None = None,
+        classical_output: DailyQuantOutput | None = None,
         regime_link: RegimeLinkResult | None = None,
     ) -> TodayResult:
         recommendations = tuple(
@@ -937,7 +952,7 @@ class ProductionDailyWorkflow:
                 (
                     "PROVISIONAL_OPERATIONAL_APPROVED"
                     if assembled is not None
-                    and assembled.operational_policy_id != "NOT_CONFIGURED"
+                    and assembled.operational_policy_effective
                     else "PRODUCTION_APPROVED"
                 )
                 if strategy_blocker is None
@@ -1003,10 +1018,10 @@ class ProductionDailyWorkflow:
                 else "NOT_APPROVED"
             ),
             probability_calibration_status=(
-                "CALIBRATED_LOCKED_OOS_PRODUCTION_APPROVED"
+                "ACTIVE_CALIBRATED"
                 if assembled.probability_overlay_active
-                else "PROBABILITY_NOT_CALIBRATED"
-            ) if assembled is not None else "PROBABILITY_NOT_CALIBRATED",
+                else "FALLBACK_CLASSICAL"
+            ) if assembled is not None else "FALLBACK_CLASSICAL",
             stress=output.stress if output is not None else None,
             risk_state=(assembled.inputs.portfolio_risk_state if assembled is not None else None),
             risk_regime_detail=(
@@ -1053,15 +1068,20 @@ class ProductionDailyWorkflow:
             probability_overlay_reason=(
                 assembled.probability_overlay_reason
                 if assembled is not None
-                else "PROBABILITY_ARTIFACT_MISSING"
+                else "PROBABILITY_FALLBACK_CLASSICAL"
             ),
             probability_overlay_effects=(
                 assembled.probability_overlay_effects if assembled is not None else ()
             ),
+            probability_counterfactual=_probability_counterfactual(
+                assembled,
+                output,
+                classical_output,
+            ),
             operational_approval_artifact_id=(
                 assembled.operational_policy_id
                 if assembled is not None
-                and assembled.operational_policy_id != "NOT_CONFIGURED"
+                and assembled.operational_policy_effective
                 and strategy_blocker is None
                 and run.status in {"generated", "no_decision"}
                 else "NOT_APPROVED"
@@ -1076,29 +1096,45 @@ class ProductionDailyWorkflow:
                 if assembled is not None
                 else OperationalPolicyDecision.BLOCK.value
             ),
+            operational_policy_effective=bool(
+                assembled is not None and assembled.operational_policy_effective
+            ),
+            operational_policy_reason=(
+                assembled.operational_policy_reason
+                if assembled is not None
+                else "OPERATIONAL_POLICY_NOT_CONFIGURED"
+            ),
             operationally_allowed=bool(
                 assembled is not None
-                and assembled.operational_policy_id != "NOT_CONFIGURED"
+                and assembled.operational_policy_effective
                 and strategy_blocker is None
                 and run.status in {"generated", "no_decision"}
             ),
             operational_readiness=(
                 OperationalReadiness.PROVISIONAL_ACTIONABLE.value
                 if assembled is not None
-                and assembled.operational_policy_id != "NOT_CONFIGURED"
+                and assembled.operational_policy_effective
                 and strategy_blocker is None
                 and run.status in {"generated", "no_decision"}
                 else OperationalReadiness.BLOCKED.value
             ),
             research_certification_state="NOT_CERTIFIABLE",
-            operational_degraded_reason=(
-                "research_certification_state=NOT_CERTIFIABLE; "
-                "explicit operational policy allows provisional production advice"
-                if assembled is not None
-                and assembled.operational_policy_id != "NOT_CONFIGURED"
-                and strategy_blocker is None
-                and run.status in {"generated", "no_decision"}
-                else "operational policy missing or denies provisional advice"
+            operational_degraded_reason=_operational_degraded_reason(
+                allowed=bool(
+                    assembled is not None
+                    and assembled.operational_policy_effective
+                    and strategy_blocker is None
+                    and run.status in {"generated", "no_decision"}
+                ),
+                policy_effective=bool(
+                    assembled is not None and assembled.operational_policy_effective
+                ),
+                policy_reason=(
+                    assembled.operational_policy_reason
+                    if assembled is not None
+                    else "OPERATIONAL_POLICY_NOT_CONFIGURED"
+                ),
+                blocker=strategy_blocker or f"WORKFLOW_STATUS_{run.status.upper()}",
             ),
             lifecycle=lifecycle,
             lifecycle_blocked_symbols=lifecycle_blocked_symbols,
@@ -1186,6 +1222,23 @@ def _strategy_blocker(
     )
 
 
+def _operational_degraded_reason(
+    *,
+    allowed: bool,
+    policy_effective: bool,
+    policy_reason: str,
+    blocker: str | None,
+) -> str:
+    if allowed:
+        return (
+            "research_certification_state=NOT_CERTIFIABLE; "
+            "explicit operational policy allows provisional production advice"
+        )
+    if not policy_effective:
+        return f"{policy_reason}; production advice blocked"
+    return blocker or "PRODUCTION_ADVICE_BLOCKED"
+
+
 def _portfolio_snapshot_id(assembled: AssembledDailyInput) -> str:
     return _fingerprint(
         {
@@ -1194,6 +1247,82 @@ def _portfolio_snapshot_id(assembled: AssembledDailyInput) -> str:
             "data_cutoff": assembled.data_cutoff,
         }
     )
+
+
+def _probability_counterfactual(
+    assembled: AssembledDailyInput | None,
+    output: DailyQuantOutput | None,
+    classical_output: DailyQuantOutput | None,
+) -> dict[str, dict[str, object]]:
+    if assembled is None or output is None or classical_output is None:
+        return {}
+    adjusted_signals = {item.symbol: item for item in assembled.inputs.alpha_signals}
+    classical_signals = {item.symbol: item for item in assembled.classical_alpha_signals}
+    effects = {item.symbol: item for item in assembled.probability_overlay_effects}
+    with_targets = output.target.target_weights if output.target is not None else {}
+    without_targets = (
+        classical_output.target.target_weights
+        if classical_output.target is not None
+        else {}
+    )
+    with_actions = _trace_actions(output)
+    without_actions = _trace_actions(classical_output)
+    symbols = sorted(
+        set(adjusted_signals)
+        | set(classical_signals)
+        | set(with_targets)
+        | set(without_targets)
+        | set(assembled.inputs.current_weights)
+    )
+    traces: dict[str, dict[str, object]] = {}
+    for symbol in symbols:
+        base = classical_signals.get(symbol)
+        adjusted = adjusted_signals.get(symbol)
+        effect = effects.get(symbol)
+        target_without = float(without_targets.get(symbol, 0.0))
+        target_with = float(with_targets.get(symbol, 0.0))
+        decision_without = without_actions.get(symbol, "NO_ACTION")
+        final_decision = with_actions.get(symbol, "NO_ACTION")
+        traces[symbol] = {
+            "ticker": symbol,
+            "base_alpha": (
+                float(base.expected_excess_return) if base is not None else None
+            ),
+            "conditional_probability": (
+                float(effect.posterior_probability) if effect is not None else None
+            ),
+            "probability_reliability": (
+                f"CALIBRATED_LOCKED_OOS:n={effect.sample_size}"
+                if effect is not None
+                else "UNAVAILABLE_FALLBACK"
+            ),
+            "probability_adjusted_alpha": (
+                float(adjusted.expected_excess_return)
+                if adjusted is not None
+                else None
+            ),
+            "target_without_probability": target_without,
+            "target_with_probability": target_with,
+            "pre_risk_target": "NOT_EXPOSED_BY_ENGINE",
+            "post_risk_target": "NOT_EXPOSED_BY_ENGINE",
+            "final_target": target_with,
+            "probability_weight_impact": target_with - target_without,
+            "decision_without_probability": decision_without,
+            "final_decision": final_decision,
+            "decision_changed_without_probability": decision_without != final_decision,
+        }
+    return traces
+
+
+def _trace_actions(output: DailyQuantOutput) -> dict[str, str]:
+    labels = {
+        TradeAction.INCREASE: "ADD",
+        TradeAction.SELL: "EXIT",
+    }
+    return {
+        item.ticker: labels.get(item.action, item.action.value)
+        for item in output.trades
+    }
 
 
 def _fingerprint(payload: dict[str, object]) -> str:

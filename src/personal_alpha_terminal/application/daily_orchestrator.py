@@ -50,6 +50,10 @@ from personal_alpha_terminal.intelligence.factor_registry import (
     CrossSectionalEventFactorEngine,
     default_llm_factor_registry,
 )
+from personal_alpha_terminal.intelligence.llm_runtime import (
+    DEFAULT_LLM_RUNTIME_STATUS_PATH,
+    llm_runtime_status,
+)
 from personal_alpha_terminal.intelligence.storage import IntelligenceRepository
 from personal_alpha_terminal.models import Portfolio
 from personal_alpha_terminal.terminal.market_sessions import (
@@ -89,6 +93,7 @@ class DailyQuantOrchestrator:
         *,
         snapshot_root: Path | None = None,
         sync_runner: SyncRunner | None = None,
+        llm_runtime_status_path: Path = DEFAULT_LLM_RUNTIME_STATUS_PATH,
     ) -> None:
         self._factory = session_factory
         if isinstance(effective_config, Settings):
@@ -97,6 +102,7 @@ class DailyQuantOrchestrator:
         self._settings = effective_config.settings
         self._snapshot_root = snapshot_root or (effective_config.report_dir / "daily-runs")
         self._sync_runner = sync_runner
+        self._llm_runtime_status_path = llm_runtime_status_path
         self._calendar = MarketSessionCalendar(
             nasdaq_23h_enabled=effective_config.nasdaq_23h_enabled,
             nasdaq_23h_effective_date=effective_config.nasdaq_23h_effective_date,
@@ -331,7 +337,7 @@ class DailyQuantOrchestrator:
         run_id: str,
         eligible_symbols: tuple[str, ...],
     ) -> None:
-        provider, model, configured = self._configured_llm_identity()
+        provider, model, configured, connectivity = self._configured_llm_identity()
         if not configured:
             stages["LLM_INTELLIGENCE"] = StageResult(
                 "LLM_INTELLIGENCE",
@@ -344,6 +350,7 @@ class DailyQuantOrchestrator:
                 {
                     "provider": provider,
                     "model": model,
+                    "connectivity": connectivity,
                     "processed_documents": 0,
                     "detected_events": 0,
                     "factor_status": "SHADOW",
@@ -420,6 +427,7 @@ class DailyQuantOrchestrator:
                 {
                     "provider": provider,
                     "model": model,
+                    "connectivity": connectivity,
                     "processed_documents": raw_count,
                     "detected_events": event_count,
                     "shadow_factor_observations": len(observations),
@@ -453,6 +461,7 @@ class DailyQuantOrchestrator:
                 {
                     "provider": provider,
                     "model": model,
+                    "connectivity": connectivity,
                     "factor_status": "UNAVAILABLE",
                     "production_influence": False,
                     "fallback": "CLASSICAL_CHAMPION",
@@ -463,25 +472,44 @@ class DailyQuantOrchestrator:
                 },
             )
 
-    def _configured_llm_identity(self) -> tuple[str, str, bool]:
+    def _configured_llm_identity(self) -> tuple[str, str, bool, str]:
         selected = self._settings.llm_provider
+        runtime = llm_runtime_status(self._settings, self._llm_runtime_status_path)
         if selected == "deepseek":
-            return "deepseek", self._settings.deepseek_model, bool(self._settings.deepseek_api_key)
+            return (
+                "deepseek",
+                self._settings.deepseek_model,
+                bool(self._settings.deepseek_api_key),
+                runtime.connectivity,
+            )
         if selected == "openai":
-            return "openai", self._settings.openai_model, bool(self._settings.openai_api_key)
+            return (
+                "openai",
+                self._settings.openai_model,
+                bool(self._settings.openai_api_key),
+                "CONFIGURED_NOT_TESTED",
+            )
         if selected == "anthropic":
             return (
                 "anthropic",
                 self._settings.anthropic_model,
                 bool(self._settings.anthropic_api_key),
+                "CONFIGURED_NOT_TESTED",
             )
         if selected == "custom":
-            return "custom", self._settings.custom_model, bool(self._settings.custom_api_key)
+            return (
+                "custom",
+                self._settings.custom_model,
+                bool(self._settings.custom_api_key),
+                "CONFIGURED_NOT_TESTED",
+            )
         if selected == "auto" and self._settings.deepseek_api_key:
-            return "deepseek", self._settings.deepseek_model, True
+            return "deepseek", self._settings.deepseek_model, True, runtime.connectivity
         if selected == "mock":
-            return "mock", "deterministic-grounded-mock-v1", False
-        return selected, "NOT_CONFIGURED", False
+            return "mock", "deterministic-grounded-mock-v1", False, "TEST_ONLY"
+        if runtime.credential == "PRESENT" and runtime.connectivity == "AVAILABLE":
+            return runtime.provider, runtime.model, True, runtime.connectivity
+        return selected, "NOT_CONFIGURED", False, runtime.connectivity
 
     def _resolve_portfolio(self, requested: int | None) -> int | None:
         if requested is None:
@@ -927,11 +955,7 @@ class DailyQuantOrchestrator:
                 "portfolio_snapshot_id": workflow.portfolio_snapshot_id,
                 "deterministic_core_model": workflow.strategy_version,
                 "ml_model": "NOT_REQUIRED",
-                "llm_model": (
-                    "OPTIONAL_OFFLINE"
-                    if self._settings.llm_provider == "disabled"
-                    else "OPTIONAL_EXPLANATION_ONLY"
-                ),
+                "llm_model": self._llm_provenance(stages),
                 "build_identifier": build.build_id,
                 "git_commit": build.git_commit,
                 "build_time": build.build_time,
@@ -994,6 +1018,8 @@ class DailyQuantOrchestrator:
                 "research_certification_state": workflow.research_certification_state,
                 "operational_policy_id": workflow.operational_policy_id,
                 "operational_policy_decision": workflow.operational_policy_decision,
+                "operational_policy_effective": workflow.operational_policy_effective,
+                "operational_policy_reason": workflow.operational_policy_reason,
                 "operationally_allowed": workflow.operationally_allowed,
                 "operational_degraded_reason": workflow.operational_degraded_reason,
                 "full_research_certified": False,
@@ -1012,13 +1038,21 @@ class DailyQuantOrchestrator:
                     - {"UNAVAILABLE"}
                 )
             ),
-            self._decision_traces(factors, decisions, target_weights, current),
+            self._decision_traces(
+                factors,
+                decisions,
+                target_weights,
+                current,
+                workflow.probability_counterfactual,
+            ),
             None,
             workflow.operational_readiness,
             workflow.operational_approval_artifact_id,
             workflow.research_certification_state,
             workflow.operational_policy_id,
             workflow.operational_policy_decision,
+            workflow.operational_policy_effective,
+            workflow.operational_policy_reason,
             workflow.operationally_allowed,
             workflow.operational_degraded_reason,
         )
@@ -1052,7 +1086,9 @@ class DailyQuantOrchestrator:
         decisions: tuple[DecisionRow, ...],
         target_weights: dict[str, float],
         current_weights: dict[str, float],
+        probability_counterfactual: dict[str, dict[str, object]] | None = None,
     ) -> dict[str, dict[str, object]]:
+        probability_counterfactual = probability_counterfactual or {}
         decision_by_symbol = {item.symbol: item for item in decisions}
         traces: dict[str, dict[str, object]] = {}
         for factor in factors:
@@ -1081,7 +1117,10 @@ class DailyQuantOrchestrator:
                 ),
                 "final_action": decision.action if decision else "REJECTED_OR_HOLD",
                 "rejection_reason": None if decision else factor.status,
+                **probability_counterfactual.get(factor.symbol, {}),
             }
+        for symbol, probability_trace in probability_counterfactual.items():
+            traces.setdefault(symbol, dict(probability_trace))
         return traces
 
     @staticmethod
@@ -1433,6 +1472,17 @@ class DailyQuantOrchestrator:
         model = str(stage.metadata.get("model", "UNAVAILABLE"))
         factor_status = str(stage.metadata.get("factor_status", "UNAVAILABLE"))
         return f"{stage.status.value}/{factor_status}/{provider}/{model}"
+
+    @staticmethod
+    def _llm_provenance(stages: dict[str, StageResult]) -> str:
+        stage = stages.get("LLM_INTELLIGENCE")
+        if stage is None:
+            return "OPTIONAL_UNAVAILABLE/INFLUENCE_NONE"
+        provider = str(stage.metadata.get("provider", "UNAVAILABLE"))
+        model = str(stage.metadata.get("model", "UNAVAILABLE"))
+        connectivity = str(stage.metadata.get("connectivity", "NOT_TESTED"))
+        influence = "NONE" if not stage.metadata.get("production_influence") else "INVALID"
+        return f"{provider}/{model}/{connectivity}/INFLUENCE_{influence}"
 
     @staticmethod
     def _metadata_count(payload: dict[str, object], key: str) -> int:

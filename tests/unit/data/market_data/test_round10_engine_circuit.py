@@ -22,7 +22,7 @@ from personal_alpha_terminal.data.market_data.contracts import (
 )
 from personal_alpha_terminal.data.market_data.exceptions import ProviderRequestError
 from personal_alpha_terminal.data.market_data.repository import PriceRepository
-from personal_alpha_terminal.data.market_data.schemas import PriceBar
+from personal_alpha_terminal.data.market_data.schemas import InstrumentUpdateResult, PriceBar
 from personal_alpha_terminal.data.market_data.service import MarketDataEngine
 from personal_alpha_terminal.models import Base, Stock
 
@@ -190,4 +190,101 @@ def test_batch_first_refresh_persists_successes_and_records_failures(tmp_path: P
 
         stored = session.query(Price).count()
         assert stored == 3
+    engine.dispose()
+
+
+def test_batch_refresh_routes_non_stock_assets_outside_stock_batch(
+    tmp_path: Path, monkeypatch
+) -> None:
+    engine = build_engine("sqlite://")
+    Base.metadata.create_all(engine)
+
+    class _Batch:
+        source = "yahoo_finance"
+        provider_id = "yahoo_finance.broad_universe_batch"
+        chunk_size = 100
+
+        def __init__(self) -> None:
+            self.symbols: tuple[str, ...] = ()
+
+        def download(self, symbols, *, start_date, end_date):
+            del start_date, end_date
+            self.symbols = tuple(symbols)
+            return type(
+                "Report",
+                (),
+                {
+                    "received_symbols": (),
+                    "failed_symbols": tuple(symbols),
+                    "bars": (),
+                },
+            )()
+
+    batch = _Batch()
+    with Session(engine) as session:
+        for symbol in ("A", "B", "C"):
+            session.add(
+                Stock(
+                    canonical_code=f"US:XNAS:{symbol}",
+                    symbol=symbol,
+                    name=symbol,
+                    market="US",
+                    exchange="XNAS",
+                    asset_type="stock",
+                    currency="USD",
+                    timezone="America/New_York",
+                    list_date=date(2020, 1, 1),
+                    is_active=True,
+                    source="fixture",
+                    provider="fixture",
+                    available_time=datetime(2026, 1, 1, tzinfo=__import__("datetime").timezone.utc),
+                    ingested_time=datetime(2026, 1, 1, tzinfo=__import__("datetime").timezone.utc),
+                )
+            )
+        session.add(
+            Stock(
+                canonical_code="US:ARCX:SPY",
+                symbol="SPY",
+                name="SPY",
+                market="US",
+                exchange="ARCX",
+                asset_type="etf",
+                currency="USD",
+                timezone="America/New_York",
+                list_date=date(2020, 1, 1),
+                is_active=True,
+                source="fixture",
+                provider="fixture",
+                available_time=datetime(2026, 1, 1, tzinfo=__import__("datetime").timezone.utc),
+                ingested_time=datetime(2026, 1, 1, tzinfo=__import__("datetime").timezone.utc),
+            )
+        )
+        session.flush()
+        service = MarketDataEngine(
+            providers=[],
+            repository=PriceRepository(session),
+            settings=_settings(tmp_path),
+            batch_provider=batch,
+            batch_threshold=2,
+        )
+        routed: list[str] = []
+
+        def fake_update(stock, end_date, *, forced_start_date):
+            del end_date, forced_start_date
+            routed.append(stock.asset_type)
+            return InstrumentUpdateResult(
+                symbol=stock.symbol,
+                market="US",
+                source="fixture",
+                provider="fixture",
+                status="no_data",
+                start_date=START,
+                end_date=END,
+            )
+
+        monkeypatch.setattr(service, "_update_stock", fake_update)
+        service.update_daily_data(markets={"US"}, end_date=END)
+
+    assert batch.symbols == ("A", "B", "C")
+    assert routed == ["etf"]
     engine.dispose()

@@ -345,10 +345,12 @@ class _DegradedDataService(_SafeDataService):
 
 def _settings(tmp_path: Path) -> Settings:
     return Settings(
+        _env_file=None,
         runtime_profile="TEST",
         database_url="sqlite://",
         daily_pipeline_report_path=tmp_path / "daily.md",
         llm_provider="disabled",
+        DEEPSEEK_API_KEY=None,
     )
 
 
@@ -627,6 +629,98 @@ def test_calendar_resolves_weekend_and_dst_without_llm_dependency(
     assert saturday_state.trade_date == date(2026, 8, 10)
     assert winter_state.timestamp_et.utcoffset() != summer_state.timestamp_et.utcoffset()
     assert _settings(tmp_path).llm_provider == "disabled"
+
+
+def test_daily_uses_sanitized_llm_runtime_status_without_quant_influence(
+    session_factory: sessionmaker[Session], tmp_path: Path, monkeypatch
+) -> None:
+    status_path = tmp_path / "llm-runtime-status.json"
+    status_path.write_text(
+        json.dumps(
+            {
+                "provider": "deepseek",
+                "model": "deepseek-v4-flash",
+                "base_url": "https://api.deepseek.com",
+                "credential": "PRESENT",
+                "connectivity": "AVAILABLE",
+                "last_successful_call": NOW.isoformat(),
+                "latency_ms": 25,
+                "production_influence": "NONE",
+                "error_classification": None,
+                "checked_at": NOW.isoformat(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    settings = Settings(
+        _env_file=None,
+        runtime_profile="TEST",
+        database_url="sqlite://",
+        daily_pipeline_report_path=tmp_path / "daily.md",
+        llm_provider="disabled",
+        DEEPSEEK_API_KEY="unit-test-key",
+    )
+    monkeypatch.setattr(
+        "personal_alpha_terminal.application.daily_orchestrator.DataService",
+        _SafeDataService,
+    )
+    monkeypatch.setattr(
+        "personal_alpha_terminal.application.daily_orchestrator.ProductionDailyWorkflow.run",
+        lambda _self, **_kwargs: _workflow_result(),
+    )
+
+    result = DailyQuantOrchestrator(
+        session_factory,
+        settings,
+        snapshot_root=tmp_path / "runs",
+        llm_runtime_status_path=status_path,
+    ).run(decision_time=NOW, refresh=False)
+    stage = next(item for item in result.stages if item.name == "LLM_INTELLIGENCE")
+
+    assert stage.status is StageStatus.PASS_DEGRADED
+    assert stage.metadata["provider"] == "deepseek"
+    assert stage.metadata["model"] == "deepseek-v4-flash"
+    assert stage.metadata["connectivity"] == "AVAILABLE"
+    assert stage.metadata["production_influence"] is False
+    assert stage.metadata["advisory_quant_impact"] == "NONE"
+    assert result.provenance["llm_model"] == (
+        "deepseek/deepseek-v4-flash/AVAILABLE/INFLUENCE_NONE"
+    )
+    assert "AVAILABLE" in capture_daily_quant_result(result)
+
+
+def test_invalid_stored_policy_renders_blocked_explanation(
+    session_factory: sessionmaker[Session], tmp_path: Path, monkeypatch
+) -> None:
+    workflow = replace(
+        _workflow_result(),
+        status="BLOCKED",
+        recommendations=(),
+        operational_policy_id="stored-policy-id",
+        operational_policy_decision="ALLOW_PROVISIONAL",
+        operational_policy_effective=False,
+        operational_policy_reason="OPERATIONAL_POLICY_IDENTITY_MISMATCH",
+        operationally_allowed=False,
+    )
+    monkeypatch.setattr(
+        "personal_alpha_terminal.application.daily_orchestrator.DataService",
+        _SafeDataService,
+    )
+    monkeypatch.setattr(
+        "personal_alpha_terminal.application.daily_orchestrator.ProductionDailyWorkflow.run",
+        lambda _self, **_kwargs: workflow,
+    )
+
+    result = DailyQuantOrchestrator(
+        session_factory,
+        _settings(tmp_path),
+        snapshot_root=tmp_path / "runs",
+    ).run(decision_time=NOW, refresh=False)
+    rendered = capture_daily_quant_result(result)
+
+    assert "stored Operational Policy is not effective" in rendered
+    assert "OPERATIONAL_POLICY_IDENTITY_MISMATCH" in rendered
+    assert "Current advice is allowed by an explicit Operational Policy" not in rendered
 
 
 def test_no_action_requires_complete_certified_pipeline(

@@ -221,7 +221,7 @@ def test_missing_probability_artifact_safely_falls_back_to_base() -> None:
     )
 
     assert result.signals == base
-    assert result.reason == "PROBABILITY_ARTIFACT_MISSING"
+    assert result.reason == "PROBABILITY_FALLBACK_CLASSICAL"
 
 
 def test_only_approved_overlay_changes_expected_return_and_rank_inputs() -> None:

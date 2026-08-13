@@ -303,7 +303,9 @@ def test_round5_operational_policy_identity_change_fails_closed(
     )
     try:
         assert result.operationally_allowed is False
-        assert result.operational_policy_id == "NOT_CONFIGURED"
+        assert result.operational_policy_id == strict_identity_policy.policy_id
+        assert result.operational_policy_effective is False
+        assert result.operational_policy_reason == "OPERATIONAL_POLICY_IDENTITY_MISMATCH"
         assert result.recommendations == ()
         assert result.status in {"BLOCKED", "NO_DECISION"}
     finally:

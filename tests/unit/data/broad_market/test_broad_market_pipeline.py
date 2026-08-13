@@ -165,6 +165,46 @@ def test_bulk_insert_is_idempotent_and_reports_actual_rows(session_factory, tmp_
     assert count == 1
 
 
+def test_stock_batch_sync_ignores_same_symbol_etf_master_row(
+    session_factory, tmp_path, monkeypatch
+) -> None:
+    stock = _stock("DUP")
+    etf = _stock("DUP")
+    etf.canonical_code = "US:ARCX:DUP"
+    etf.exchange = "ARCX"
+    etf.asset_type = "etf"
+    provider = YahooBatchStockProvider(chunk_size=10)
+    monkeypatch.setattr(
+        provider,
+        "download",
+        lambda symbols, **_kwargs: BatchDownloadReport(
+            requested_symbols=symbols,
+            received_symbols=(),
+            failed_symbols=symbols,
+            quarantined_symbols=(),
+            bar_count=0,
+            chunk_count=1,
+        ),
+    )
+    with session_factory.begin() as session:
+        session.add_all((stock, etf))
+        session.flush()
+        service = BroadUniverseDataService(
+            session,
+            cache_root=tmp_path,
+            provider=provider,
+        )
+        result = service.sync_symbols(
+            symbols=("DUP",),
+            start_date=date(2026, 8, 11),
+            end_date=date(2026, 8, 12),
+            decision_time=DECISION,
+        )
+
+    assert result.total_registered == 1
+    assert result.report.requested_symbols == ("DUP",)
+
+
 def test_current_directory_registration_excludes_etfs(session_factory, tmp_path) -> None:
     snapshot = parse_symbol_directories(NASDAQ, OTHER, retrieved_at=DECISION)
     directory = tmp_path / "us-current-directory"

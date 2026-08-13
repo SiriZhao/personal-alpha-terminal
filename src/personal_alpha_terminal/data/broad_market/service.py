@@ -336,6 +336,7 @@ class BroadUniverseDataService:
                 select(SecurityMaster).where(
                     SecurityMaster.market == "US",
                     SecurityMaster.symbol.in_(symbols),
+                    SecurityMaster.asset_type == "stock",
                 )
             )
         }

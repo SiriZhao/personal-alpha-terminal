@@ -33,6 +33,59 @@ console = Console()
 logger = logging.getLogger(__name__)
 
 
+def _probability_assessment_command(args: argparse.Namespace) -> int:
+    from personal_alpha_terminal.quant_engine.probability_assessment import (
+        ProbabilityAssessmentRegistry,
+        build_round4_probability_assessment,
+    )
+
+    config = load_config(args.config)
+    assessment = build_round4_probability_assessment(
+        args.source,
+        strategy_parameter_hash=config.strategy_parameter_hash,
+    )
+    path = ProbabilityAssessmentRegistry(config.validation_artifact_dir).write(assessment)
+    console.print(
+        json.dumps(
+            {
+                "assessment_id": assessment.assessment_id,
+                "verdict": assessment.verdict,
+                "production_influence": assessment.production_influence,
+                "blockers": assessment.blockers,
+                "artifact_hash": assessment.artifact_hash,
+                "path": str(path.resolve()),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+def _llm_command(args: argparse.Namespace) -> int:
+    from personal_alpha_terminal.intelligence.llm_runtime import (
+        DEFAULT_LLM_RUNTIME_STATUS_PATH,
+        llm_runtime_status,
+        test_llm_runtime,
+    )
+
+    config = load_config(args.config)
+    status_path = DEFAULT_LLM_RUNTIME_STATUS_PATH
+    status = (
+        test_llm_runtime(config.settings, status_path)
+        if args.llm_action == "test"
+        else llm_runtime_status(config.settings, status_path)
+    )
+    console.print(json.dumps(status.public_document(), indent=2, sort_keys=True))
+    if args.llm_action == "test" and status.connectivity != "AVAILABLE":
+        console.print(
+            f"LLM test: {status.error_classification or status.connectivity}; "
+            "Classical Quant Core continues."
+        )
+        return 3
+    return 0
+
+
 def run_daily(
     config_path: Path,
     *,
@@ -1109,6 +1162,17 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("doctor")
     subparsers.add_parser("diagnostics", help="Alias for doctor")
     subparsers.add_parser("settings", help="Show the active terminal configuration path")
+    probability_assessment = subparsers.add_parser(
+        "probability-assessment",
+        help="Materialize the immutable real-evidence probability fallback assessment",
+    )
+    probability_assessment.add_argument(
+        "--source", type=Path, default=Path("var/round4-research/latest.json")
+    )
+    llm = subparsers.add_parser("llm", help="Sanitized optional LLM runtime diagnostics")
+    llm_actions = llm.add_subparsers(dest="llm_action", required=True)
+    llm_actions.add_parser("status", help="Show sanitized DeepSeek runtime status")
+    llm_actions.add_parser("test", help="Run one minimal structured DeepSeek API call")
     operational_policy = subparsers.add_parser(
         "operational-policy",
         help="Show or explicitly set the persistent operational policy",
@@ -1444,6 +1508,10 @@ def main(argv: list[str] | None = None) -> int:
                 )
             )
             return 0
+        if command == "probability-assessment":
+            return _probability_assessment_command(args)
+        if command == "llm":
+            return _llm_command(args)
         if command == "operational-policy":
             return _operational_policy_command(args)
         if command == "maintenance":

@@ -234,6 +234,9 @@ class BroadUniverseEligibility:
     raw_listed_securities: int
     raw_listed_equities: int
     security_type_eligible: tuple[CurrentSecurityMasterRecord, ...]
+    latest_price_covered: tuple[CurrentSecurityMasterRecord, ...]
+    history_sufficient: tuple[CurrentSecurityMasterRecord, ...]
+    pit_eligible: tuple[CurrentSecurityMasterRecord, ...]
     data_eligible: tuple[CurrentSecurityMasterRecord, ...]
     liquidity_eligible: tuple[CurrentSecurityMasterRecord, ...]
     factor_eligible: tuple[CurrentSecurityMasterRecord, ...]
@@ -250,6 +253,9 @@ class BroadUniverseEligibility:
             "raw_listed_securities": self.raw_listed_securities,
             "raw_listed_equities": self.raw_listed_equities,
             "security_type_eligible": len(self.security_type_eligible),
+            "latest_price_covered": len(self.latest_price_covered),
+            "history_sufficient": len(self.history_sufficient),
+            "pit_eligible": len(self.pit_eligible),
             "data_eligible": len(self.data_eligible),
             "liquidity_eligible": len(self.liquidity_eligible),
             "factor_eligible": len(self.factor_eligible),
@@ -418,6 +424,9 @@ def evaluate_broad_universe(
     )
     observed = {item.security_id: item for item in observations}
     security_type_eligible: list[CurrentSecurityMasterRecord] = []
+    latest_price_covered: list[CurrentSecurityMasterRecord] = []
+    history_sufficient: list[CurrentSecurityMasterRecord] = []
+    pit_eligible: list[CurrentSecurityMasterRecord] = []
     data_eligible: list[CurrentSecurityMasterRecord] = []
     liquidity_eligible: list[CurrentSecurityMasterRecord] = []
     factor_eligible: list[CurrentSecurityMasterRecord] = []
@@ -452,21 +461,29 @@ def evaluate_broad_universe(
             continue
         security_type_eligible.append(security)
         observation = observed.get(security.security_id)
-        data_reasons: list[str] = []
         if observation is None:
-            data_reasons.append("PIT_PRICE_OBSERVATION_MISSING")
+            exclusions[security.security_id] = ("PIT_PRICE_OBSERVATION_MISSING",)
+            continue
+        if observation.available_at > decision_time:
+            exclusions[security.security_id] = ("FUTURE_DATA_NOT_ALLOWED",)
+            continue
+        if observation.as_of_date > universe_date:
+            exclusions[security.security_id] = (
+                "FUTURE_OBSERVATION_DATE_NOT_ALLOWED",
+            )
+            continue
+        if observation.latest_price is None:
+            exclusions[security.security_id] = ("PRICE_MISSING",)
+            continue
+        latest_price_covered.append(security)
+        if observation.observed_sessions < configured.minimum_trading_sessions:
+            exclusions[security.security_id] = ("INSUFFICIENT_TRADING_HISTORY",)
+            continue
+        history_sufficient.append(security)
+        data_reasons: list[str] = []
+        if observation.latest_price < configured.minimum_price:
+            data_reasons.append("PRICE_BELOW_THRESHOLD_OR_MISSING")
         else:
-            if observation.available_at > decision_time:
-                data_reasons.append("FUTURE_DATA_NOT_ALLOWED")
-            if observation.as_of_date > universe_date:
-                data_reasons.append("FUTURE_OBSERVATION_DATE_NOT_ALLOWED")
-            if (
-                observation.latest_price is None
-                or observation.latest_price < configured.minimum_price
-            ):
-                data_reasons.append("PRICE_BELOW_THRESHOLD_OR_MISSING")
-            if observation.observed_sessions < configured.minimum_trading_sessions:
-                data_reasons.append("INSUFFICIENT_TRADING_HISTORY")
             if observation.valid_bar_coverage < configured.minimum_valid_bar_coverage:
                 data_reasons.append("VALID_BAR_COVERAGE_INSUFFICIENT")
             if observation.missing_ratio > configured.maximum_missing_ratio:
@@ -479,12 +496,10 @@ def evaluate_broad_universe(
                 # skips this check and is labeled PRICE_BASED_RANKING below;
                 # it never claims total-return or corporate-action certification.
                 data_reasons.append("CORPORATE_ACTION_INTEGRITY_INCOMPLETE")
-            if not observation.feature_available:
-                data_reasons.append("FEATURES_UNAVAILABLE")
         if data_reasons:
             exclusions[security.security_id] = tuple(data_reasons)
             continue
-        assert observation is not None
+        pit_eligible.append(security)
         data_eligible.append(security)
         liquidity_reasons: list[str] = []
         if (
@@ -501,6 +516,9 @@ def evaluate_broad_universe(
             exclusions[security.security_id] = tuple(liquidity_reasons)
             continue
         liquidity_eligible.append(security)
+        if not observation.feature_available:
+            exclusions[security.security_id] = ("FEATURES_UNAVAILABLE",)
+            continue
         factor_eligible.append(security)
     payload = {
         "universe_date": universe_date,
@@ -525,6 +543,9 @@ def evaluate_broad_universe(
             not item.is_etf and not item.test_issue for item in visible
         ),
         security_type_eligible=tuple(security_type_eligible),
+        latest_price_covered=tuple(latest_price_covered),
+        history_sufficient=tuple(history_sufficient),
+        pit_eligible=tuple(pit_eligible),
         data_eligible=tuple(data_eligible),
         liquidity_eligible=tuple(liquidity_eligible),
         factor_eligible=tuple(factor_eligible),

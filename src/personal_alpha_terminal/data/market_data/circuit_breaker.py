@@ -171,11 +171,12 @@ class ProviderCircuitBreaker:
 
     def mark_recovering(self, provider: str, *, now: datetime | None = None) -> None:
         record = self._records.get(provider)
+        recovery_started = now or datetime.now(UTC)
         self._records[provider] = ProviderCircuitRecord(
             provider=provider,
             state=ProviderCircuitState.RECOVERING,
             reason="scheduled health probe",
-            opened_at=(record.opened_at if record else None),
+            opened_at=recovery_started,
             failure_count=(record.failure_count if record else 0),
             sample_symbols=(record.sample_symbols if record else ()),
             last_success_at=(record.last_success_at if record else None),

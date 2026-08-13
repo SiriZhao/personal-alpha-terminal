@@ -143,15 +143,37 @@ class MarketDataEngine:
 
         if (
             not symbols
-            and len(stocks) > self._batch_threshold
+            and sum(
+                stock.market == "US" and stock.asset_type == "stock"
+                for stock in stocks
+            )
+            > self._batch_threshold
             and self._batch_provider is not None
             and self._circuit.state(self._batch_provider.source)
             is not ProviderCircuitState.OPEN_CIRCUIT
         ):
-            return self._run_batch_refresh(
-                stocks,
+            batch_stocks = [
+                stock
+                for stock in stocks
+                if stock.market == "US" and stock.asset_type == "stock"
+            ]
+            remaining = [stock for stock in stocks if stock not in batch_stocks]
+            batch_report = self._run_batch_refresh(
+                batch_stocks,
                 effective_end,
                 forced_start_date=start_date,
+            )
+            remaining_results = tuple(
+                self._update_stock(
+                    stock,
+                    effective_end,
+                    forced_start_date=start_date,
+                )
+                for stock in remaining
+            )
+            return DailyUpdateReport(
+                started_on=batch_report.started_on,
+                results=(*batch_report.results, *remaining_results),
             )
 
         if symbols:

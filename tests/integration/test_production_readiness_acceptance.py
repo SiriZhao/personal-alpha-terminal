@@ -144,7 +144,9 @@ def test_e2e_c_expired_policy_blocks(tmp_path: Path) -> None:
             decision_time=TEST_B_DECISION_TIME,
         )
         assert result.status == "BLOCKED"
-        assert result.operational_policy_id == "NOT_CONFIGURED"
+        assert result.operational_policy_id == policy.policy_id
+        assert result.operational_policy_effective is False
+        assert result.operational_policy_reason == "OPERATIONAL_POLICY_EXPIRED"
         assert result.recommendations == ()
     engine.dispose()
 
@@ -174,7 +176,12 @@ def test_e2e_d_stale_policy_identity_blocks(tmp_path: Path) -> None:
             decision_time=TEST_B_DECISION_TIME,
         )
         assert result.status == "BLOCKED"
-        assert result.operational_policy_id == "NOT_CONFIGURED"
+        assert result.operational_policy_id == policy.policy_id
+        assert result.operational_policy_effective is False
+        assert result.operational_policy_reason == "OPERATIONAL_POLICY_IDENTITY_MISMATCH"
+        assert result.operational_degraded_reason == (
+            "OPERATIONAL_POLICY_IDENTITY_MISMATCH; production advice blocked"
+        )
         assert result.recommendations == ()
     engine.dispose()
 

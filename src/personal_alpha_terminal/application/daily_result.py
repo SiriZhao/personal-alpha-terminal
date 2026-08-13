@@ -249,6 +249,8 @@ class DailyQuantResult:
     research_certification_state: str = "NOT_CERTIFIABLE"
     operational_policy_id: str = "NOT_CONFIGURED"
     operational_policy_decision: str = "BLOCK"
+    operational_policy_effective: bool = False
+    operational_policy_reason: str = "OPERATIONAL_POLICY_NOT_CONFIGURED"
     operationally_allowed: bool = False
     operational_degraded_reason: str | None = None
 
@@ -373,6 +375,8 @@ class DailyQuantResult:
             "operational_approval_artifact_id": self.operational_approval_artifact_id,
             "operational_policy_id": self.operational_policy_id,
             "operational_policy_decision": self.operational_policy_decision,
+            "operational_policy_effective": self.operational_policy_effective,
+            "operational_policy_reason": self.operational_policy_reason,
             "operationally_allowed": self.operationally_allowed,
             "operational_degraded_reason": self.operational_degraded_reason,
             "research_certification_state": self.research_certification_state,
@@ -501,6 +505,8 @@ def canonical_result_hash(result: DailyQuantResult) -> str:
             "operational_approval_artifact_id": result.operational_approval_artifact_id,
             "operational_policy_id": result.operational_policy_id,
             "operational_policy_decision": result.operational_policy_decision,
+            "operational_policy_effective": result.operational_policy_effective,
+            "operational_policy_reason": result.operational_policy_reason,
             "operationally_allowed": result.operationally_allowed,
             "operational_degraded_reason": result.operational_degraded_reason,
             "research_certification_state": result.research_certification_state,

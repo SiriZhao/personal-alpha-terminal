@@ -418,7 +418,7 @@ def apply_probability_overlay(
     if decision_time.tzinfo is None:
         raise ValueError("overlay decision_time must be timezone-aware")
     if artifact is None:
-        return _fallback(signals, "PROBABILITY_ARTIFACT_MISSING")
+        return _fallback(signals, "PROBABILITY_FALLBACK_CLASSICAL")
     if not artifact.verify_hash():
         return _fallback(signals, "PROBABILITY_ARTIFACT_HASH_MISMATCH", artifact=artifact)
     if artifact.identity != expected_identity:
@@ -525,6 +525,34 @@ class ProbabilityOverlayRegistry:
             if (
                 artifact.production_approved
                 and artifact.available_at <= decision_time
+                and identity.strategy_version == strategy_version
+                and identity.strategy_parameter_hash == strategy_parameter_hash
+                and identity.research_data_version == research_data_version
+                and identity.research_data_hash == research_data_hash
+                and identity.universe_version == universe_version
+            ):
+                matches.append(artifact)
+        return matches[0] if len(matches) == 1 else None
+
+    def assessed_inputs(
+        self,
+        *,
+        strategy_version: str,
+        strategy_parameter_hash: str,
+        research_data_version: str,
+        research_data_hash: str,
+        universe_version: str,
+        decision_time: datetime,
+    ) -> ProbabilityOverlayArtifact | None:
+        """Return one exact artifact even when its honest verdict is fallback."""
+
+        directory = self.root / "probability_overlay"
+        matches: list[ProbabilityOverlayArtifact] = []
+        for path in sorted(directory.glob("*.json")) if directory.exists() else ():
+            artifact = _load_artifact(path)
+            identity = artifact.identity
+            if (
+                artifact.available_at <= decision_time
                 and identity.strategy_version == strategy_version
                 and identity.strategy_parameter_hash == strategy_parameter_hash
                 and identity.research_data_version == research_data_version

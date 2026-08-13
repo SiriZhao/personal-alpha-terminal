@@ -38,6 +38,9 @@ from personal_alpha_terminal.quant_engine.operational_baseline import (
     detect_collapse,
     load_baseline,
 )
+from personal_alpha_terminal.quant_engine.probability_assessment import (
+    ProbabilityAssessmentRegistry,
+)
 from personal_alpha_terminal.quant_engine.probability_overlay import (
     ConditionalProbabilityEvidence,
     ProbabilityOverlayEffect,
@@ -79,6 +82,7 @@ class PortfolioInputPosition:
 @dataclass(frozen=True, slots=True)
 class AssembledDailyInput:
     inputs: DailyQuantInput
+    classical_alpha_signals: tuple[AlphaSignal, ...]
     disabled_components: tuple[str, ...]
     parameter_fingerprint: str
     factors: tuple[StrategyFactorSnapshot, ...]
@@ -107,6 +111,8 @@ class AssembledDailyInput:
     probability_overlay_effects: tuple[ProbabilityOverlayEffect, ...] = ()
     operational_policy_id: str = "NOT_CONFIGURED"
     operational_policy_decision: str = "BLOCK"
+    operational_policy_effective: bool = False
+    operational_policy_reason: str = "OPERATIONAL_POLICY_NOT_CONFIGURED"
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,6 +120,7 @@ class AssembledResearchInput:
     authorization: ResearchDataAuthorization
     decision_time: datetime
     alpha_signals: tuple[AlphaSignal, ...]
+    classical_alpha_signals: tuple[AlphaSignal, ...]
     returns: pd.DataFrame
     benchmark_returns: pd.Series
     risk_metadata: tuple[AssetRiskMetadata, ...]
@@ -143,6 +150,8 @@ class AssembledResearchInput:
     probability_overlay_effects: tuple[ProbabilityOverlayEffect, ...] = ()
     operational_policy_id: str = "NOT_CONFIGURED"
     operational_policy_decision: str = "BLOCK"
+    operational_policy_effective: bool = False
+    operational_policy_reason: str = "OPERATIONAL_POLICY_NOT_CONFIGURED"
 
 
 def _funnel_counts(eligibility: BroadUniverseEligibility) -> dict[str, int]:
@@ -151,6 +160,9 @@ def _funnel_counts(eligibility: BroadUniverseEligibility) -> dict[str, int]:
         "listed_securities": eligibility.raw_listed_securities,
         "listed_equities": eligibility.raw_listed_equities,
         "security_type_eligible": len(eligibility.security_type_eligible),
+        "latest_price_covered": len(eligibility.latest_price_covered),
+        "history_sufficient": len(eligibility.history_sufficient),
+        "pit_eligible": len(eligibility.pit_eligible),
         "data_eligible": len(eligibility.data_eligible),
         "liquidity_eligible": len(eligibility.liquidity_eligible),
         "factor_eligible": len(eligibility.factor_eligible),
@@ -180,6 +192,9 @@ class ProductionDailyQuantInputAssembler:
             self.effective_config.validation_artifact_dir
         )
         self.probability_overlay_registry = ProbabilityOverlayRegistry(
+            self.effective_config.validation_artifact_dir
+        )
+        self.probability_assessment_registry = ProbabilityAssessmentRegistry(
             self.effective_config.validation_artifact_dir
         )
         self.operational_store = OperationalPolicyStore(
@@ -296,9 +311,18 @@ class ProductionDailyQuantInputAssembler:
             # Current-directory provenance is a production prerequisite. Legacy
             # local rows may still produce diagnostics but can never reach a trade.
             approval = None
+        policy = None
         operational_policy = None
+        operational_policy_reason = "OPERATIONAL_POLICY_NOT_CONFIGURED"
         if broad_universe_production_eligible and approval is None:
-            operational_policy = self._operational_policy(decision_time)
+            policy = self.operational_store.load()
+            if policy is not None:
+                allowed, operational_policy_reason = policy.allows(
+                    self._operational_identity(),
+                    "NOT_CERTIFIABLE",
+                    now=decision_time,
+                )
+                operational_policy = policy if allowed else None
         approval_data_version = (
             approval.data_version if approval is not None else 'NOT_APPROVED'
         )
@@ -373,6 +397,19 @@ class ProductionDailyQuantInputAssembler:
             expected_identity=overlay_identity,
             decision_time=decision_time,
         )
+        if not overlay_application.active and overlay_artifact is None:
+            assessment = self.probability_assessment_registry.latest_for_strategy(
+                strategy_id=self.strategy.model_id,
+                strategy_version=self.strategy.version,
+                strategy_parameter_hash=self.strategy.config.parameter_fingerprint,
+                decision_time=decision_time,
+            )
+            if assessment is not None:
+                overlay_application = replace(
+                    overlay_application,
+                    reason=f"PROBABILITY_FALLBACK_CLASSICAL:{assessment.verdict}",
+                    artifact_id=assessment.assessment_id,
+                )
         factors = _overlay_adjusted_factors(
             strategy_result.factors,
             overlay_application.effects,
@@ -402,10 +439,32 @@ class ProductionDailyQuantInputAssembler:
         candidate_signals = tuple(
             item for item in overlay_application.signals if item.symbol in candidate_set
         )
+        classical_compression = compress_candidates(
+            tuple(strategy_result.signals),
+            candidate_max=self.effective_config.broad_universe.candidate_max,
+            candidate_min_alpha=self.effective_config.broad_universe.candidate_min_alpha,
+            adv_by_symbol=(
+                {
+                    str(row.ticker): float(row.average_daily_dollar_volume)
+                    for row in risk_metadata_frame.itertuples(index=False)
+                }
+                if not risk_metadata_frame.empty
+                else None
+            ),
+            minimum_adv=self.effective_config.broad_universe.minimum_average_dollar_volume,
+        )
+        classical_candidate_set = set(classical_compression.candidate_symbols)
+        classical_candidate_signals = tuple(
+            item for item in strategy_result.signals if item.symbol in classical_candidate_set
+        )
         candidate_evidence = {
             "candidate_compression": candidate_compression.document(),
             "candidate_count": len(candidate_symbols),
             "full_factor_count": len(strategy_result.factors),
+            "alpha_positive": sum(
+                item.expected_excess_return > 0 for item in strategy_result.signals
+            ),
+            "optimizer_input": len(candidate_signals),
         }
         universe_evidence = {**universe_evidence, **candidate_evidence}
         levels = price_frame.pivot(
@@ -460,6 +519,7 @@ class ProductionDailyQuantInputAssembler:
             authorization,
             decision_time,
             candidate_signals,
+            classical_candidate_signals,
             returns,
             benchmark_returns,
             risk_metadata,
@@ -509,15 +569,17 @@ class ProductionDailyQuantInputAssembler:
             overlay_application.reason,
             overlay_application.effects,
             (
-                operational_policy.policy_id
-                if operational_policy is not None
+                policy.policy_id
+                if policy is not None
                 else "NOT_CONFIGURED"
             ),
             (
-                operational_policy.decision.value
-                if operational_policy is not None
+                policy.decision.value
+                if policy is not None
                 else OperationalPolicyDecision.BLOCK.value
             ),
+            operational_policy is not None,
+            operational_policy_reason,
         )
 
     def _operational_policy(self, decision_time: datetime) -> OperationalPolicy | None:
@@ -546,6 +608,7 @@ class ProductionDailyQuantInputAssembler:
             snapshot_id=int(research.universe_snapshot_id),
         )
         alpha_symbol_set = set(research.candidate_symbols or research.alpha_symbols)
+        alpha_symbol_set.update(item.symbol for item in research.classical_alpha_signals)
         universe_by_symbol = {item.symbol: item for item in universe.securities}
         if any(
             self.repository.tradability(item.id, as_of=research.decision_time) != "TRADABLE"
@@ -625,6 +688,7 @@ class ProductionDailyQuantInputAssembler:
                 universe_snapshot_id=research.universe_snapshot_id,
                 data_quality="CERTIFIED",
             ),
+            research.classical_alpha_signals,
             research.disabled_components,
             research.parameter_fingerprint,
             research.factors,
@@ -653,6 +717,8 @@ class ProductionDailyQuantInputAssembler:
             research.probability_overlay_effects,
             research.operational_policy_id,
             research.operational_policy_decision,
+            research.operational_policy_effective,
+            research.operational_policy_reason,
         )
 
     def _select_alpha_universe(
