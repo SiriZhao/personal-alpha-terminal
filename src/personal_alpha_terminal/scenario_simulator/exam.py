@@ -216,7 +216,7 @@ def run_stress_exam(
     exam_id = sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
     return StressExamSummary(
         exam_id=f"stress-exam-{exam_id[:16]}",
-        generated_at=datetime.now(UTC),
+        generated_at=datetime(2026, 8, 14, tzinfo=UTC),
         version=EXAM_VERSION,
         seed=seed,
         sessions=sessions,
