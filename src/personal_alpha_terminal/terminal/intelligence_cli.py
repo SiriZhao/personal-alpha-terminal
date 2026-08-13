@@ -88,6 +88,12 @@ from personal_alpha_terminal.quant_engine.round14_llm_alpha_research import (
     run_round14_alpha_research,
     write_immutable_json,
 )
+from personal_alpha_terminal.quant_engine.round15_probability_research import (
+    run_round15_probability_research,
+)
+from personal_alpha_terminal.quant_engine.round15_probability_research import (
+    write_immutable_json as write_probability_immutable_json,
+)
 
 console = Console()
 ROOT = Path("var/intelligence/sec-edgar")
@@ -111,6 +117,8 @@ def intelligence_command(args: Namespace, config: EffectiveRuntimeConfig) -> int
         return _outcomes(args, root, config)
     if action == "alpha-research":
         return _alpha_research(args, root, config)
+    if action == "probability-research":
+        return _probability_research(args, root)
     if action == "identity":
         return _identity(args, root, config)
     raise ValueError(f"unsupported intelligence action: {action}")
@@ -698,6 +706,59 @@ def _persist_research_dataset(
     _write_immutable_json(root / "research" / "features" / f"{result_id}.json", dataset)
     _write_immutable_json(root / "research" / "outcomes" / f"{result_id}.json", outcome)
 
+
+def _probability_research(args: Namespace, root: Path) -> int:
+    evaluated_at = _datetime_arg(getattr(args, "evaluated_at", None)) or datetime.now(UTC)
+    dataset_id = getattr(args, "dataset_id", None)
+    round15_root = root / "research" / "round15"
+    if dataset_id:
+        dataset_path = round15_root / f"{dataset_id}.json"
+        if not dataset_path.exists():
+            console.print("ROUND15_DATASET_NOT_FOUND")
+            return 2
+    else:
+        candidates = sorted(
+            round15_root.glob("*.json"),
+            key=lambda item: item.stat().st_mtime,
+            reverse=True,
+        )
+        if not candidates:
+            console.print("NO_ROUND15_DATASET")
+            return 3
+        dataset_path = candidates[0]
+    dataset_document = _read_json(dataset_path)
+    alpha_root = root / "research" / "round14-alpha"
+    alpha_candidates = (
+        sorted(
+            alpha_root.glob("*.json"),
+            key=lambda item: item.stat().st_mtime,
+            reverse=True,
+        )
+        if alpha_root.exists()
+        else []
+    )
+    if alpha_candidates:
+        alpha_document = _read_json(alpha_candidates[0])
+        dataset_document["round14_verdict"] = str(alpha_document.get("verdict"))
+    result = run_round15_probability_research(
+        dataset_document,
+        evaluated_at=evaluated_at,
+    )
+    result_path = root / "research" / "round15-probability" / f"{result.run_id}.json"
+    write_probability_immutable_json(result_path, result.document())
+    summary = {
+        "run_id": result.run_id,
+        "verdict": result.verdict,
+        "production_weight": result.production_weight,
+        "blockers": list(result.blockers),
+        "locked_oos_sessions": result.locked_oos_sessions,
+        "walk_forward_folds": result.walk_forward_folds,
+        "counterfactual": result.counterfactual,
+        "portfolio_cardinality": result.portfolio_cardinality,
+        "result_file": str(result_path.resolve()),
+    }
+    console.print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0
 
 def _alpha_research(args: Namespace, root: Path, config: EffectiveRuntimeConfig) -> int:
     evaluated_at = _datetime_arg(getattr(args, "evaluated_at", None)) or datetime.now(UTC)

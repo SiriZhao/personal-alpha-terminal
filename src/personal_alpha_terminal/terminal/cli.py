@@ -1485,6 +1485,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     alpha_research.add_argument("--dataset-id", default=None)
     alpha_research.add_argument("--evaluated-at", default=None)
+    probability_research = intelligence_actions.add_parser(
+        "probability-research", help="Run ROUND15 conditional probability research"
+    )
+    probability_research.add_argument("--dataset-id", default=None)
+    probability_research.add_argument("--evaluated-at", default=None)
     identity = intelligence_actions.add_parser(
         "identity", help="Import or query canonical CIK/issuer identity evidence"
     )
