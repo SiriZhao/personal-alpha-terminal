@@ -708,9 +708,11 @@ def _pit_universe(result: DailyQuantResult, console: Console) -> None:
             f"History-sufficient {history_ok}   PIT eligible {pit_ok}   "
             f"Liquidity eligible {liq_ok}\n"
             f"Factor eligible {factor_ok}   Alpha positive {alpha_positive}   "
-            f"Candidate pool {candidate_count}\n"
-            f"Optimizer input {optimizer_input}   Optimized holdings {optimized_holdings}\n"
-            f"Maximum allowed holdings "
+            f"{_t('\u5019\u9009\u6c60', 'Candidate pool')} {candidate_count}\n"
+            f"{_t('\u4f18\u5316\u5668\u8f93\u5165', 'Optimizer input')} {optimizer_input}   "
+            f"{_t('\u4f18\u5316\u540e\u76ee\u6807\u6301\u4ed3', 'Optimized holdings')} "
+            f"{optimized_holdings}\n"
+            f"{_t('\u6700\u5927\u5141\u8bb8\u6301\u4ed3', 'Maximum allowed holdings')} "
             f"{max_holdings if max_holdings is not None else 'UNLIMITED'}   "
             f"Risk compared {risk_engine_securities}   Final decisions {final_holdings}\n"
             f"Pre-optimizer Top10 {bool(cardinality.get('pre_optimizer_top10_truncation'))}   "
@@ -960,9 +962,9 @@ def _probability(result: DailyQuantResult, console: Console) -> None:
     runtime_state = "ACTIVE_CALIBRATED" if active else "FALLBACK_CLASSICAL"
     console.print(
         _t(
-            f"??????: COMPLETED   "
+            f"\u6761\u4ef6\u6982\u7387\u8bc4\u4f30: COMPLETED   "
             f"OOS incremental value: {'PROVED' if active else 'NOT PROVED'}   "
-            f"????: {'ACTIVE' if active else '0%'}   "
+            f"\u751f\u4ea7\u6743\u91cd: {'ACTIVE' if active else '0%'}   "
             f"Mode: {runtime_state}\n"
             f"Overlay {overlay.get('state', 'RESEARCH_ONLY')}   "
             f"Active {active}   "
@@ -1022,7 +1024,9 @@ def _probability(result: DailyQuantResult, console: Console) -> None:
         if trace.get("target_weight") is not None
     ]
     if formation:
-        formation_table = Table(title=_t("??????", "DECISION FORMATION PROCESS"))
+        formation_table = Table(
+            title=_t("\u51b3\u7b56\u5f62\u6210\u8fc7\u7a0b", "DECISION FORMATION PROCESS")
+        )
         for column in (
             "Ticker",
             "Factor rank",
@@ -1183,7 +1187,10 @@ def _risk(result: DailyQuantResult, console: Console) -> None:
             f"ADV {_money(_as_float(size.get('average_daily_dollar_volume')))}   "
             f"Spread proxy {size.get('spread_proxy_bps', 'N/A')} bps   "
             f"Impact {_number(_as_float(size.get('expected_market_impact_bps')))} bps",
-            title=_t("SIZE_TILT_DIAGNOSTIC ? ?????????", "SIZE_TILT_DIAGNOSTIC"),
+            title=_t(
+                "SIZE_TILT_DIAGNOSTIC \u00b7 \u89c4\u6a21\u503e\u659c\u8bca\u65ad",
+                "SIZE_TILT_DIAGNOSTIC",
+            ),
             border_style="yellow" if size_status != "SIZE_EXPOSURE_VALIDATED" else "green",
         )
     )
@@ -1219,7 +1226,8 @@ def _risk(result: DailyQuantResult, console: Console) -> None:
 def _decisions(result: DailyQuantResult, console: Console) -> None:
     table = Table(
         title=_t(
-            "?????? ? ????????",
+            "\u6700\u7ec8\u6709\u6548\u51b3\u7b56 "
+            "\u00b7 \u4ec5\u663e\u793a\u6b63\u5f0f\u4e70\u5356\u533a",
             "FINAL VALIDATED DECISIONS ? ONLY FORMAL BUY/SELL AREA",
         )
     )
@@ -1308,7 +1316,12 @@ def _decisions(result: DailyQuantResult, console: Console) -> None:
 
 
 def _rejected(result: DailyQuantResult, console: Console) -> None:
-    table = Table(title=_t("????? / ????", "REJECTED SIGNALS / GATE BLOCKERS"))
+    table = Table(
+        title=_t(
+            "\u88ab\u62d2\u7edd\u4fe1\u53f7 / \u95e8\u7981\u539f\u56e0",
+            "REJECTED SIGNALS / GATE BLOCKERS",
+        )
+    )
     table.add_column("Ticker")
     table.add_column("Rejected by")
     table.add_column("Reason", overflow="fold")
@@ -1370,8 +1383,11 @@ def _execution(result: DailyQuantResult, console: Console) -> None:
     execution_state = "NOT_EXECUTED"
     table = Table(
         title=_t(
-            f"???? ? {plan.status} ? ???? {execution_state} ? {plan.execution_mode}",
-            f"EXECUTION PLAN ? {plan.status} ? BROKER {execution_state} ? {plan.execution_mode}",
+            f"\u6267\u884c\u8ba1\u5212\uff1a{plan.status} \u00b7 "
+            f"\u5238\u5546\u6267\u884c\uff1a{execution_state} \u00b7 "
+            f"\u6267\u884c\u65b9\u5f0f\uff1a{plan.execution_mode}",
+            f"EXECUTION PLAN ? {plan.status} ? BROKER {execution_state} ? "
+            f"{plan.execution_mode}",
         )
     )
     for column in ("#", "Ticker", "Action", "Est Value", "Qty", "Est Cost", "Earliest"):
@@ -1390,11 +1406,20 @@ def _execution(result: DailyQuantResult, console: Console) -> None:
         )
     console.print(table)
     console.print(
-        f"???? {'PASS' if plan.execution_plan_generated else 'BLOCKED'}   "
-        f"???? NOT_EXECUTED   ???? {plan.execution_mode}   "
-        f"?? {plan.broker}   Broker API {plan.broker_api}\n"
-        f"execution_plan_generated={str(plan.execution_plan_generated).lower()}   "
-        f"broker_order_submitted={str(plan.broker_order_submitted).lower()}"
+        _t(
+            f"\u6267\u884c\u8ba1\u5212\uff1a"
+            f"{'PASS' if plan.execution_plan_generated else 'BLOCKED'}   "
+            f"\u5238\u5546\u6267\u884c\uff1aNOT_EXECUTED   "
+            f"\u6267\u884c\u65b9\u5f0f\uff1a{plan.execution_mode}   "
+            f"\u5238\u5546\uff1a{plan.broker}   Broker API {plan.broker_api}\n"
+            f"execution_plan_generated={str(plan.execution_plan_generated).lower()}   "
+            f"broker_order_submitted={str(plan.broker_order_submitted).lower()}",
+            f"EXECUTION PLAN: {'PASS' if plan.execution_plan_generated else 'BLOCKED'}   "
+            f"BROKER: NOT_EXECUTED   MODE: {plan.execution_mode}   "
+            f"BROKER: {plan.broker}   Broker API {plan.broker_api}\n"
+            f"execution_plan_generated={str(plan.execution_plan_generated).lower()}   "
+            f"broker_order_submitted={str(plan.broker_order_submitted).lower()}",
+        )
     )
     console.print(
         f"Cash before {_money(plan.estimated_cash_before)}  "

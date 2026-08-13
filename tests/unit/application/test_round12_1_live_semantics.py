@@ -6,6 +6,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import numpy as np
+import pytest
 
 from personal_alpha_terminal.application.daily_result import (
     DailyQuantResult,
@@ -354,3 +355,140 @@ def test_doctor_command_is_registered() -> None:
     parser = build_parser()
     args = parser.parse_args(["doctor"])
     assert args.command == "doctor"
+
+
+def test_zh_renderer_required_localization_labels_survive() -> None:
+    rendered = capture_daily_quant_result(
+        replace(_result_with_decision(0.8), decision_traces={"AAPL": {"target_weight": 0.05}}),
+        locale="zh-CN",
+        width=160,
+    )
+    labels = (
+        "\u6267\u884c\u8ba1\u5212",
+        "\u5238\u5546\u6267\u884c",
+        "\u6267\u884c\u65b9\u5f0f",
+        "\u5238\u5546",
+        "\u88ab\u62d2\u7edd\u4fe1\u53f7 / \u95e8\u7981\u539f\u56e0",
+        "\u6700\u7ec8\u6709\u6548\u51b3\u7b56 "
+        "\u00b7 \u4ec5\u663e\u793a\u6b63\u5f0f\u4e70\u5356\u533a",
+        "\u51b3\u7b56\u5f62\u6210\u8fc7\u7a0b",
+        "\u6761\u4ef6\u6982\u7387\u8bc4\u4f30",
+        "\u751f\u4ea7\u6743\u91cd",
+        "SIZE_TILT_DIAGNOSTIC \u00b7 \u89c4\u6a21\u503e\u659c\u8bca\u65ad",
+        "\u5019\u9009\u6c60",
+        "\u4f18\u5316\u5668\u8f93\u5165",
+        "\u6700\u5927\u5141\u8bb8\u6301\u4ed3",
+        "\u4f18\u5316\u540e\u76ee\u6807\u6301\u4ed3",
+    )
+    for label in labels:
+        assert label in rendered
+
+
+def test_zh_renderer_blocked_execution_keeps_status_codes() -> None:
+    base = _result_with_decision(0.8)
+    blocked = replace(
+        base,
+        final_decisions=(),
+        execution_plan=replace(
+            base.execution_plan,
+            status="BLOCKED",
+            execution_plan_generated=False,
+            legs=(),
+        ),
+    )
+    rendered = capture_daily_quant_result(blocked, locale="zh-CN", width=160)
+    assert "\u6267\u884c\u8ba1\u5212\uff1aBLOCKED" in rendered
+    assert "\u5238\u5546\u6267\u884c\uff1aNOT_EXECUTED" in rendered
+    assert "\u6267\u884c\u65b9\u5f0f\uff1aMANUAL_ONLY" in rendered
+
+
+def test_zh_renderer_probability_fallback_and_size_unavailable_labels() -> None:
+    rendered = capture_daily_quant_result(_result_with_decision(None), locale="zh-CN", width=160)
+    assert "\u6761\u4ef6\u6982\u7387\u8bc4\u4f30" in rendered
+    assert "\u751f\u4ea7\u6743\u91cd: 0%" in rendered
+    assert "SIZE_TILT_DIAGNOSTIC \u00b7 \u89c4\u6a21\u503e\u659c\u8bca\u65ad" in rendered
+
+
+def test_zh_renderer_llm_shadow_regression() -> None:
+    base = _result_with_decision(0.8)
+    stages = list(base.stages)
+    llm = stages[3]
+    stages[3] = llm.__class__(
+        llm.name,
+        llm.status,
+        llm.duration_seconds,
+        llm.message,
+        {
+            "advisory_status": "SHADOW",
+            "llm_calls": 3,
+            "processed_documents": 2,
+        },
+    )
+    result = replace(base, stages=tuple(stages))
+    rendered = capture_daily_quant_result(result, locale="zh-CN", width=160)
+    assert "SHADOW" in rendered
+    assert "LLM \u8c03\u7528" in rendered
+    assert "\u5df2\u5904\u7406\u6587\u6863" in rendered
+
+
+def test_utf8_redirected_stdout_smoke() -> None:
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[3]
+    script = (
+        "import sys\n"
+        "sys.path.insert(0, " + repr(str(root)) + ")\n"
+        "from tests.unit.application.test_round12_1_live_semantics import _result_with_decision\n"
+        "from personal_alpha_terminal.terminal.daily_renderer import capture_daily_quant_result\n"
+        "print(capture_daily_quant_result(_result_with_decision(0.8), locale='zh-CN', width=160))\n"
+    )
+    env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "utf-8"
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=env,
+        timeout=60,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "\u6267\u884c\u8ba1\u5212\uff1aPASS" in completed.stdout
+    assert "\u6761\u4ef6\u6982\u7387\u8bc4\u4f30" in completed.stdout
+
+
+def test_legacy_windows_stdout_smoke() -> None:
+    import codecs
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    try:
+        codecs.lookup("gbk")
+    except LookupError:
+        pytest.skip("GBK codec unavailable; CMD-compatible smoke skipped")
+    root = Path(__file__).resolve().parents[3]
+    script = (
+        "import sys\n"
+        "sys.path.insert(0, " + repr(str(root)) + ")\n"
+        "from tests.unit.application.test_round12_1_live_semantics import _result_with_decision\n"
+        "from personal_alpha_terminal.terminal.daily_renderer import capture_daily_quant_result\n"
+        "print(capture_daily_quant_result(_result_with_decision(0.8), locale='zh-CN', width=160))\n"
+    )
+    env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "gbk"
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        encoding="gbk",
+        env=env,
+        timeout=60,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "\u88ab\u62d2\u7edd\u4fe1\u53f7 / \u95e8\u7981\u539f\u56e0" in completed.stdout
+    assert "\u6700\u7ec8\u6709\u6548\u51b3\u7b56" in completed.stdout

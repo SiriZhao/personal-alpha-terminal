@@ -1718,7 +1718,30 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _configure_terminal_utf8() -> None:
+    """Best-effort Windows UTF-8 console output; no data-path changes."""
+    if sys.platform != "win32":
+        return
+    try:
+        if getattr(sys.stdout, "isatty", lambda: False)():
+            import ctypes
+
+            ctypes.windll.kernel32.SetConsoleOutputCP(65001)
+    except (OSError, ValueError, AttributeError, ImportError):
+        pass
+    for stream in (sys.stdout, sys.stderr):
+        if stream is None:
+            continue
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                reconfigure(encoding="utf-8", errors="backslashreplace")
+            except (OSError, ValueError):
+                pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _configure_terminal_utf8()
     args = build_parser().parse_args(sys.argv[1:] if argv is None else argv)
     command = args.command or "daily"
     try:
