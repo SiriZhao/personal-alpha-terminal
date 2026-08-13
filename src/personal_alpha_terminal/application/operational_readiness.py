@@ -11,12 +11,14 @@ from __future__ import annotations
 
 import inspect
 import json
+import sys
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
+from personal_alpha_terminal.core.build_metadata import current_build_metadata
 from personal_alpha_terminal.core.fingerprints import fingerprint
 
 if TYPE_CHECKING:
@@ -768,8 +770,16 @@ def build_operational_identity(
         "trend": strategy.config.trend_window,
         "volatility": strategy.config.volatility_window,
     }
-    strategy_definition = inspect.getsource(type(strategy))
-    factor_definition = inspect.getsource(type(strategy.config))
+    if getattr(sys, "frozen", False):
+        metadata = current_build_metadata()
+        strategy_definition = (
+            f"frozen:{strategy.model_id}:{strategy.version}:"
+            f"{metadata.build_id}:{metadata.git_commit}"
+        )
+        factor_definition = f"frozen-factor:{type(strategy.config).__name__}"
+    else:
+        strategy_definition = inspect.getsource(type(strategy))
+        factor_definition = inspect.getsource(type(strategy.config))
     return OperationalApprovalIdentity(
         strategy_name=strategy.model_id,
         strategy_version=strategy.version,
