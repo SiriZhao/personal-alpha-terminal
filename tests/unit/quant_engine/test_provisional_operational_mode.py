@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 
 from personal_alpha_terminal.application.operational_readiness import (
+    OPERATIONAL_IDENTITY_V2,
     OperationalApprovalIdentity,
     ProvisionalOperationalRegistry,
 )
@@ -67,6 +68,14 @@ def _identity(*, factor_config_hash: str = "factor-v1") -> OperationalApprovalId
         portfolio_config_hash="portfolio-v1",
         risk_config_hash="risk-v1",
         cost_model_hash="cost-v1",
+        schema_version=OPERATIONAL_IDENTITY_V2,
+        strategy_hash="strategy-definition-v1",
+        factor_definition_hash="factor-definition-v1",
+        universe_definition_hash="universe-v1",
+        probability_artifact_hash="probability-assessment-v1",
+        probability_production_influence="0",
+        llm_influence_identity="LLM_SHADOW_NONE",
+        code_config_fingerprint="code-config-v1",
     )
 
 

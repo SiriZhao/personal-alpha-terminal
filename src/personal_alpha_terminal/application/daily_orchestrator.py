@@ -593,6 +593,20 @@ class DailyQuantOrchestrator:
                             else 1
                         )
                     ),
+                    **(
+                        {
+                            "authorization_class": (
+                                workflow.signal_authorization_class
+                            ),
+                            "research_certification": (
+                                workflow.research_certification_state
+                            ),
+                            "operational_policy_id": workflow.operational_policy_id,
+                            "evidence_level": workflow.signal_evidence_level,
+                        }
+                        if name == "SIGNAL"
+                        else {}
+                    ),
                 },
             )
         if workflow.factors:
@@ -1020,6 +1034,12 @@ class DailyQuantOrchestrator:
                 "operational_policy_decision": workflow.operational_policy_decision,
                 "operational_policy_effective": workflow.operational_policy_effective,
                 "operational_policy_reason": workflow.operational_policy_reason,
+                "operational_policy_hash": workflow.operational_policy_hash,
+                "operational_policy_identity_hash": (
+                    workflow.operational_policy_identity_hash
+                ),
+                "signal_authorization_class": workflow.signal_authorization_class,
+                "signal_evidence_level": workflow.signal_evidence_level,
                 "operationally_allowed": workflow.operationally_allowed,
                 "operational_degraded_reason": workflow.operational_degraded_reason,
                 "full_research_certified": False,
@@ -1094,6 +1114,7 @@ class DailyQuantOrchestrator:
         for factor in factors:
             decision = decision_by_symbol.get(factor.symbol)
             traces[factor.symbol] = {
+                "ticker": factor.symbol,
                 "data_quality": decision.data_quality if decision else "NOT_CAPTURED",
                 "factor_raw_values": factor.raw_values or "NOT_CAPTURED",
                 "factor_winsorized_values": (factor.winsorized_values or "NOT_CAPTURED"),
@@ -1102,8 +1123,10 @@ class DailyQuantOrchestrator:
                 "cross_sectional_rank": factor.rank,
                 "composite_alpha": factor.composite,
                 "expected_alpha": factor.expected_alpha,
+                "base_alpha": factor.expected_alpha,
                 "evidence_coverage": factor.evidence_coverage,
                 "calibrated_probability": "NOT_CAPTURED",
+                "probability_adjustment": 0.0,
                 "raw_alpha_target": "NOT_CAPTURED",
                 "portfolio_optimized_target": "NOT_CAPTURED",
                 "risk_adjusted_target": target_weights.get(factor.symbol),

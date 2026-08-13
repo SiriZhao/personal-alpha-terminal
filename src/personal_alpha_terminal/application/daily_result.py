@@ -313,12 +313,8 @@ class DailyQuantResult:
                 else "INVALID_NON_ACTIONABLE"
             )
         if self.operationally_allowed:
-            if self.execution_plan.legs:
-                return "PROVISIONAL_ACTIONABLE"
-            return "PROVISIONAL_NO_ACTION"
-        if self.execution_plan.legs:
-            return "CERTIFIED_ACTIONABLE"
-        return "CERTIFIED_NO_ACTION"
+            return "VALID_ANALYSIS_ACTIONABLE_PROVISIONAL"
+        return "VALID_ANALYSIS_ACTIONABLE_CERTIFIED"
 
     def to_dict(self) -> dict[str, Any]:
         return cast(dict[str, Any], _json_value(asdict(self)))
@@ -364,6 +360,9 @@ class DailyQuantResult:
         stage_evidence = {
             item.name: _json_value(item.metadata) for item in self.stages
         }
+        probability_overlay = self.provenance.get("probability_overlay", {})
+        if not isinstance(probability_overlay, dict):
+            probability_overlay = {}
         certificate = {
             "certificate_schema": "pat-quant-run-certificate-v2",
             "run_id": self.run_id,
@@ -377,9 +376,31 @@ class DailyQuantResult:
             "operational_policy_decision": self.operational_policy_decision,
             "operational_policy_effective": self.operational_policy_effective,
             "operational_policy_reason": self.operational_policy_reason,
+            "operational_authorization": self.operational_policy_decision,
+            "policy_id": self.operational_policy_id,
+            "policy_hash": self.provenance.get(
+                "operational_policy_hash", "NOT_CONFIGURED"
+            ),
+            "policy_identity_hash": self.provenance.get(
+                "operational_policy_identity_hash", "NOT_CONFIGURED"
+            ),
+            "signal_authorization_class": self.provenance.get(
+                "signal_authorization_class", "FAIL_BLOCKING"
+            ),
             "operationally_allowed": self.operationally_allowed,
             "operational_degraded_reason": self.operational_degraded_reason,
             "research_certification_state": self.research_certification_state,
+            "probability_mode": probability_overlay.get(
+                "reason", "PROBABILITY_FALLBACK_CLASSICAL"
+            ),
+            "probability_influence": (
+                1.0
+                if probability_overlay.get("active")
+                else 0.0
+            ),
+            "llm_mode": "SHADOW",
+            "auto_execution": False,
+            "manual_execution_only": True,
             "full_research_certified": False,
             "version": self.version,
             "build_identifier": self.provenance.get("build_identifier", self.version),

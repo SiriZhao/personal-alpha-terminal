@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
@@ -8,7 +9,10 @@ import pytest
 
 from personal_alpha_terminal.application.operational_readiness import (
     DEFAULT_ALLOWED_RESEARCH_STATES,
+    OPERATIONAL_IDENTITY_V1,
+    OperationalApprovalIdentity,
     OperationalPolicyDecision,
+    OperationalPolicyStatusCode,
     OperationalPolicyStore,
     classify_operational_state,
     issue_operational_policy,
@@ -296,3 +300,110 @@ def test_overwrite_refused_without_force(tmp_path: Path) -> None:
     store.save(_policy(decision=OperationalPolicyDecision.BLOCK))
     with pytest.raises(FileExistsError):
         store.save(_policy())
+
+
+def test_v1_policy_is_verified_then_fails_closed_against_v2_identity(
+    tmp_path: Path,
+) -> None:
+    v2 = _identity()
+    v1 = OperationalApprovalIdentity(
+        strategy_name=v2.strategy_name,
+        strategy_version=v2.strategy_version,
+        factor_config_hash=v2.factor_config_hash,
+        operational_universe_policy=v2.operational_universe_policy,
+        required_factor_lookbacks=v2.required_factor_lookbacks,
+        portfolio_config_hash=v2.portfolio_config_hash,
+        risk_config_hash=v2.risk_config_hash,
+        cost_model_hash=v2.cost_model_hash,
+        schema_version=OPERATIONAL_IDENTITY_V1,
+    )
+    store = OperationalPolicyStore(tmp_path / "operational_policy.json")
+    store.save(_policy(identity=v1))
+
+    status = store.status(v2, research_state="NOT_CERTIFIABLE", now=NOW)
+
+    assert status.status is OperationalPolicyStatusCode.IDENTITY_MISMATCH
+    assert not status.effective
+    assert status.policy is not None
+    assert status.policy.identity == v1
+    assert status.mismatch_fields["schema_version"]["stored"] == (
+        "NOT_BOUND_IN_STORED_SCHEMA"
+    )
+    assert status.mismatch_fields["probability_artifact_hash"]["current"] == (
+        "probability-assessment-v1"
+    )
+
+
+def test_policy_status_reports_exact_mismatch_values(tmp_path: Path) -> None:
+    store = OperationalPolicyStore(tmp_path / "operational_policy.json")
+    store.save(_policy())
+    changed = replace(_identity(), risk_config_hash="risk-v2")
+
+    status = store.status(changed, research_state="NOT_CERTIFIABLE", now=NOW)
+
+    assert status.status is OperationalPolicyStatusCode.IDENTITY_MISMATCH
+    assert status.mismatch_fields == {
+        "risk_config_hash": {"stored": "risk-v1", "current": "risk-v2"}
+    }
+    assert status.public_document()["Effective"] is False
+
+
+def test_tampered_policy_has_distinct_fail_closed_status(tmp_path: Path) -> None:
+    store = OperationalPolicyStore(tmp_path / "operational_policy.json")
+    policy = _policy()
+    store.save(policy)
+    artifact = (
+        store.path.parent
+        / "policy-artifacts"
+        / f"{policy.artifact_hash}.json"
+    )
+    raw = artifact.read_text(encoding="utf-8")
+    artifact.write_text(raw.replace("risk-v1", "risk-tampered"), encoding="utf-8")
+
+    assert store.load() is None
+    status = store.status(_identity(), research_state="NOT_CERTIFIABLE", now=NOW)
+    assert status.status is OperationalPolicyStatusCode.TAMPERED_OR_MALFORMED
+    assert not status.effective
+
+
+def test_policy_save_writes_content_addressed_immutable_artifact(tmp_path: Path) -> None:
+    store = OperationalPolicyStore(tmp_path / "active" / "operational_policy.json")
+    policy = _policy()
+    store.save(policy)
+    artifact = store.path.parent / "policy-artifacts" / f"{policy.artifact_hash}.json"
+    original = artifact.read_text(encoding="utf-8")
+
+    store.save(policy)
+
+    assert artifact.read_text(encoding="utf-8") == original
+    assert len(list(artifact.parent.glob("*.json"))) == 1
+    active = json.loads(store.path.read_text(encoding="utf-8"))
+    assert active == {
+        "active_policy_schema": "pat-operational-policy-active-v1",
+        "artifact_hash": policy.artifact_hash,
+        "artifact_path": f"policy-artifacts/{policy.artifact_hash}.json",
+        "policy_id": policy.policy_id,
+    }
+    assert store.load() == policy
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "strategy_hash",
+        "factor_definition_hash",
+        "universe_definition_hash",
+        "probability_artifact_hash",
+        "probability_production_influence",
+        "llm_influence_identity",
+        "code_config_fingerprint",
+    ],
+)
+def test_any_v2_identity_change_invalidates_policy(field: str) -> None:
+    policy = _policy()
+    changed = replace(_identity(), **{field: f"changed-{field}"})
+    allowed, _policy_id, reason = classify_operational_state(
+        changed, "NOT_CERTIFIABLE", policy, now=NOW
+    )
+    assert not allowed
+    assert reason == "OPERATIONAL_POLICY_IDENTITY_MISMATCH"

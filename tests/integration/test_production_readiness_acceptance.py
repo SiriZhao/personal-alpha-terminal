@@ -122,6 +122,10 @@ def test_e2e_b_valid_policy_enables_provisional_recommendations(
         assert result.operational_policy_id == policy.policy_id
         assert result.operationally_allowed is True
         assert result.operational_readiness == "PROVISIONAL_ACTIONABLE"
+        assert result.signal_authorization_class == "PASS_PROVISIONAL"
+        assert result.signal_evidence_level == "PROVISIONAL_OPERATIONAL_ADVISORY"
+        assert result.operational_policy_hash == policy.artifact_hash
+        assert result.operational_policy_identity_hash == policy.identity.identity_hash
         assert result.recommendations
         assert result.trades
     engine.dispose()

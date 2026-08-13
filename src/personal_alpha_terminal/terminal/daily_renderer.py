@@ -162,6 +162,12 @@ def _header(result: DailyQuantResult) -> str:
         "CERTIFIED_NO_ACTION": "CERTIFIED NO-ACTION RUN",
         "PROVISIONAL_ACTIONABLE": "PROVISIONAL OPERATIONAL ACTION · MANUAL ONLY",
         "PROVISIONAL_NO_ACTION": "PROVISIONAL NO-ACTION RUN",
+        "VALID_ANALYSIS_ACTIONABLE_CERTIFIED": (
+            "CERTIFIED ACTIONABLE ANALYSIS / MANUAL EXECUTION ONLY"
+        ),
+        "VALID_ANALYSIS_ACTIONABLE_PROVISIONAL": (
+            "PROVISIONAL ADVISORY / MANUAL REVIEW ONLY"
+        ),
         "VALID_ANALYSIS_NON_ACTIONABLE": (
             "VALID QUANT ANALYSIS / NON-ACTIONABLE\nFORMAL TRADING DECISION NOT AVAILABLE"
         ),
@@ -178,6 +184,12 @@ def _header(result: DailyQuantResult) -> str:
     )
     if _is_zh():
         classification = {
+            "VALID_ANALYSIS_ACTIONABLE_CERTIFIED": (
+                "CERTIFIED ACTIONABLE / MANUAL EXECUTION ONLY"
+            ),
+            "VALID_ANALYSIS_ACTIONABLE_PROVISIONAL": (
+                "PROVISIONAL ADVISORY / MANUAL REVIEW ONLY"
+            ),
             "CERTIFIED_ACTIONABLE": "可执行 · 仅生成外部券商手动执行计划",
             "CERTIFIED_NO_ACTION": "无需操作 · 全部正式门禁已通过",
             "PROVISIONAL_ACTIONABLE": "试运行量化可操作 · 仅手动执行",
@@ -225,6 +237,17 @@ def _today_actions(result: DailyQuantResult, console: Console) -> None:
             )
         )
         return
+    if result.operationally_allowed:
+        console.print(
+            Panel(
+                "Advice class: PROVISIONAL_ADVISORY\n"
+                f"Research certification: {result.research_certification_state}\n"
+                f"Operational authorization: {result.operational_policy_decision}\n"
+                "Automatic execution: DISABLED",
+                title=title,
+                border_style="yellow",
+            )
+        )
     table = Table(title=title)
     columns = (
         (
@@ -872,7 +895,10 @@ def _probability(result: DailyQuantResult, console: Console) -> None:
     active = bool(overlay.get("active", False))
     runtime_state = "ACTIVE_CALIBRATED" if active else "FALLBACK_CLASSICAL"
     console.print(
-        f"Probability {runtime_state}   "
+        f"Probability assessment: COMPLETED   "
+        f"OOS incremental value: {'PROVED' if active else 'NOT PROVED'}   "
+        f"Production weight: {'ACTIVE' if active else '0%'}   "
+        f"Mode: {runtime_state}\n"
         f"Overlay {overlay.get('state', 'RESEARCH_ONLY')}   "
         f"Active {active}   "
         f"Reason {overlay.get('reason', 'UNAVAILABLE')}"
@@ -917,6 +943,55 @@ def _probability(result: DailyQuantResult, console: Console) -> None:
                 str(trace.get("final_decision", "--")),
             )
         console.print(trace_table)
+    formation = [
+        trace
+        for trace in (result.decision_traces or {}).values()
+        if trace.get("target_weight") is not None
+    ]
+    if formation:
+        formation_table = Table(title="DECISION FORMATION PROCESS")
+        for column in (
+            "Ticker",
+            "Factor rank",
+            "Base alpha",
+            "Probability",
+            "Prob adjustment",
+            "Risk target",
+            "Final target",
+            "Trade delta",
+            "Final decision",
+        ):
+            formation_table.add_column(column, overflow="fold")
+        for trace in formation[:10]:
+            probability = trace.get("conditional_probability")
+            formation_table.add_row(
+                str(trace.get("ticker", trace.get("symbol", "--"))),
+                str(trace.get("cross_sectional_rank", "--")),
+                _signed_percent(_as_float(trace.get("base_alpha"))),
+                (
+                    _percent(_as_float(probability))
+                    if probability is not None
+                    else "N/A (CLASSICAL FALLBACK)"
+                ),
+                _signed_percent(
+                    (
+                        _as_float(trace.get("probability_adjusted_alpha"))
+                        or _as_float(trace.get("base_alpha"))
+                        or 0.0
+                    )
+                    - (_as_float(trace.get("base_alpha")) or 0.0)
+                ),
+                _percent(_as_float(trace.get("risk_adjusted_target"))),
+                _percent(_as_float(trace.get("final_trade_target"))),
+                _signed_percent(_as_float(trace.get("delta_weight"))),
+                str(
+                    trace.get(
+                        "final_decision",
+                        trace.get("final_action", "--"),
+                    )
+                ),
+            )
+        console.print(formation_table)
     table = Table(
         title=_t(
             "条件概率 · 仅作支持证据 · 未校准时不可调整仓位",
@@ -1287,6 +1362,12 @@ def _run_certificate(result: DailyQuantResult, console: Console) -> None:
             f"Data hash: {result.provenance.get('data_hash', 'UNAVAILABLE')}\n"
             f"Config hash: {result.config_hash}\n"
             f"Models: {', '.join(result.model_versions) or 'UNAVAILABLE'}\n"
+            f"Research certification: {result.research_certification_state}\n"
+            f"Operational authorization: {result.operational_policy_decision}\n"
+            f"Policy ID: {result.operational_policy_id}\n"
+            f"Signal authorization: "
+            f"{result.provenance.get('signal_authorization_class', 'FAIL_BLOCKING')}\n"
+            "Automatic execution: DISABLED / MANUAL_ONLY\n"
             f"Certificate: {result.certificate_path or 'UNAVAILABLE'}",
             title=_t("运行证书 · 专业审计信息", "RUN CERTIFICATE"),
             border_style="green" if result.actionable else "red",

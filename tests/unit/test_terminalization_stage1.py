@@ -404,6 +404,17 @@ def test_actual_quant_pipeline_flows_to_terminal_without_recalculation(
     )
     assert certificate_payload["run_id"] == snapshot["run_id"] == result.run_id
     assert certificate_payload["classification"] == result.run_classification
+    assert certificate_payload["research_certification_state"] == (
+        result.research_certification_state
+    )
+    assert certificate_payload["operational_authorization"] == (
+        result.operational_policy_decision
+    )
+    assert certificate_payload["signal_authorization_class"]
+    assert certificate_payload["probability_influence"] in {0.0, 1.0}
+    assert certificate_payload["llm_mode"] == "SHADOW"
+    assert certificate_payload["auto_execution"] is False
+    assert certificate_payload["manual_execution_only"] is True
 
 
 def test_blocked_data_certificate_preserves_real_certification_evidence(
@@ -751,5 +762,5 @@ def test_no_action_requires_complete_certified_pipeline(
     assert result.actionable, tuple(
         (item.name, item.status.value, item.message) for item in result.stages
     )
-    assert result.run_classification == "CERTIFIED_NO_ACTION"
-    assert "CERTIFIED NO-ACTION RUN" in capture_daily_quant_result(result)
+    assert result.run_classification == "VALID_ANALYSIS_ACTIONABLE_CERTIFIED"
+    assert "CERTIFIED ACTIONABLE ANALYSIS" in capture_daily_quant_result(result)

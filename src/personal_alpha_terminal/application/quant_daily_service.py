@@ -11,12 +11,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from personal_alpha_terminal.application.operational_readiness import (
-    OperationalApprovalIdentity,
     OperationalPolicy,
     OperationalPolicyDecision,
     OperationalPolicyStore,
     OperationalReadiness,
-    build_operational_identity,
+    resolve_current_operational_identity,
 )
 from personal_alpha_terminal.application.regime_link import (
     REGIME_UNAVAILABLE,
@@ -154,6 +153,10 @@ class TodayResult:
     operational_policy_decision: str = "BLOCK"
     operational_policy_effective: bool = False
     operational_policy_reason: str = "OPERATIONAL_POLICY_NOT_CONFIGURED"
+    operational_policy_hash: str = "NOT_CONFIGURED"
+    operational_policy_identity_hash: str = "NOT_CONFIGURED"
+    signal_authorization_class: str = "FAIL_BLOCKING"
+    signal_evidence_level: str = "DIAGNOSTIC_ONLY"
     operationally_allowed: bool = False
     operational_degraded_reason: str | None = None
     lifecycle: dict[str, object] | None = None
@@ -792,6 +795,12 @@ class ProductionDailyWorkflow:
             operational_policy_decision=operational_policy_decision,
             operational_policy_effective=research.operational_policy_effective,
             operational_policy_reason=research.operational_policy_reason,
+            operational_policy_hash=research.operational_policy_hash,
+            operational_policy_identity_hash=(
+                research.operational_policy_identity_hash
+            ),
+            signal_authorization_class=research.signal_authorization_class,
+            signal_evidence_level=research.signal_evidence_level,
             operationally_allowed=operationally_allowed,
             operational_degraded_reason=_operational_degraded_reason(
                 allowed=operational,
@@ -802,18 +811,16 @@ class ProductionDailyWorkflow:
         )
 
     def _operational_policy(self, decision_time: datetime) -> OperationalPolicy | None:
-        policy = self.operational_store.load()
-        if policy is None:
-            return None
-        allowed, _reason = policy.allows(
-            self._operational_identity(),
-            "NOT_CERTIFIABLE",
+        status = self.operational_store.status(
+            resolve_current_operational_identity(
+                self.effective_config,
+                self.assembler.strategy,
+                decision_time=decision_time,
+            ),
+            research_state="NOT_CERTIFIABLE",
             now=decision_time,
         )
-        return policy if allowed else None
-
-    def _operational_identity(self) -> OperationalApprovalIdentity:
-        return build_operational_identity(self.effective_config, self.assembler.strategy)
+        return status.policy if status.effective else None
 
     def _persist_blocked(
         self,
@@ -1103,6 +1110,26 @@ class ProductionDailyWorkflow:
                 assembled.operational_policy_reason
                 if assembled is not None
                 else "OPERATIONAL_POLICY_NOT_CONFIGURED"
+            ),
+            operational_policy_hash=(
+                assembled.operational_policy_hash
+                if assembled is not None
+                else "NOT_CONFIGURED"
+            ),
+            operational_policy_identity_hash=(
+                assembled.operational_policy_identity_hash
+                if assembled is not None
+                else "NOT_CONFIGURED"
+            ),
+            signal_authorization_class=(
+                assembled.signal_authorization_class
+                if assembled is not None
+                else "FAIL_BLOCKING"
+            ),
+            signal_evidence_level=(
+                assembled.signal_evidence_level
+                if assembled is not None
+                else "DIAGNOSTIC_ONLY"
             ),
             operationally_allowed=bool(
                 assembled is not None

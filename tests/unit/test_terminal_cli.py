@@ -134,3 +134,39 @@ def test_research_data_cli_exposes_isolated_lifecycle_commands() -> None:
         assert args.research_data_action == action
     imported = parser.parse_args(["research-data", "import", "fixture.csv"])
     assert imported.path == Path("fixture.csv")
+
+
+def test_operational_policy_cli_exposes_status_and_create() -> None:
+    parser = terminal_cli.build_parser()
+    status = parser.parse_args(["operational-policy", "status"])
+    create = parser.parse_args(
+        [
+            "operational-policy",
+            "create",
+            "--decision",
+            "ALLOW_PROVISIONAL",
+        ]
+    )
+    assert status.operational_policy_action == "status"
+    assert create.operational_policy_action == "create"
+    assert create.decision == "ALLOW_PROVISIONAL"
+
+
+def test_operational_policy_create_refuses_noninteractive_execution(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config = _config(tmp_path)
+    policy_path = tmp_path / "operational" / "operational_policy.json"
+    object.__setattr__(config, "operational_policy_path", policy_path)
+    monkeypatch.setattr(terminal_cli, "load_config", lambda _path: config)
+    monkeypatch.setenv("PAT_NONINTERACTIVE", "1")
+    args = terminal_cli.build_parser().parse_args(
+        [
+            "operational-policy",
+            "create",
+            "--decision",
+            "ALLOW_PROVISIONAL",
+        ]
+    )
+    assert terminal_cli._operational_policy_command(args) == 3
+    assert not policy_path.exists()

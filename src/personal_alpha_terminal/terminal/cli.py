@@ -131,8 +131,8 @@ def _operational_policy_command(args: argparse.Namespace) -> int:
         DEFAULT_ALLOWED_RESEARCH_STATES,
         OperationalPolicyDecision,
         OperationalPolicyStore,
-        build_operational_identity,
         issue_operational_policy,
+        resolve_current_operational_identity,
     )
     from personal_alpha_terminal.quant_engine.strategies.us_adaptive_alpha_core import (
         USAdaptiveAlphaCoreV1,
@@ -140,40 +140,93 @@ def _operational_policy_command(args: argparse.Namespace) -> int:
 
     config = load_config(args.config)
     store = OperationalPolicyStore(config.operational_policy_path)
-    if args.operational_policy_action == "show":
-        policy = store.load()
-        if policy is None:
-            console.print(
-                Panel(
-                    "Operational Policy: NOT_CONFIGURED (default BLOCK)",
-                    title="OPERATIONAL POLICY",
-                    border_style="yellow",
-                )
-            )
-            return 0
+    now = datetime.now(UTC)
+    strategy = USAdaptiveAlphaCoreV1(config.strategy)
+    identity = resolve_current_operational_identity(
+        config,
+        strategy,
+        decision_time=now,
+    )
+    if args.operational_policy_action in {"status", "show"}:
+        status = store.status(
+            identity,
+            research_state="NOT_CERTIFIABLE",
+            now=now,
+        )
+        document = status.public_document()
         console.print(
             Panel(
                 json.dumps(
-                    policy.document(),
+                    document,
                     ensure_ascii=False,
                     indent=2,
                     sort_keys=True,
                 ),
-                title=f"OPERATIONAL POLICY / {policy.policy_id}",
-                border_style="green",
+                title="OPERATIONAL POLICY STATUS",
+                border_style="green" if status.effective else "yellow",
             )
         )
+        report = {
+            "report": "CURRENT_OPERATIONAL_IDENTITY_REPORT",
+            "generated_at": now.isoformat(),
+            "current_identity": identity.document(),
+            **document,
+        }
+        report_path = (
+            config.operational_policy_path.parent
+            / "CURRENT_OPERATIONAL_IDENTITY_REPORT.json"
+        )
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = report_path.with_suffix(".json.tmp")
+        temporary.write_text(
+            json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        temporary.replace(report_path)
+        console.print(f"Identity report: {report_path.resolve()}")
         return 0
     decision = OperationalPolicyDecision(args.decision.upper())
-    strategy = USAdaptiveAlphaCoreV1(config.strategy)
-    identity = build_operational_identity(config, strategy)
-    expires_at = None
+    created_at = now
+    expires_at = created_at + timedelta(days=7)
     if args.expires_at:
         expires_at = datetime.combine(
             date.fromisoformat(args.expires_at),
             datetime.min.time(),
             tzinfo=UTC,
         )
+    summary = {
+        "Decision": decision.value,
+        "Identity Schema": identity.schema_version,
+        "Current Identity Hash": identity.identity_hash,
+        "Strategy": f"{identity.strategy_name}:{identity.strategy_version}",
+        "Probability Artifact Hash": identity.probability_artifact_hash,
+        "Probability Production Influence": identity.probability_production_influence,
+        "LLM Influence Identity": identity.llm_influence_identity,
+        "Expires At": expires_at.isoformat(),
+        "Research Certification Changed": False,
+        "Automatic Execution": False,
+    }
+    console.print(
+        Panel(
+            json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True),
+            title="OPERATIONAL POLICY CREATE / CONFIRM CURRENT IDENTITY",
+            border_style="yellow",
+        )
+    )
+    confirmation = f"CREATE {decision.value} {identity.identity_hash}"
+    if (
+        not sys.stdin.isatty()
+        or os.environ.get("PAT_NONINTERACTIVE") == "1"
+    ):
+        console.print(
+            "Interactive confirmation required. Run exactly:\n"
+            f"python main.py operational-policy create --decision {decision.value}"
+        )
+        return 3
+    entered = console.input(f"Type exactly to confirm:\n{confirmation}\n> ").strip()
+    if entered != confirmation:
+        console.print("Confirmation did not match; no policy was created.")
+        return 3
     policy = issue_operational_policy(
         identity=identity,
         decision=decision,
@@ -182,12 +235,12 @@ def _operational_policy_command(args: argparse.Namespace) -> int:
             if decision is OperationalPolicyDecision.ALLOW_PROVISIONAL
             else ()
         ),
-        issued_by="USER:cli:operational-policy:set",
+        issued_by="USER:cli:operational-policy:create",
         reason=args.reason,
-        created_at=datetime.now(UTC),
+        created_at=created_at,
         expires_at=expires_at,
     )
-    store.save(policy, force=args.force)
+    store.save(policy, force=True)
     console.print(
         Panel(
             json.dumps(
@@ -1175,25 +1228,42 @@ def build_parser() -> argparse.ArgumentParser:
     llm_actions.add_parser("test", help="Run one minimal structured DeepSeek API call")
     operational_policy = subparsers.add_parser(
         "operational-policy",
-        help="Show or explicitly set the persistent operational policy",
+        help="Inspect or explicitly create the persistent operational policy",
     )
     operational_policy_actions = operational_policy.add_subparsers(
         dest="operational_policy_action",
         required=True,
     )
-    operational_policy_actions.add_parser("show", help="Show the active policy (default BLOCK)")
+    operational_policy_actions.add_parser(
+        "status",
+        help="Show sanitized current/stored identity status and exact mismatch fields",
+    )
+    operational_policy_actions.add_parser(
+        "show",
+        help="Compatibility alias for status",
+    )
+    operational_policy_create = operational_policy_actions.add_parser(
+        "create",
+        help="Explicitly create and activate an immutable finite operational policy",
+    )
     operational_policy_set = operational_policy_actions.add_parser(
         "set",
-        help="Explicitly issue or replace the operational policy",
+        help="Deprecated compatibility alias for create",
     )
-    operational_policy_set.add_argument(
+    for policy_parser in (operational_policy_create, operational_policy_set):
+        policy_parser.add_argument(
         "--decision",
         choices=("ALLOW_PROVISIONAL", "BLOCK"),
         required=True,
-    )
-    operational_policy_set.add_argument("--reason", required=True)
-    operational_policy_set.add_argument("--expires-at", default=None)
-    operational_policy_set.add_argument("--force", action="store_true")
+        )
+        policy_parser.add_argument(
+            "--reason",
+            default=(
+                "Explicit temporary operational advisory authorization; "
+                "research certification remains unchanged."
+            ),
+        )
+        policy_parser.add_argument("--expires-at", default=None)
     maintenance = subparsers.add_parser(
         "maintenance",
         help="Inspect and safely manage regenerable runtime evidence",

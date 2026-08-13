@@ -16,7 +16,7 @@ from personal_alpha_terminal.application.operational_readiness import (
     OperationalPolicy,
     OperationalPolicyDecision,
     OperationalPolicyStore,
-    build_operational_identity,
+    resolve_current_operational_identity,
 )
 from personal_alpha_terminal.core.effective_config import EffectiveRuntimeConfig
 from personal_alpha_terminal.data.us_market.broad_universe import (
@@ -113,6 +113,10 @@ class AssembledDailyInput:
     operational_policy_decision: str = "BLOCK"
     operational_policy_effective: bool = False
     operational_policy_reason: str = "OPERATIONAL_POLICY_NOT_CONFIGURED"
+    operational_policy_hash: str = "NOT_CONFIGURED"
+    operational_policy_identity_hash: str = "NOT_CONFIGURED"
+    signal_authorization_class: str = "FAIL_BLOCKING"
+    signal_evidence_level: str = "DIAGNOSTIC_ONLY"
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,6 +156,10 @@ class AssembledResearchInput:
     operational_policy_decision: str = "BLOCK"
     operational_policy_effective: bool = False
     operational_policy_reason: str = "OPERATIONAL_POLICY_NOT_CONFIGURED"
+    operational_policy_hash: str = "NOT_CONFIGURED"
+    operational_policy_identity_hash: str = "NOT_CONFIGURED"
+    signal_authorization_class: str = "FAIL_BLOCKING"
+    signal_evidence_level: str = "DIAGNOSTIC_ONLY"
 
 
 def _funnel_counts(eligibility: BroadUniverseEligibility) -> dict[str, int]:
@@ -315,14 +323,14 @@ class ProductionDailyQuantInputAssembler:
         operational_policy = None
         operational_policy_reason = "OPERATIONAL_POLICY_NOT_CONFIGURED"
         if broad_universe_production_eligible and approval is None:
-            policy = self.operational_store.load()
-            if policy is not None:
-                allowed, operational_policy_reason = policy.allows(
-                    self._operational_identity(),
-                    "NOT_CERTIFIABLE",
-                    now=decision_time,
-                )
-                operational_policy = policy if allowed else None
+            policy_status = self.operational_store.status(
+                self._operational_identity_at(decision_time),
+                research_state="NOT_CERTIFIABLE",
+                now=decision_time,
+            )
+            policy = policy_status.policy
+            operational_policy_reason = policy_status.reason
+            operational_policy = policy if policy_status.effective else None
         approval_data_version = (
             approval.data_version if approval is not None else 'NOT_APPROVED'
         )
@@ -580,21 +588,48 @@ class ProductionDailyQuantInputAssembler:
             ),
             operational_policy is not None,
             operational_policy_reason,
+            policy.artifact_hash if policy is not None else "NOT_CONFIGURED",
+            (
+                policy.identity.identity_hash
+                if policy is not None
+                else "NOT_CONFIGURED"
+            ),
+            (
+                "PASS_PRODUCTION"
+                if approval is not None
+                else (
+                    "PASS_PROVISIONAL"
+                    if operational_policy is not None
+                    else "FAIL_BLOCKING"
+                )
+            ),
+            (
+                "FULL_RESEARCH_CERTIFIED"
+                if approval is not None
+                else (
+                    "PROVISIONAL_OPERATIONAL_ADVISORY"
+                    if operational_policy is not None
+                    else "DIAGNOSTIC_ONLY"
+                )
+            ),
         )
 
     def _operational_policy(self, decision_time: datetime) -> OperationalPolicy | None:
-        policy = self.operational_store.load()
-        if policy is None:
-            return None
-        allowed, _reason = policy.allows(
-            self._operational_identity(),
-            "NOT_CERTIFIABLE",
+        status = self.operational_store.status(
+            self._operational_identity_at(decision_time),
+            research_state="NOT_CERTIFIABLE",
             now=decision_time,
         )
-        return policy if allowed else None
+        return status.policy if status.effective else None
 
-    def _operational_identity(self) -> OperationalApprovalIdentity:
-        return build_operational_identity(self.effective_config, self.strategy)
+    def _operational_identity_at(
+        self, decision_time: datetime
+    ) -> OperationalApprovalIdentity:
+        return resolve_current_operational_identity(
+            self.effective_config,
+            self.strategy,
+            decision_time=decision_time,
+        )
 
     def complete_with_portfolio(
         self,
@@ -719,6 +754,10 @@ class ProductionDailyQuantInputAssembler:
             research.operational_policy_decision,
             research.operational_policy_effective,
             research.operational_policy_reason,
+            research.operational_policy_hash,
+            research.operational_policy_identity_hash,
+            research.signal_authorization_class,
+            research.signal_evidence_level,
         )
 
     def _select_alpha_universe(
