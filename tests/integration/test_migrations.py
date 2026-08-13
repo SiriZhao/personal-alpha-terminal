@@ -176,12 +176,12 @@ def test_initial_migration_builds_versioned_schema() -> None:
     assert "ix_portfolio_positions_stock_id" in portfolio_position_indexes
     assert "ix_market_graph_edges_source_stock_id" in graph_edge_indexes
     assert "ix_market_graph_edges_target_stock_id" in graph_edge_indexes
-    assert revision == "e5f6a7b8c9d0"
+    assert revision == "f4c1b3a9d7e2"
     assert {"source", "schema_version"} <= portfolio_columns
     assert not any(table.startswith("paper_") for table in tables)
     assert not health.ready
     assert health.dialect == "sqlite"
-    assert health.current_revision == "e5f6a7b8c9d0"
+    assert health.current_revision == "f4c1b3a9d7e2"
 
 
 def test_production_index_migration_round_trip() -> None:
@@ -218,5 +218,5 @@ def test_production_index_migration_round_trip() -> None:
 
     assert downgraded_revision == "e19f7b3c4a62"
     assert "ix_market_graph_edges_source_stock_id" not in downgraded_indexes
-    assert upgraded_revision == "e5f6a7b8c9d0"
+    assert upgraded_revision == "f4c1b3a9d7e2"
     assert "ix_market_graph_edges_source_stock_id" in upgraded_indexes

@@ -148,6 +148,7 @@ class CikSecurityMapping:
     mapping_source_type: str
     source_identity: str
     available_at: datetime
+    source_version: str | None = None
 
     def __post_init__(self) -> None:
         if self.cik <= 0:
@@ -425,6 +426,11 @@ def build_raw_information(
         title=f"{record.company_name} {record.form_type} {record.accession_number}",
         body=raw_body,
         issuer_id=str(record.cik),
+        issuer_name=record.company_name,
+        issuer_resolution_status="ISSUER_RESOLVED",
+        security_mapping_status="SECURITY_MAPPED" if mapping else "SECURITY_MAPPING_MISSING",
+        security_mapping_source=mapping.source_identity if mapping else None,
+        security_mapping_source_version=mapping.source_version if mapping else None,
         permanent_security_id=mapping.permanent_security_id if mapping else None,
         ticker_as_of=mapping.ticker_as_of if mapping else None,
         amended_document_id=amended_document_id,
@@ -481,6 +487,7 @@ def acquire_company_corpus(
     cik: int,
     mapping: CikSecurityMapping | None,
     config: SecEdgarAcquisitionConfig,
+    mapping_resolver: Callable[[EdgarFilingRecord], CikSecurityMapping | None] | None = None,
     client: SecEdgarClient,
     source: TextCorpusSource,
     output: Path,
@@ -512,6 +519,7 @@ def acquire_company_corpus(
 
     for record in records:
         requested += 1
+        record_mapping = mapping_resolver(record) if mapping_resolver is not None else mapping
         raw_id = f"sec-{record.cik}-{record.accession_number_no_dashes}"
         if raw_id in existing_raw_ids:
             continue
@@ -524,7 +532,7 @@ def acquire_company_corpus(
             raw = build_raw_information(
                 record,
                 raw_body,
-                mapping=mapping,
+                mapping=record_mapping,
                 ingested_at=retrieved_at,
             )
         else:
@@ -536,7 +544,7 @@ def acquire_company_corpus(
             raw = build_raw_information(
                 record,
                 raw_body,
-                mapping=mapping,
+                mapping=record_mapping,
                 ingested_at=retrieved_at,
             )
             _persist_filing_archive(

@@ -92,6 +92,11 @@ class RawInformation(StrictModel):
     title: str
     body: str
     issuer_id: str | None = None
+    issuer_name: str | None = None
+    issuer_resolution_status: str | None = None
+    security_mapping_status: str | None = None
+    security_mapping_source: str | None = None
+    security_mapping_source_version: str | None = None
     permanent_security_id: str | None = None
     ticker_as_of: str | None = None
     amended_document_id: str | None = None

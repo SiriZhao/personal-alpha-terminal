@@ -158,7 +158,13 @@ class Round13SecExtractor:
                     event_id=event_id,
                     raw_id=raw.raw_id,
                     issuer_id=item.issuer_id,
-                    ticker_asof=item.ticker_asof,
+                    ticker_asof=raw.ticker_as_of if raw.permanent_security_id else None,
+                    claimed_ticker_asof=item.ticker_asof,
+                    security_mapping_status=(
+                        "SECURITY_MAPPED"
+                        if raw.permanent_security_id
+                        else "BLOCKED_SECURITY_MAPPING"
+                    ),
                     event_type=item.event_type.value,
                     direction=item.direction.value,
                     magnitude=item.magnitude,

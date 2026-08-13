@@ -35,6 +35,15 @@ class IntelligenceRawInformation(TimestampMixin, Base):
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     data_cutoff: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    issuer_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    issuer_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    permanent_security_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    ticker_as_of: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    document_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    issuer_resolution_status: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    security_mapping_status: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    security_mapping_source: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    security_mapping_source_version: Mapped[str | None] = mapped_column(String(128), nullable=True)
     payload: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
 
 

@@ -93,6 +93,15 @@ def _ai_intelligence(result: DailyQuantResult, console: Console) -> None:
             _t("LLM 连接", "Connectivity"),
             str(metadata.get("connectivity", "NOT_TESTED")),
         ),
+        (_t("SEC 原文", "Raw SEC documents"), str(metadata.get("raw_documents", 0))),
+        (
+            _t("发行人已解析", "Issuer resolved documents"),
+            str(metadata.get("issuer_resolved_documents", 0)),
+        ),
+        (
+            _t("安全已映射", "Security mapped documents"),
+            str(metadata.get("security_mapped_documents", 0)),
+        ),
         (_t("新增文档", "New documents"), str(metadata.get("new_documents", 0))),
         (
             _t("PIT 合格文档", "PIT-eligible documents"),

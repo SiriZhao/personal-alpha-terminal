@@ -404,6 +404,16 @@ class DailyQuantOrchestrator:
                     .select_from(IntelligenceRawInformation)
                     .where(IntelligenceRawInformation.observed_at <= as_of)
                 ) or 0
+                issuer_resolved_document_count = session.scalar(
+                    select(func.count())
+                    .select_from(IntelligenceRawInformation)
+                    .where(IntelligenceRawInformation.issuer_id.is_not(None))
+                ) or 0
+                security_mapped_document_count = session.scalar(
+                    select(func.count())
+                    .select_from(IntelligenceRawInformation)
+                    .where(IntelligenceRawInformation.permanent_security_id.is_not(None))
+                ) or 0
                 latest_event_time = max((item.observed_at for item in events), default=None)
                 cache_entries = session.scalar(
                     select(func.count()).select_from(IntelligenceExtractionCache)
@@ -463,10 +473,15 @@ class DailyQuantOrchestrator:
                     "provider": provider,
                     "model": model,
                     "connectivity": connectivity,
-                    "processed_documents": raw_count,
+                    "raw_documents": raw_count,
+                    "processed_documents": int(
+                        str(latest_round13.get("processed_documents", 0))
+                    ),
                     "detected_events": event_count,
                     "new_documents": int(str(latest_round13.get("processed_documents", 0))),
                     "pit_eligible_documents": pit_document_count,
+                    "issuer_resolved_documents": issuer_resolved_document_count,
+                    "security_mapped_documents": security_mapped_document_count,
                     "llm_calls": int(str(latest_round13.get("llm_calls", 0))),
                     "cache_hits": int(str(latest_round13.get("llm_cache_hits", 0))),
                     "accepted_events": int(str(latest_round13.get("events_accepted", 0))),

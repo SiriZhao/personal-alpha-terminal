@@ -56,6 +56,64 @@ class SecurityIdentifierHistory(Base):
     ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class IssuerSecurityIdentity(TimestampMixin, Base):
+    """Canonical PIT CIK-to-issuer-to-security mapping.
+
+    This is an identity extension of ``security_master``, not a second master.
+    A row may intentionally have a resolved issuer with a null security mapping
+    until exact PIT evidence exists.
+    """
+
+    __tablename__ = "issuer_security_identity_history"
+    __table_args__ = (
+        CheckConstraint(
+            "effective_to IS NULL OR effective_from <= effective_to",
+            name="valid_issuer_security_period",
+        ),
+        CheckConstraint(
+            "permanent_security_id IS NULL OR ticker_as_of IS NOT NULL",
+            name="issuer_security_mapping_requires_ticker",
+        ),
+        UniqueConstraint(
+            "cik",
+            "evidence_identifier",
+            "ticker_as_of",
+            "effective_from",
+            "source",
+            "source_version",
+            name="uq_issuer_security_identity_vintage",
+        ),
+        Index(
+            "ix_issuer_security_identity_pit",
+            "cik",
+            "effective_from",
+            "effective_to",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True)
+    cik: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"), nullable=False, index=True
+    )
+    issuer_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    issuer_name: Mapped[str] = mapped_column(String(256), nullable=False)
+    stock_id: Mapped[int | None] = mapped_column(
+        ForeignKey("security_master.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    permanent_security_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    ticker_as_of: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    effective_from: Mapped[date] = mapped_column(Date, nullable=False)
+    effective_to: Mapped[date | None] = mapped_column(Date, nullable=True)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    mapping_source_type: Mapped[str] = mapped_column(String(48), nullable=False)
+    source: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_version: Mapped[str] = mapped_column(String(128), nullable=False)
+    provider: Mapped[str] = mapped_column(String(128), nullable=False)
+    evidence_identifier: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    evidence_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class FundamentalVintage(Base):
     __tablename__ = "fundamental_vintages"
     __table_args__ = (

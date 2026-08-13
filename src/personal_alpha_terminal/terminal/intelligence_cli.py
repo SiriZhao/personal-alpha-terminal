@@ -21,6 +21,12 @@ from personal_alpha_terminal.core.config import Settings
 from personal_alpha_terminal.core.effective_config import EffectiveRuntimeConfig
 from personal_alpha_terminal.data.database import get_session_factory, session_scope
 from personal_alpha_terminal.data.migrations import upgrade_database
+from personal_alpha_terminal.intelligence.issuer_identity import (
+    IssuerIdentityResolver,
+    extract_issuer_identity_candidates,
+    import_issuer_security_mappings,
+    remap_landing_zone,
+)
 from personal_alpha_terminal.intelligence.llm_runtime import (
     DEFAULT_LLM_RUNTIME_STATUS_PATH,
     llm_runtime_status,
@@ -47,6 +53,7 @@ from personal_alpha_terminal.intelligence.schemas import (
 )
 from personal_alpha_terminal.intelligence.sec_edgar_acquisition import (
     CikSecurityMapping,
+    EdgarFilingRecord,
     SecEdgarAcquisitionConfig,
     SecEdgarClient,
     SecEdgarRateLimiter,
@@ -88,6 +95,8 @@ def intelligence_command(args: Namespace, config: EffectiveRuntimeConfig) -> int
         return _inspect(root, str(args.ticker).upper())
     if action == "audit":
         return _audit(root)
+    if action == "identity":
+        return _identity(args, root, config)
     raise ValueError(f"unsupported intelligence action: {action}")
 
 
@@ -100,7 +109,11 @@ def _acquire(args: Namespace, root: Path, *, backfill: bool) -> int:
     end = _date_arg(getattr(args, "end", None)) or datetime.now(UTC).date()
     default_days = 365 * 3 if backfill else 14
     start = _date_arg(getattr(args, "start", None)) or end - timedelta(days=default_days)
-    mapping = _mapping_for_cik(Path(args.mapping), cik)
+    mapping_override = (
+        _mapping_for_cik(Path(args.mapping), cik)
+        if getattr(args, "mapping", None) is not None
+        else None
+    )
     acquisition_id = str(getattr(args, "acquisition_id", None) or f"cik-{cik}")
     output = root / "landing" / acquisition_id
     source = TextCorpusSource(
@@ -116,30 +129,54 @@ def _acquire(args: Namespace, root: Path, *, backfill: bool) -> int:
         coverage_start=start,
         coverage_end=end,
     )
+    upgrade_database()
     try:
-        report = acquire_company_corpus(
-            cik=cik,
-            mapping=mapping,
-            config=SecEdgarAcquisitionConfig(user_agent=user_agent),
-            client=SecEdgarClient(
-                SecEdgarAcquisitionConfig(user_agent=user_agent),
-                rate_limiter=SecEdgarRateLimiter(max_requests_per_second=1.0),
-            ),
-            source=source,
-            output=output,
-            acquisition_id=acquisition_id,
-            required_start=start,
-            required_end=end,
-            max_documents=int(getattr(args, "max_documents", 20)),
-            provider_version=PROVIDER_VERSION,
-        )
+        with session_scope(get_session_factory()) as session:
+            resolver = IssuerIdentityResolver(session)
+
+            def resolve_mapping(record: EdgarFilingRecord) -> CikSecurityMapping | None:
+                if mapping_override is not None:
+                    return mapping_override
+                if record.acceptance_datetime is None:
+                    return None
+                return resolver.security_mapping_for(cik, record.acceptance_datetime)
+
+            report = acquire_company_corpus(
+                cik=cik,
+                mapping=mapping_override,
+                mapping_resolver=resolve_mapping,
+                config=SecEdgarAcquisitionConfig(user_agent=user_agent),
+                client=SecEdgarClient(
+                    SecEdgarAcquisitionConfig(user_agent=user_agent),
+                    rate_limiter=SecEdgarRateLimiter(max_requests_per_second=1.0),
+                ),
+                source=source,
+                output=output,
+                acquisition_id=acquisition_id,
+                required_start=start,
+                required_end=end,
+                max_documents=int(getattr(args, "max_documents", 20)),
+                provider_version=PROVIDER_VERSION,
+            )
+            repository = IntelligenceRepository(session)
+            for document in _load_documents(root):
+                repository.upsert_raw(document)
+            session.flush()
     except Exception as error:
         console.print(f"BLOCKED_EXTERNAL_SEC_DATA: {type(error).__name__}: {error}")
         return 2
     console.print(json.dumps(report.document(), ensure_ascii=False, indent=2, sort_keys=True))
-    if mapping is None:
+    mapped_documents = sum(
+        1 for document in _load_documents(root) if document.permanent_security_id
+    )
+    if mapping_override is None and mapped_documents == 0:
         console.print(
             "RESEARCH_LIMITED_SURVIVORSHIP: issuer-level corpus; PIT ticker mapping unavailable."
+        )
+    elif mapped_documents:
+        console.print(
+            "RESEARCH_PIT_IDENTITY: canonical issuer/security mapping applied "
+            f"to {mapped_documents} documents."
         )
     return 0 if report.acquired_document_count else 3
 
@@ -152,7 +189,14 @@ def _process(args: Namespace, root: Path, config: EffectiveRuntimeConfig) -> int
     limit = int(getattr(args, "max_documents", 10))
     cutoff = _datetime_arg(getattr(args, "cutoff", None)) or datetime.now(UTC)
     eligible = tuple(
-        item for item in documents if item.available_at is not None and item.available_at <= cutoff
+        sorted(
+            (
+                item
+                for item in documents
+                if item.available_at is not None and item.available_at <= cutoff
+            ),
+            key=lambda item: (item.permanent_security_id is None, item.available_at),
+        )
     )[:limit]
     if not eligible:
         console.print("NO_PIT_ELIGIBLE_DOCUMENTS_AT_CUTOFF")
@@ -179,13 +223,14 @@ def _process(args: Namespace, root: Path, config: EffectiveRuntimeConfig) -> int
         results: list[Round13ExtractionResult] = []
         events: list[AcceptedSecEvent] = []
         for raw in eligible:
-            repository.add_raw(raw)
+            repository.upsert_raw(raw)
             result = extractor.extract(raw)
             results.append(result)
             events.extend(result.accepted)
         raw_by_id = {item.raw_id: item for item in eligible}
         for event in events:
-            repository.upsert_event(_to_unified_event(event, raw_by_id[event.raw_id]))
+            if not repository.event_exists(event.event_id):
+                repository.upsert_event(_to_unified_event(event, raw_by_id[event.raw_id]))
         features = build_shadow_features(tuple(events), as_of=cutoff)
         _persist_shadow_features(session, features)
         payload: dict[str, Any] = {
@@ -194,11 +239,15 @@ def _process(args: Namespace, root: Path, config: EffectiveRuntimeConfig) -> int
             else "INCREMENTAL",
             "decision_cutoff": cutoff.isoformat(),
             "processed_documents": len(eligible),
+            "processed_raw_ids": [item.raw_id for item in eligible],
             "structured_events": sum(item.structured_events for item in results),
             "llm_calls": sum(item.llm_calls for item in results),
             "llm_cache_hits": sum(item.cache_hit for item in results),
             "events_accepted": len(events),
             "events_quarantined": sum(len(item.quarantine_reasons) for item in results),
+            "blocked_security_mapping_events": sum(
+                1 for item in events if item.security_mapping_status != "SECURITY_MAPPED"
+            ),
             "shadow_features_generated": len(features),
             "tokens_in": sum(item.prompt_tokens for item in results),
             "tokens_out": sum(item.completion_tokens for item in results),
@@ -273,18 +322,30 @@ def _status(root: Path, settings: Settings) -> int:
     pit = tuple(
         item for item in documents if item.accepted_at and item.available_at == item.accepted_at
     )
+    issuer_resolved = tuple(item for item in documents if item.issuer_id)
+    security_mapped = tuple(item for item in documents if item.permanent_security_id)
+    processable = tuple(item for item in pit if item.issuer_id)
     runtime = llm_runtime_status(settings, DEFAULT_LLM_RUNTIME_STATUS_PATH)
     payload = {
         "raw_documents": len(documents),
+        "landing_zone_raw_documents": len(documents),
+        "last_acquisition_documents": _latest_acquisition_documents(root),
         "pit_certified_documents": len(pit),
+        "issuer_resolved_documents": len(issuer_resolved),
+        "security_mapped_documents": len(security_mapped),
+        "processable_documents": len(processable),
         "processed_documents": _int(latest.get("processed_documents")),
         "events": _int(latest.get("events_accepted")),
         "accepted_events": _int(latest.get("events_accepted")),
         "quarantined_events": _int(latest.get("events_quarantined")),
+        "blocked_security_mapping_events": _int(
+            latest.get("blocked_security_mapping_events")
+        ),
         "shadow_features": _int(latest.get("shadow_features_generated")),
         "latest_available_at": max(
             (item.available_at for item in pit if item.available_at is not None), default=None
         ),
+        "mapping_status": "SECURITY_MAPPED" if security_mapped else "SECURITY_MAPPING_MISSING",
         "llm_credential": "PRESENT" if settings.deepseek_api_key else "MISSING",
         "llm_connectivity": runtime.connectivity,
         "provider": "deepseek",
@@ -327,19 +388,100 @@ def _audit(root: Path) -> int:
         reports.append(
             {"path": str(path.parent), "ok": verification.ok, "blockers": verification.blockers}
         )
+    documents = _load_documents(root)
     latest = _read_json(root / "processed" / "latest.json")
+    cutoff = _datetime_arg(latest.get("decision_cutoff"))
+    events = _records(latest.get("events"))
+    mapped_documents = tuple(item for item in documents if item.permanent_security_id)
+    all_raw_immutable = bool(reports) and all(item["ok"] for item in reports)
+    event_evidence_complete = bool(events) and all(
+        item.get("evidence_hash")
+        and item.get("source_span")
+        and item.get("response_hash")
+        and item.get("model_name")
+        and item.get("prompt_version")
+        for item in events
+    )
+    evidence_span_hashes_match = bool(events) and all(
+        sha256(str(item.get("source_span") or "").encode("utf-8")).hexdigest()
+        == str(item.get("evidence_hash") or "")
+        for item in events
+    )
+    future_leakage = True
+    if cutoff is not None:
+        processed_raw_ids = set(str(item) for item in _records(latest.get("processed_raw_ids")))
+        processed_documents = tuple(
+            item for item in documents if item.raw_id in processed_raw_ids
+        )
+        future_leakage = all(
+            item.available_at is not None and item.available_at <= cutoff
+            for item in processed_documents
+        ) and all(
+            _datetime_arg(item.get("available_at")) is not None
+            and (
+                _datetime_arg(item.get("available_at"))
+                or datetime.min.replace(tzinfo=UTC)
+            ) <= cutoff
+            for item in events
+        )
+    production_influence_none = str(latest.get("production_influence", "NONE")) in {
+        "0",
+        "0.0",
+        "NONE",
+    } and latest.get("auto_execution", False) is False
+    identity_source_complete = all(
+        item.security_mapping_source and item.security_mapping_source_version
+        for item in mapped_documents
+    )
     payload = {
         "landing_zones": reports,
-        "all_raw_immutable": bool(reports) and all(item["ok"] for item in reports),
-        "event_evidence_complete": all(
-            item.get("evidence_hash") and item.get("source_span")
-            for item in _records(latest.get("events"))
+        "all_raw_immutable": all_raw_immutable,
+        "raw_document_count": len(documents),
+        "pit_certified_document_count": sum(
+            1
+            for item in documents
+            if item.accepted_at is not None and item.available_at == item.accepted_at
         ),
+        "issuer_resolved_document_count": sum(1 for item in documents if item.issuer_id),
+        "security_mapped_document_count": len(mapped_documents),
+        "event_evidence_complete": event_evidence_complete,
+        "evidence_span_hashes_match": evidence_span_hashes_match,
+        "llm_response_lineage_complete": bool(events) and all(
+            item.get("response_hash") and item.get("model_name") and item.get("prompt_version")
+            for item in events
+        ),
+        "future_leakage": future_leakage,
+        "identity_source_complete": identity_source_complete,
         "production_influence": latest.get("production_influence", 0.0),
         "auto_execution": latest.get("auto_execution", False),
+        "production_influence_none": production_influence_none,
     }
     console.print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
-    return 0 if payload["all_raw_immutable"] and payload["event_evidence_complete"] else 3
+    passed = (
+        all_raw_immutable
+        and event_evidence_complete
+        and evidence_span_hashes_match
+        and future_leakage
+        and identity_source_complete
+        and production_influence_none
+    )
+    return 0 if passed else 3
+
+
+def _latest_acquisition_documents(root: Path) -> int:
+    reports: list[tuple[datetime, int]] = []
+    if not (root / "landing").exists():
+        return 0
+    for path in (root / "landing").glob("*/acquisition.json"):
+        try:
+            document = _read_json(path)
+            retrieved = datetime.fromisoformat(str(document.get("retrieved_at") or ""))
+            reports.append((retrieved, int(str(document.get("acquired_document_count") or 0))))
+        except (OSError, ValueError, TypeError):
+            continue
+    if not reports:
+        return 0
+    return max(reports, key=lambda item: item[0])[1]
 
 
 def _load_documents(root: Path) -> tuple[RawInformation, ...]:
@@ -348,8 +490,42 @@ def _load_documents(root: Path) -> tuple[RawInformation, ...]:
         for line in path.read_text(encoding="utf-8").splitlines():
             if line.strip():
                 item = RawInformation.model_validate_json(line)
-                documents[item.raw_id] = item
+                current = documents.get(item.raw_id)
+                if current is None or (
+                    current.permanent_security_id is None and item.permanent_security_id is not None
+                ):
+                    documents[item.raw_id] = item
     return tuple(sorted(documents.values(), key=lambda item: (item.available_at, item.raw_id)))
+
+
+def _identity(args: Namespace, root: Path, config: EffectiveRuntimeConfig) -> int:
+    action = str(getattr(args, "identity_action", ""))
+    if action != "import-filings":
+        console.print("IDENTITY_ACTION_REQUIRED: use `intelligence identity import-filings`.")
+        return 2
+    upgrade_database()
+    with session_scope(get_session_factory()) as session:
+        documents = _load_documents(root)
+        candidates = extract_issuer_identity_candidates(documents)
+        imported = import_issuer_security_mappings(session, candidates)
+        resolver = IssuerIdentityResolver(session)
+        remapped = remap_landing_zone(root, resolver)
+        repository = IntelligenceRepository(session)
+        for document in _load_documents(root):
+            repository.upsert_raw(document)
+        session.flush()
+        mapped_documents = sum(
+            1 for document in _load_documents(root) if document.permanent_security_id
+        )
+    payload = {
+        "identity_source": "sec-edgar-filing-identity-v1",
+        "candidate_count": len(candidates),
+        "imported_or_updated": imported,
+        "remapped_documents": remapped,
+        "mapped_documents": mapped_documents,
+    }
+    console.print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+    return 0 if imported or remapped else 3
 
 
 def _to_unified_event(event: AcceptedSecEvent, raw: RawInformation) -> UnifiedEvent:
@@ -414,6 +590,9 @@ def _to_unified_event(event: AcceptedSecEvent, raw: RawInformation) -> UnifiedEv
         affected_assets=(event.ticker_asof,) if event.ticker_asof else (),
         structured_features={
             "issuer_id": event.issuer_id,
+            "issuer_name": raw.issuer_name,
+            "claimed_ticker_asof": event.claimed_ticker_asof,
+            "security_mapping_status": event.security_mapping_status,
             "materiality": event.materiality,
             "source_section": event.source_section,
             "source_span": event.source_span,

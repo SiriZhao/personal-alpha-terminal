@@ -1329,7 +1329,7 @@ def build_parser() -> argparse.ArgumentParser:
             action, help=f"Run bounded SEC {action}"
         )
         acquisition.add_argument("--cik", type=int, required=True)
-        acquisition.add_argument("--mapping", type=Path, default=Path("config/cik-mapping.json"))
+        acquisition.add_argument("--mapping", type=Path, default=None)
         acquisition.add_argument("--start", default=None)
         acquisition.add_argument("--end", default=None)
         acquisition.add_argument("--max-documents", type=int, default=20)
@@ -1343,6 +1343,13 @@ def build_parser() -> argparse.ArgumentParser:
     inspect = intelligence_actions.add_parser("inspect", help="Inspect accepted ticker evidence")
     inspect.add_argument("--ticker", required=True)
     intelligence_actions.add_parser("audit", help="Verify immutable raw and evidence ledgers")
+    identity = intelligence_actions.add_parser(
+        "identity", help="Import or query canonical CIK/issuer identity evidence"
+    )
+    identity_actions = identity.add_subparsers(dest="identity_action", required=True)
+    identity_actions.add_parser(
+        "import-filings", help="Extract generic SEC filing identity evidence into the DB store"
+    )
     broad_universe = subparsers.add_parser(
         "broad-universe",
         help="Register, sync and report the broad tradable US equity universe",

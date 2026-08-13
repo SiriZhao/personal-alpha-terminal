@@ -7,22 +7,40 @@ Date: 2026-08-12
 Set a declared contact before running any SEC request:
 
 ```powershell
-$env:SEC_USER_AGENT = "Company Name admin@example.com"
+$env:SEC_EDGAR_USER_AGENT = "Company Name admin@example.com"
 ```
 
 Do not put a fake name or email into the repository. The value is read from the
 environment and is never written to logs, docs, fixtures, or git.
 
-## 2. CIK Mapping
+## 2. Canonical CIK Identity Store
 
-Create `var/research-data/cik-mapping.json` using:
+The normal workflow reads a canonical database store
+(`issuer_security_identity_history`), not a daily mapping file. Generic SEC
+filing identity evidence can be imported once from an immutable landing zone:
 
-`config/research/cik_manifest.example.json`
+```text
+python main.py intelligence identity import-filings
+```
 
-Set `source_identity` to the certified market research dataset content hash.
-Do not use a current ticker snapshot as historical CIK mapping.
+This extracts `dei:TradingSymbol` and Form 4 issuer/ticker evidence from real
+filings and links the ticker to the existing `security_master`. It does not
+hard-code any CIK-to-ticker pair and does not use a current ticker snapshot as a
+historical PIT mapping.
+
+`config/research/cik_manifest.example.json` remains an explicit research/import
+override. Normal acquisition should omit `--mapping` so the canonical resolver
+is used.
 
 ## 3. Acquisition
+
+The maintained terminal command is:
+
+```text
+python main.py intelligence acquire --cik 320193
+```
+
+The legacy script remains:
 
 ```text
 python scripts/run_sec_edgar_acquisition.py \

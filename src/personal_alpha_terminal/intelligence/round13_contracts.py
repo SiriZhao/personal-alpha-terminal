@@ -142,6 +142,8 @@ class AcceptedSecEvent:
     model_name: str
     response_hash: str
     prompt_version: str
+    claimed_ticker_asof: str | None = None
+    security_mapping_status: str = "SECURITY_MAPPED"
     evidence_status: str = EvidenceStatus.ACCEPTED
     production_influence: float = PRODUCTION_INFLUENCE
 
@@ -237,7 +239,7 @@ def build_shadow_features(
         raise ValueError("feature cutoff must be timezone-aware")
     grouped: dict[tuple[str, str | None], list[AcceptedSecEvent]] = {}
     for event in events:
-        if event.available_at <= as_of:
+        if event.available_at <= as_of and event.ticker_asof is not None:
             grouped.setdefault((event.issuer_id, event.ticker_asof), []).append(event)
     output: list[LLMShadowFeature] = []
     for (issuer, ticker), items in sorted(grouped.items()):

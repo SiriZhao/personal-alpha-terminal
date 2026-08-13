@@ -129,6 +129,7 @@ from personal_alpha_terminal.models.scenario import (
 from personal_alpha_terminal.models.us_quant import (
     BacktestManifestRecord,
     FundamentalVintage,
+    IssuerSecurityIdentity,
     ManualExecutionRecord,
     ManualRebalanceFillRecord,
     ManualRebalanceTicketRecord,
@@ -168,6 +169,7 @@ __all__ = [
     "Financial",
     "FundamentalVintage",
     "FinancialPerShareMetric",
+    "IssuerSecurityIdentity",
     "FxRate",
     "FactorBacktestPeriod",
     "FactorBacktestSummary",

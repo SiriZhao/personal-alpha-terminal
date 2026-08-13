@@ -44,6 +44,7 @@ EXPECTED_TABLES = {
     "intelligence_events",
     "intelligence_extraction_cache",
     "intelligence_features",
+    "issuer_security_identity_history",
     "intelligence_raw_information",
     "intelligence_research_results",
     "intelligence_hypotheses",

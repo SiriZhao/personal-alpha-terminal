@@ -86,25 +86,54 @@ class IntelligenceRepository:
         self.session = session
 
     def add_raw(self, raw: RawInformation) -> None:
-        exists = self.session.scalar(
-            select(IntelligenceRawInformation.id).where(
+        self.upsert_raw(raw)
+
+    def upsert_raw(self, raw: RawInformation) -> None:
+        record = self.session.scalar(
+            select(IntelligenceRawInformation).where(
                 IntelligenceRawInformation.raw_id == raw.raw_id
             )
         )
-        if exists is None:
+        payload = raw.model_dump(mode="json")
+        fields = {
+            "source_identifier": raw.source_identifier,
+            "source_hash": raw.source_hash or "",
+            "published_at": raw.published_at,
+            "observed_at": raw.observed_at,
+            "ingested_at": raw.ingested_at,
+            "data_cutoff": raw.data_cutoff,
+            "issuer_id": raw.issuer_id,
+            "issuer_name": raw.issuer_name,
+            "permanent_security_id": raw.permanent_security_id,
+            "ticker_as_of": raw.ticker_as_of,
+            "document_type": raw.document_type,
+            "issuer_resolution_status": raw.issuer_resolution_status,
+            "security_mapping_status": raw.security_mapping_status,
+            "security_mapping_source": raw.security_mapping_source,
+            "security_mapping_source_version": raw.security_mapping_source_version,
+            "payload": payload,
+        }
+        if record is None:
             self.session.add(
                 IntelligenceRawInformation(
                     raw_id=raw.raw_id,
                     source=raw.source,
-                    source_identifier=raw.source_identifier,
-                    source_hash=raw.source_hash or "",
-                    published_at=raw.published_at,
-                    observed_at=raw.observed_at,
-                    ingested_at=raw.ingested_at,
-                    data_cutoff=raw.data_cutoff,
-                    payload=raw.model_dump(mode="json"),
+                    **fields,
                 )
             )
+            return
+        if record.source_hash != raw.source_hash:
+            raise ValueError(f"raw_id collision with different source hash: {raw.raw_id}")
+        for field, value in fields.items():
+            setattr(record, field, value)
+
+    def event_exists(self, event_id: str) -> bool:
+        return (
+            self.session.scalar(
+                select(IntelligenceEvent.id).where(IntelligenceEvent.event_id == event_id)
+            )
+            is not None
+        )
 
     def upsert_event(self, event: UnifiedEvent) -> None:
         record = self.session.scalar(
