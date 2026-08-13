@@ -3,9 +3,9 @@
 Generated from `docs/CURRENT_STATUS.json` at `2026-08-09T15:49:00+08:00`.
 This file supersedes historical release/readiness claims under `docs/reports/`.
 
-- Version: `1.1.0`
+- Version: `1.2.0-rc.1`
 - Git commit: `c95b2b668f4365fe2d57f131b5732951342f3322`
-- Build ID: `pat-1.1.0-c95b2b668f43-20260809074254`
+- Build ID: `pat-1.2.0-rc.1-PENDING-20260814`
 - Evidence level: `FIXTURE_TESTED`
 - Operating mode: `SHADOW_ONLY`
 - Alembic head: `d4a5b6c7d8e9`

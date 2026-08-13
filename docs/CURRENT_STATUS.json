@@ -1,8 +1,8 @@
 {
   "schema_version": "current-status-v2",
-  "version": "1.1.0",
+  "version": "1.2.0-rc.1",
   "git_commit": "c95b2b668f4365fe2d57f131b5732951342f3322",
-  "build_id": "pat-1.1.0-c95b2b668f43-20260809074254",
+  "build_id": "pat-1.2.0-rc.1-PENDING-20260814",
   "generated_at": "2026-08-09T15:49:00+08:00",
   "evidence_level": "FIXTURE_TESTED",
   "operating_mode": "SHADOW_ONLY",
@@ -64,8 +64,8 @@
     "commit": "c95b2b668f4365fe2d57f131b5732951342f3322"
   },
   "release": {
-    "directory": "release/PersonalAlphaTerminal-v1.1.0-win64",
-    "archive": "release/PersonalAlphaTerminal-v1.1.0-win64.zip",
+    "directory": "release/PersonalAlphaTerminal-v1.2.0-rc.1-win64",
+    "archive": "release/PersonalAlphaTerminal-v1.2.0-rc.1-win64.zip",
     "zip_sha256": "1336c3cc449f55a212e67c8136499345f0801dea2b4feb66477243dba9faf3d7",
     "dependency_lock_hash": "bdda3a5f0e7f8ff51cad4812cb0c8884bbfc31cff5a396996998c07f8c273936",
     "manifest_file_count": 1975,

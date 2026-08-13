@@ -4,7 +4,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$Version = "1.1.0"
+$Version = "1.2.0-rc.1"
 $ReleaseRoot = Join-Path $ProjectRoot "release"
 $BuildRoot = Join-Path $ProjectRoot "build\terminal"
 $DistRoot = Join-Path $BuildRoot "dist"

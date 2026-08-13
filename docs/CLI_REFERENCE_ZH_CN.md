@@ -2,7 +2,7 @@
 
 > 本文档从 `src/personal_alpha_terminal/terminal/cli.py` 的
 > `build_parser()` 与 `main()` 逐条核对，只描述代码中真实存在的命令。
-> 命令名、参数、默认值与代码一致（基准：v1.1.0）。
+> 命令名、参数、默认值与代码一致（基准：v1.2.0-rc.1）。
 
 可执行入口：`PersonalAlphaTerminal.exe`（发布版）或
 `.\.venv\Scripts\python.exe main.py`（开发环境）。下文以 `pat` 代指。
