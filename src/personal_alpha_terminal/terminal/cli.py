@@ -1480,6 +1480,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     outcomes.add_argument("--dataset-id", default=None)
     outcomes.add_argument("--cutoff", default=None)
+    alpha_research = intelligence_actions.add_parser(
+        "alpha-research", help="Run locked-OOS LLM feature alpha research"
+    )
+    alpha_research.add_argument("--dataset-id", default=None)
+    alpha_research.add_argument("--evaluated-at", default=None)
     identity = intelligence_actions.add_parser(
         "identity", help="Import or query canonical CIK/issuer identity evidence"
     )

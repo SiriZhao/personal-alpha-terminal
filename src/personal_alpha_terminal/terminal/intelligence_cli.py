@@ -83,6 +83,11 @@ from personal_alpha_terminal.models.intelligence import (
     IntelligenceResearchResult,
 )
 from personal_alpha_terminal.models.market import Price, Stock
+from personal_alpha_terminal.quant_engine.round14_llm_alpha_research import (
+    build_round15_dataset,
+    run_round14_alpha_research,
+    write_immutable_json,
+)
 
 console = Console()
 ROOT = Path("var/intelligence/sec-edgar")
@@ -104,6 +109,8 @@ def intelligence_command(args: Namespace, config: EffectiveRuntimeConfig) -> int
         return _audit(root)
     if action == "outcomes":
         return _outcomes(args, root, config)
+    if action == "alpha-research":
+        return _alpha_research(args, root, config)
     if action == "identity":
         return _identity(args, root, config)
     raise ValueError(f"unsupported intelligence action: {action}")
@@ -691,6 +698,59 @@ def _persist_research_dataset(
     _write_immutable_json(root / "research" / "features" / f"{result_id}.json", dataset)
     _write_immutable_json(root / "research" / "outcomes" / f"{result_id}.json", outcome)
 
+
+def _alpha_research(args: Namespace, root: Path, config: EffectiveRuntimeConfig) -> int:
+    evaluated_at = _datetime_arg(getattr(args, "evaluated_at", None)) or datetime.now(UTC)
+    dataset_id = getattr(args, "dataset_id", None)
+    outcome_root = root / "research" / "outcomes"
+    if dataset_id:
+        outcome_path = outcome_root / f"{dataset_id}.json"
+        if not outcome_path.exists():
+            console.print("OUTCOME_DATASET_NOT_FOUND")
+            return 2
+    else:
+        candidates = sorted(
+            outcome_root.glob("*r14-*.json"),
+            key=lambda item: item.stat().st_mtime,
+            reverse=True,
+        )
+        if not candidates:
+            console.print("NO_ROUND14_OUTCOME_DATASET")
+            return 3
+        outcome_path = candidates[0]
+    outcome_document = _read_json(outcome_path)
+    feature_dataset_id = str(outcome_document.get("feature_dataset_id") or "")
+    feature_path = root / "research" / "features" / f"{feature_dataset_id}.json"
+    if not feature_path.exists():
+        console.print("FEATURE_DATASET_NOT_FOUND")
+        return 2
+    feature_document = _read_json(feature_path)
+    result = run_round14_alpha_research(
+        outcome_document,
+        feature_document,
+        evaluated_at=evaluated_at,
+    )
+    round15 = build_round15_dataset(outcome_document, feature_document)
+    round15_path = root / "research" / "round15" / f"{outcome_document.get('dataset_id')}.json"
+    write_immutable_json(round15_path, round15)
+    result_path = root / "research" / "round14-alpha" / f"{result.run_id}.json"
+    write_immutable_json(result_path, result.document())
+    summary = {
+        "run_id": result.run_id,
+        "verdict": result.verdict,
+        "status": result.status,
+        "blockers": list(result.blockers),
+        "observations": result.metrics.observations,
+        "feature_count": result.metrics.feature_count,
+        "issuer_count": result.metrics.issuer_count,
+        "ticker_count": result.metrics.ticker_count,
+        "hit_rate": result.metrics.hit_rate,
+        "round15_dataset": str(round15_path.resolve()),
+        "result_file": str(result_path.resolve()),
+        "production_influence": "NONE",
+    }
+    console.print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0
 
 def _outcomes(args: Namespace, root: Path, config: EffectiveRuntimeConfig) -> int:
     cutoff = _datetime_arg(getattr(args, "cutoff", None)) or datetime.now(UTC)
