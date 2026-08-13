@@ -5,12 +5,14 @@ from __future__ import annotations
 import json
 import os
 from argparse import Namespace
+from collections import defaultdict
 from dataclasses import asdict
 from datetime import UTC, date, datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
 from rich.console import Console
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -42,6 +44,10 @@ from personal_alpha_terminal.intelligence.round13_contracts import (
 from personal_alpha_terminal.intelligence.round13_extraction import (
     Round13ExtractionResult,
     Round13SecExtractor,
+)
+from personal_alpha_terminal.intelligence.round14_dataset import (
+    build_outcomes,
+    write_outcome_dataset,
 )
 from personal_alpha_terminal.intelligence.schemas import (
     BacktestSafety,
@@ -76,6 +82,7 @@ from personal_alpha_terminal.models.intelligence import (
     IntelligenceRawInformation,
     IntelligenceResearchResult,
 )
+from personal_alpha_terminal.models.market import Price, Stock
 
 console = Console()
 ROOT = Path("var/intelligence/sec-edgar")
@@ -95,6 +102,8 @@ def intelligence_command(args: Namespace, config: EffectiveRuntimeConfig) -> int
         return _inspect(root, str(args.ticker).upper())
     if action == "audit":
         return _audit(root)
+    if action == "outcomes":
+        return _outcomes(args, root, config)
     if action == "identity":
         return _identity(args, root, config)
     raise ValueError(f"unsupported intelligence action: {action}")
@@ -682,6 +691,100 @@ def _persist_research_dataset(
     _write_immutable_json(root / "research" / "features" / f"{result_id}.json", dataset)
     _write_immutable_json(root / "research" / "outcomes" / f"{result_id}.json", outcome)
 
+
+def _outcomes(args: Namespace, root: Path, config: EffectiveRuntimeConfig) -> int:
+    cutoff = _datetime_arg(getattr(args, "cutoff", None)) or datetime.now(UTC)
+    dataset_id = getattr(args, "dataset_id", None)
+    feature_root = root / "research" / "features"
+    if dataset_id:
+        feature_path = feature_root / f"{dataset_id}.json"
+    else:
+        candidates = sorted(
+            feature_root.glob("*.json"),
+            key=lambda item: item.stat().st_mtime,
+            reverse=True,
+        )
+        if not candidates:
+            console.print("NO_ROUND14_FEATURE_DATASET")
+            return 3
+        feature_path = candidates[0]
+    if not feature_path.exists():
+        console.print("FEATURE_DATASET_NOT_FOUND")
+        return 2
+    feature_document = _read_json(feature_path)
+    resolved_id = str(feature_document.get("dataset_id") or feature_path.stem)
+    outcome_id = f"{resolved_id}-r14-{cutoff.date().isoformat()}"
+    symbols = {str(config.benchmark)}
+    for row in _records(feature_document.get("features")):
+        ticker = row.get("ticker_asof")
+        if ticker:
+            symbols.add(str(ticker))
+    start = (cutoff - timedelta(days=730)).date()
+    end = (cutoff + timedelta(days=60)).date()
+    upgrade_database()
+    with session_scope(get_session_factory()) as session:
+        prices = _load_price_series(session, symbols, start=start, end=end)
+    try:
+        dataset = build_outcomes(
+            feature_document,
+            dataset_id=outcome_id,
+            prices_by_symbol=prices,
+            benchmark_symbol=config.benchmark,
+            cutoff=cutoff,
+        )
+    except ValueError as error:
+        console.print(f"ROUND14_OUTCOME_BLOCKED: {error}")
+        return 2
+    outcome_path = root / "research" / "outcomes" / f"{outcome_id}.json"
+    write_outcome_dataset(outcome_path, dataset)
+    ready = sum(1 for item in dataset.outcome_rows if item.status == "OUTCOME_READY")
+    pending = sum(1 for item in dataset.outcome_rows if item.status == "OUTCOME_PENDING")
+    summary = {
+        "dataset_id": outcome_id,
+        "feature_dataset_id": resolved_id,
+        "feature_file": str(feature_path.resolve()),
+        "outcome_file": str(outcome_path.resolve()),
+        "cutoff": cutoff.isoformat(),
+        "outcome_rows": len(dataset.outcome_rows),
+        "outcomes_ready": ready,
+        "outcomes_pending": pending,
+        "dataset_hash": dataset.dataset_hash,
+        "status": dataset.status,
+        "production_influence": dataset.production_influence,
+        "future_outcomes_read_during_build": False,
+    }
+    console.print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0 if ready else 3
+
+
+def _load_price_series(
+    session: Session, symbols: set[str], *, start: date, end: date
+) -> dict[str, pd.Series]:
+    rows = session.scalars(
+        select(Price)
+        .join(Stock, Price.stock_id == Stock.id)
+        .where(
+            Stock.symbol.in_(symbols),
+            Price.trade_date >= start,
+            Price.trade_date <= end,
+        )
+        .order_by(Price.stock_id, Price.trade_date)
+    ).all()
+    by_symbol: dict[str, dict[date, float]] = defaultdict(dict)
+    for row in rows:
+        symbol = row.stock.symbol if row.stock is not None else ""
+        if not symbol:
+            continue
+        value = row.adjusted_close if row.adjusted_close is not None else row.close
+        by_symbol[symbol][row.trade_date] = float(value)
+    output: dict[str, pd.Series] = {}
+    for symbol, values in by_symbol.items():
+        if not values:
+            continue
+        series = pd.Series(values)
+        series.index = pd.to_datetime(series.index)
+        output[symbol] = series.sort_index()
+    return output
 
 def _mapping_for_cik(path: Path, cik: int) -> CikSecurityMapping | None:
     if not path.exists():

@@ -1475,6 +1475,11 @@ def build_parser() -> argparse.ArgumentParser:
     inspect = intelligence_actions.add_parser("inspect", help="Inspect accepted ticker evidence")
     inspect.add_argument("--ticker", required=True)
     intelligence_actions.add_parser("audit", help="Verify immutable raw and evidence ledgers")
+    outcomes = intelligence_actions.add_parser(
+        "outcomes", help="Build PIT feature/outcome-separated research dataset"
+    )
+    outcomes.add_argument("--dataset-id", default=None)
+    outcomes.add_argument("--cutoff", default=None)
     identity = intelligence_actions.add_parser(
         "identity", help="Import or query canonical CIK/issuer identity evidence"
     )
