@@ -5,7 +5,7 @@ This file supersedes historical release/readiness claims under `docs/reports/`.
 
 - Version: `1.2.0-rc.1`
 - Git commit: `c95b2b668f4365fe2d57f131b5732951342f3322`
-- Build ID: `pat-1.2.0-rc.1-PENDING-20260814`
+- Build ID: `pat-1.2.0-rc.1-81a34b294d4a-20260813180525`
 - Evidence level: `FIXTURE_TESTED`
 - Operating mode: `SHADOW_ONLY`
 - Alembic head: `d4a5b6c7d8e9`

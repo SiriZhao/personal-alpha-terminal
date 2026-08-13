@@ -137,3 +137,26 @@
 - ROUND15 verdict: PROBABILITY_FALLBACK_CLASSICAL.
 - LLM production influence remains NONE.
 - Probability production weight remains 0.
+
+## 1.2.0-rc.1 — 2026-08-14
+
+### Added
+
+- ROUND14-17 development and release-candidate closure.
+- Chinese terminal overview, Chinese user guide, flagship repository docs.
+- PIT feature/outcome dataset and LLM alpha research protocol.
+- Conditional probability alpha 2.0 research protocol.
+- Repository storage inventory and safe cleanup manifest.
+
+### Fixed
+
+- Frozen package OperationalIdentity no longer relies on inspect.getsource.
+- networkx declared as a core dependency for fresh installs.
+- Version assertions updated for 1.2.0-rc.1.
+
+### Status
+
+- Release candidate, not final release.
+- LLM production influence remains NONE.
+- Probability production weight remains 0.
+- OperationalPolicy remains fail-closed until explicit user renewal.
