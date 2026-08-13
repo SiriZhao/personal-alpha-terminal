@@ -4,7 +4,7 @@ Generated from `docs/CURRENT_STATUS.json` at `2026-08-09T15:49:00+08:00`.
 This file supersedes historical release/readiness claims under `docs/reports/`.
 
 - Version: `1.2.0-rc.1`
-- Git commit: `c95b2b668f4365fe2d57f131b5732951342f3322`
+- Git commit: `81a34b294d4a83820753b6f3ee39dc0da40d5803`
 - Build ID: `pat-1.2.0-rc.1-81a34b294d4a-20260813180525`
 - Evidence level: `FIXTURE_TESTED`
 - Operating mode: `SHADOW_ONLY`

@@ -1328,6 +1328,18 @@ def _maintenance_command(args: argparse.Namespace) -> int:
     raise ValueError("unsupported artifacts action")
 
 
+def _stress_exam_command() -> int:
+    from personal_alpha_terminal.scenario_simulator.exam import (
+        run_stress_exam,
+        write_stress_exam_summary,
+    )
+
+    summary = run_stress_exam()
+    target = Path("reports") / "stress-exam" / "stress_exam_summary.json"
+    write_stress_exam_summary(summary, target)
+    print(f"{summary.classification}: {target.resolve()}")
+    return 0
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="PersonalAlphaTerminal",
@@ -1352,6 +1364,7 @@ def build_parser() -> argparse.ArgumentParser:
         section = subparsers.add_parser(name, help=help_text)
         section.add_argument("--run-id", default=None)
     subparsers.add_parser("doctor")
+    subparsers.add_parser("stress-exam", help="Run deterministic synthetic stress exam")
     subparsers.add_parser("diagnostics", help="Alias for doctor")
     subparsers.add_parser("settings", help="Show the active terminal configuration path")
     probability_assessment = subparsers.add_parser(
@@ -1775,6 +1788,8 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if command in {"doctor", "diagnostics"}:
             return _doctor(args.config)
+        if command == "stress-exam":
+            return _stress_exam_command()
         if command == "settings":
             config = load_config(args.config)
             console.print(

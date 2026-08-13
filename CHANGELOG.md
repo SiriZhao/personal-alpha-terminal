@@ -160,3 +160,17 @@
 - LLM production influence remains NONE.
 - Probability production weight remains 0.
 - OperationalPolicy remains fail-closed until explicit user renewal.
+
+## Unreleased — ROUND19
+
+### Added
+
+- Deterministic synthetic stress exam with six scenarios.
+- Stress-exam CLI and machine-readable summary.
+- Long-only, position cap, gross cap, holdings cap, future-data, and manual-only invariants.
+- First formal stress exam report.
+
+### Status
+
+- Synthetic-only; not historical backtest and not alpha certification.
+- Classification: STRESS_EXAM_PASS_WITH_WARNINGS.
