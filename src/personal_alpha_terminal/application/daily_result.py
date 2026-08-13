@@ -142,6 +142,7 @@ class RiskSummary:
     stress_status: str = "NOT_CAPTURED"
     stress_failures: tuple[str, ...] = ()
     stress_warnings: tuple[str, ...] = ()
+    size_diagnostics: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,7 +157,7 @@ class DecisionRow:
     estimated_quantity: int
     estimated_cost: float
     expected_alpha: float
-    confidence: float
+    confidence: float | None
     risk_contribution: float
     reason: str
     data_quality: str
@@ -164,6 +165,7 @@ class DecisionRow:
     data_version: str
     earliest_execution_time: datetime
     expiry: datetime
+    confidence_source: str = "NOT_CALIBRATED"
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,6 +198,10 @@ class ExecutionPlan:
     turnover: float | None
     estimated_cost: float
     legs: tuple[ExecutionLeg, ...]
+    execution_plan_generated: bool = True
+    broker_order_submitted: bool = False
+    broker_api: str = "DISABLED"
+    execution_mode: str = "MANUAL_ONLY"
 
 
 @dataclass(frozen=True, slots=True)
@@ -401,6 +407,10 @@ class DailyQuantResult:
             "llm_mode": "SHADOW",
             "auto_execution": False,
             "manual_execution_only": True,
+            "execution_plan_generated": self.execution_plan.execution_plan_generated,
+            "broker_order_submitted": self.execution_plan.broker_order_submitted,
+            "broker_api": self.execution_plan.broker_api,
+            "execution_mode": self.execution_plan.execution_mode,
             "full_research_certified": False,
             "version": self.version,
             "build_identifier": self.provenance.get("build_identifier", self.version),

@@ -19,10 +19,11 @@ class TradeAction(StrEnum):
 @dataclass(frozen=True, slots=True)
 class TradeEvidence:
     expected_alpha: float
-    confidence: float
+    confidence: float | None
     horizon: int
     primary_evidence: tuple[str, ...]
     counter_evidence: tuple[str, ...]
+    confidence_calibrated: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,7 +37,7 @@ class TradeProposal:
     estimated_cost: float
     risk_contribution: float
     expected_alpha: float
-    confidence: float
+    confidence: float | None
     horizon: int
     reason: str
     primary_evidence: tuple[str, ...]
@@ -94,7 +95,7 @@ class TradeGenerator:
             if item is None and action in {TradeAction.BUY, TradeAction.INCREASE}:
                 raise ValueError(f"new or increased position lacks alpha evidence: {symbol}")
             if item is None:
-                item = TradeEvidence(0.0, 0.0, 0, (), ("position removed from target",))
+                item = TradeEvidence(0.0, None, 0, (), ("position removed from target",))
             proposals.append(
                 TradeProposal(
                     ticker=symbol,

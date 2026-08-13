@@ -626,6 +626,109 @@ def _doctor(config_path: Path) -> int:
     try:
         config = load_config(config_path)
         checks.append(("PASS", "Config", str(config_path.resolve())))
+        checks.append(("PASS", "Python interpreter", sys.executable))
+        checks.append(
+            (
+                "PASS",
+                "Python version",
+                f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+            )
+        )
+        checks.append(
+            (
+                "PASS" if sys.prefix != sys.base_prefix else "WARN",
+                "Virtual environment",
+                sys.prefix,
+            )
+        )
+        dependency_checks = []
+        try:
+            import exchange_calendars  # type: ignore[import-untyped]  # noqa: F401
+            dependency_checks.append("exchange_calendars=PASS")
+        except ImportError:
+            dependency_checks.append("exchange_calendars=FAIL")
+        try:
+            import openai  # noqa: F401
+            dependency_checks.append("openai=PASS")
+        except ImportError:
+            dependency_checks.append("openai=FAIL")
+        checks.append(
+            (
+                "FAIL" if any(item.endswith("=FAIL") for item in dependency_checks) else "PASS",
+                "Runtime dependencies",
+                "; ".join(dependency_checks),
+            )
+        )
+        checks.append(
+            (
+                "PASS" if os.environ.get("SEC_EDGAR_USER_AGENT", "").strip() else "WARN",
+                "SEC_EDGAR_USER_AGENT",
+                "PRESENT" if os.environ.get("SEC_EDGAR_USER_AGENT", "").strip() else "MISSING",
+            )
+        )
+        checks.append(
+            (
+                "PASS" if config.settings.deepseek_api_key else "WARN",
+                "DeepSeek credential",
+                "PRESENT" if config.settings.deepseek_api_key else "MISSING",
+            )
+        )
+        from personal_alpha_terminal.intelligence.llm_runtime import (
+            DEFAULT_LLM_RUNTIME_STATUS_PATH,
+            llm_runtime_status,
+        )
+
+        runtime = llm_runtime_status(config.settings, DEFAULT_LLM_RUNTIME_STATUS_PATH)
+        checks.append(
+            (
+                "PASS" if runtime.connectivity == "AVAILABLE" else "WARN",
+                "DeepSeek connectivity",
+                runtime.connectivity,
+            )
+        )
+        from personal_alpha_terminal.application.operational_readiness import (
+            OperationalPolicyStore,
+            resolve_current_operational_identity,
+        )
+        from personal_alpha_terminal.quant_engine.strategies.us_adaptive_alpha_core import (
+            USAdaptiveAlphaCoreV1,
+        )
+
+        now = datetime.now(UTC)
+        identity = resolve_current_operational_identity(
+            config,
+            USAdaptiveAlphaCoreV1(config.strategy),
+            decision_time=now,
+        )
+        policy_status = OperationalPolicyStore(config.operational_policy_path).status(
+            identity,
+            research_state="NOT_CERTIFIABLE",
+            now=now,
+        )
+        policy = policy_status.public_document()
+        checks.append(
+            (
+                "PASS" if policy_status.effective else "WARN",
+                "OperationalPolicy",
+                policy_status.status.value,
+            )
+        )
+        checks.append(("PASS", "Policy identity", policy_status.current_identity_hash))
+        checks.append(
+            (
+                "PASS",
+                "Policy mismatch fields",
+                json.dumps(policy.get("Mismatch Fields", {}), sort_keys=True),
+            )
+        )
+        local_now = datetime.now().astimezone()
+        checks.append(
+            (
+                "PASS",
+                "Timezone/system clock",
+                f"{local_now.isoformat()} {local_now.tzname()}",
+            )
+        )
         checks.append(
             (
                 "PASS" if len(config.provider_priority) >= 2 else "WARN",
@@ -633,7 +736,11 @@ def _doctor(config_path: Path) -> int:
                 " -> ".join(config.provider_priority),
             )
         )
-        for label, directory in (("Cache", config.cache_dir), ("Reports", config.report_dir)):
+        for label, directory in (
+            ("Cache", config.cache_dir),
+            ("Reports", config.report_dir),
+            ("Var", Path("var")),
+        ):
             try:
                 directory.mkdir(parents=True, exist_ok=True)
                 probe = directory / ".doctor-write-test"
@@ -674,6 +781,31 @@ def _doctor(config_path: Path) -> int:
             )
         )
         application = _application_service(effective_config=config)
+        from sqlalchemy import func, select
+
+        from personal_alpha_terminal.data.database import get_session_factory
+        from personal_alpha_terminal.models import (
+            IntelligenceEvent,
+            IntelligenceRawInformation,
+            Price,
+        )
+
+        with get_session_factory()() as session:
+            market_rows = session.scalar(select(func.count()).select_from(Price)) or 0
+            raw_rows = (
+                session.scalar(select(func.count()).select_from(IntelligenceRawInformation))
+                or 0
+            )
+            event_rows = session.scalar(select(func.count()).select_from(IntelligenceEvent)) or 0
+        checks.append(
+            ("PASS" if market_rows else "WARN", "Market data storage", f"{market_rows} price rows")
+        )
+        checks.append(
+            ("PASS" if raw_rows else "WARN", "Intelligence raw corpus", f"{raw_rows} raw documents")
+        )
+        checks.append(
+            ("PASS" if event_rows else "WARN", "Intelligence events", f"{event_rows} events")
+        )
         readiness = application.get_system_health()
         checks.append(
             (
@@ -802,7 +934,7 @@ def _provider_command(config_path: Path, action: str, provider_name: str | None)
 
 
 def _latest_completed_us_session(now: datetime) -> date:
-    import exchange_calendars as xcals  # type: ignore[import-untyped]
+    import exchange_calendars as xcals
 
     calendar = xcals.get_calendar("XNYS")
     sessions = calendar.sessions_in_range(

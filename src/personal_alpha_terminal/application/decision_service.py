@@ -22,7 +22,7 @@ class CandidateView:
     current_weight: Decimal
     target_weight: Decimal
     quant_score: Decimal
-    confidence_score: Decimal
+    confidence_score: Decimal | None
     evidence_grade: str
     rationale: tuple[str, ...]
     risk_factors: tuple[str, ...]

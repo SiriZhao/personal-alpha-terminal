@@ -80,7 +80,8 @@ class QuantDecisionRecommendation(TimestampMixin, Base):
         ),
         CheckConstraint(
             "quant_score >= 0 AND quant_score <= 100 AND "
-            "confidence_score >= 0 AND confidence_score <= 100",
+            "(confidence_score IS NULL OR "
+            "(confidence_score >= 0 AND confidence_score <= 100))",
             name="valid_quant_decision_scores",
         ),
         CheckConstraint("reference_price > 0", name="positive_decision_reference_price"),
@@ -103,7 +104,7 @@ class QuantDecisionRecommendation(TimestampMixin, Base):
     current_weight: Mapped[Decimal] = mapped_column(Numeric(12, 10), nullable=False)
     target_weight: Mapped[Decimal] = mapped_column(Numeric(12, 10), nullable=False)
     quant_score: Mapped[Decimal] = mapped_column(Numeric(8, 4), nullable=False)
-    confidence_score: Mapped[Decimal] = mapped_column(Numeric(8, 4), nullable=False)
+    confidence_score: Mapped[Decimal | None] = mapped_column(Numeric(8, 4), nullable=True)
     component_scores: Mapped[dict[str, float]] = mapped_column(JSON, nullable=False)
     rationale: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     risk_factors: Mapped[list[str]] = mapped_column(JSON, nullable=False)

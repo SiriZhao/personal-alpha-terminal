@@ -520,6 +520,14 @@ class ProductionDailyQuantInputAssembler:
                     if str(row.ticker) in alpha_symbol_set
                     else 0.0
                 ),
+                market_cap=(
+                    float(row.market_cap)
+                    if str(row.ticker) in alpha_symbol_set
+                    and row.market_cap is not None
+                    and not bool(np.isnan(row.market_cap))
+                    and float(row.market_cap) > 0
+                    else None
+                ),
             )
             for row in risk_metadata_frame.itertuples(index=False)
         )

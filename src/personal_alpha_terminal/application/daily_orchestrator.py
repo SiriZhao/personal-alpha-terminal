@@ -39,6 +39,9 @@ from personal_alpha_terminal.application.quant_daily_service import (
     ProductionDailyWorkflow,
     TodayResult,
 )
+from personal_alpha_terminal.application.size_diagnostics import (
+    build_size_tilt_diagnostic,
+)
 from personal_alpha_terminal.core.build_metadata import current_build_metadata
 from personal_alpha_terminal.core.config import Settings
 from personal_alpha_terminal.core.effective_config import (
@@ -188,8 +191,11 @@ class DailyQuantOrchestrator:
                         data_failure_reasons.append(
                             "required provider refresh failed: " + ", ".join(sync.failed_symbols)
                         )
-                    if sync.status != "CERTIFIED":
-                        warnings.append(f"market refresh completed as {sync.status}")
+                    if sync.status != "CERTIFIED" and sync.status != "BLOCKED":
+                        warnings.append(
+                            "live refresh completed with quarantined symbols; "
+                            "certification evidence is recorded in the DATA stage"
+                        )
                     if decision_time is None:
                         # A live decision can only occur after the newly retrieved evidence
                         # exists.  Calendar/trade-date resolution remains anchored to run start.
@@ -851,6 +857,25 @@ class DailyQuantOrchestrator:
             positions,
         )
         target = workflow.target
+        size_diagnostics = (
+            build_size_tilt_diagnostic(
+                workflow.risk,
+                candidate_symbols=self._candidate_symbols(workflow.universe_evidence),
+                target_weights=target_weights,
+                portfolio_value=(
+                    workflow.portfolio_value
+                    if workflow.portfolio_value is not None
+                    and workflow.portfolio_value > 0
+                    else 0.0
+                ),
+                transaction_cost=self._effective_config.transaction_cost,
+                expected_transaction_cost=(
+                    target.estimated_transaction_cost if target is not None else 0.0
+                ),
+            )
+            if workflow.risk is not None
+            else {}
+        )
         risk = RiskSummary(
             "PASS" if workflow.risk is not None and target is not None else "BLOCKED",
             target.expected_volatility if target else None,
@@ -901,6 +926,7 @@ class DailyQuantOrchestrator:
             workflow.stress.status.value if workflow.stress is not None else "NOT_CAPTURED",
             workflow.stress.hard_failures if workflow.stress is not None else (),
             workflow.stress.warnings if workflow.stress is not None else (),
+            size_diagnostics,
         )
         decisions = tuple(
             DecisionRow(
@@ -922,6 +948,7 @@ class DailyQuantOrchestrator:
                 item.data_version,
                 item.earliest_execution_time,
                 item.expiry,
+                confidence_source=item.confidence_source,
             )
             for item in workflow.recommendations
         )
@@ -986,6 +1013,37 @@ class DailyQuantOrchestrator:
                 certification_state=pit_status.value,
             ),
         )
+        candidate_count = int(
+            str(
+                workflow.universe_evidence.get("candidate_count", 0)
+                or workflow.universe_evidence.get("candidate_bound", 0)
+                or 0
+            )
+        )
+        optimizer_input_count = int(
+            str(workflow.universe_evidence.get("optimizer_input", 0))
+        )
+        cardinality_trace = {
+            "factor_eligible": len(factors),
+            "alpha_positive": int(
+                str(workflow.universe_evidence.get("alpha_positive", 0))
+            ),
+            "candidate_pool": candidate_count,
+            "optimizer_input": optimizer_input_count,
+            "risk_engine_securities": (
+                len(workflow.risk.symbols) if workflow.risk is not None else 0
+            ),
+            "maximum_allowed_holdings": (
+                self._effective_config.portfolio_constraints.maximum_holdings
+            ),
+            "optimized_target_holdings": len(target_weights),
+            "final_decision_holdings": len(decisions),
+            "pre_optimizer_top10_truncation": False,
+            "optimizer_received_alpha_top10": False,
+            "display_candidates_limited_to": 10,
+            "holding_cap_policy": "EXPLICIT_POST_OPTIMIZATION_CAP",
+        }
+
         return DailyQuantResult(
             run_id,
             __version__,
@@ -1042,6 +1100,7 @@ class DailyQuantOrchestrator:
                 "source_ids": workflow.source_ids,
                 "universe_count": workflow.universe_count,
                 "universe_evidence": workflow.universe_evidence,
+                "cardinality_trace": cardinality_trace,
                 "probability_overlay": {
                     "active": workflow.probability_overlay_active,
                     "state": workflow.probability_overlay_state,
@@ -1140,6 +1199,16 @@ class DailyQuantOrchestrator:
             workflow.operationally_allowed,
             workflow.operational_degraded_reason,
         )
+
+    @staticmethod
+    def _candidate_symbols(universe_evidence: dict[str, object]) -> tuple[str, ...]:
+        compression = universe_evidence.get("candidate_compression")
+        if not isinstance(compression, dict):
+            return ()
+        symbols = compression.get("candidate_symbols")
+        if not isinstance(symbols, list):
+            return ()
+        return tuple(str(item) for item in symbols)
 
     @staticmethod
     def _resolved_data_cutoff(
@@ -1287,7 +1356,20 @@ class DailyQuantOrchestrator:
     ) -> ExecutionPlan:
         if not actionable:
             return ExecutionPlan(
-                "BLOCKED", True, "Charles Schwab (manual only)", None, 0.0, 0.0, None, None, 0.0, ()
+                status="BLOCKED",
+                manual_execution_required=True,
+                broker="Charles Schwab",
+                estimated_cash_before=None,
+                estimated_proceeds=0.0,
+                estimated_buys=0.0,
+                estimated_cash_after=None,
+                turnover=None,
+                estimated_cost=0.0,
+                legs=(),
+                execution_plan_generated=False,
+                broker_order_submitted=False,
+                broker_api="DISABLED",
+                execution_mode="MANUAL_ONLY",
             )
         actionable_rows = tuple(item for item in decisions if item.action != "HOLD")
         priority = {"SELL": 0, "REDUCE": 1, "BUY": 2, "ADD": 3, "INCREASE": 3}
@@ -1317,16 +1399,20 @@ class DailyQuantOrchestrator:
         cash_before = workflow.cash_balance
         cash_after = cash_before + proceeds - buys - costs if cash_before is not None else None
         return ExecutionPlan(
-            "READY" if legs else "NO_ACTION",
-            True,
-            "Charles Schwab (manual only)",
-            cash_before,
-            proceeds,
-            buys,
-            cash_after,
-            workflow.target.turnover if workflow.target else 0.0,
-            costs,
-            legs,
+            status="READY" if legs else "NO_ACTION",
+            manual_execution_required=True,
+            broker="Charles Schwab",
+            estimated_cash_before=cash_before,
+            estimated_proceeds=proceeds,
+            estimated_buys=buys,
+            estimated_cash_after=cash_after,
+            turnover=workflow.target.turnover if workflow.target else 0.0,
+            estimated_cost=costs,
+            legs=legs,
+            execution_plan_generated=bool(legs),
+            broker_order_submitted=False,
+            broker_api="DISABLED",
+            execution_mode="MANUAL_ONLY",
         )
 
     def _persist_result(self, result: DailyQuantResult) -> DailyQuantResult:

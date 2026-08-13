@@ -442,6 +442,15 @@ def _market_data(result: DailyQuantResult, console: Console) -> None:
     primary = "yahoo" if "yahoo" in provider.lower() else provider
     fallback = str(llm_meta.get("provider", "--"))
     verdict = _market_data_verdict(data_stage)
+    live_refresh_status = str(data_meta.get("live_refresh_status", "LIVE_REFRESH_FAIL"))
+    requested_securities = str(data_meta.get("requested_security_count", "N/A"))
+    actual_refresh = str(data_meta.get("actual_refresh_count", "N/A"))
+    cache_reuse = str(data_meta.get("cache_reuse_count", "N/A"))
+    provider_returned = str(data_meta.get("provider_returned_count", "N/A"))
+    certified_coverage = _as_float(data_meta.get("certified_coverage"))
+    quarantine = str(data_meta.get("quarantine_count", "N/A"))
+    provider_incident = str(data_meta.get("provider_incident_count", "N/A"))
+    collapse = "YES" if data_meta.get("coverage_collapse") else "NO"
     table = Table(show_header=False, box=None, pad_edge=False)
     table.add_column(style="bold cyan")
     table.add_column()
@@ -459,6 +468,15 @@ def _market_data(result: DailyQuantResult, console: Console) -> None:
         (_t("\u6570\u636e\u6a21\u5f0f", "Data mode"), data_mode),
         (_t("\u4e3b\u6570\u636e\u6e90", "Primary provider"), primary),
         (_t("\u5907\u7528\u6570\u636e\u6e90", "Fallback provider"), fallback),
+        (_t("\u5237\u65b0\u72b6\u6001", "Live refresh"), live_refresh_status),
+        (_t("\u8bf7\u6c42\u8bc1\u5238", "Requested securities"), requested_securities),
+        (_t("\u5b9e\u9645\u5237\u65b0", "Actual refresh"), actual_refresh),
+        (_t("\u7f13\u5b58\u590d\u7528", "Cache reuse"), cache_reuse),
+        (_t("Provider \u8fd4\u56de", "Provider returned"), provider_returned),
+        (_t("\u8ba4\u8bc1\u8986\u76d6", "Certified coverage"), _percent(certified_coverage)),
+        (_t("\u9694\u79bb", "Quarantine"), quarantine),
+        (_t("Provider \u4e8b\u4ef6", "Provider incident"), provider_incident),
+        (_t("\u8986\u76d6\u574d\u5854", "Coverage collapse"), collapse),
         (_t("\u6570\u636e\u8986\u76d6", "Coverage"), _percent(coverage)),
         (
             _t("\u5e02\u573a\u6570\u636e\u7ed3\u8bba", "Market data verdict"),
@@ -668,7 +686,16 @@ def _pit_universe(result: DailyQuantResult, console: Console) -> None:
     alpha_positive = universe.get("alpha_positive", "UNAVAILABLE")
     candidate_count = universe.get("candidate_count", "UNAVAILABLE")
     optimizer_input = universe.get("optimizer_input", candidate_count)
-    final_holdings = len(result.portfolio.positions)
+    cardinality = result.provenance.get("cardinality_trace", {})
+    cardinality = cardinality if isinstance(cardinality, dict) else {}
+    max_holdings = cardinality.get("maximum_allowed_holdings")
+    optimized_holdings = cardinality.get(
+        "optimized_target_holdings", len(result.portfolio.positions)
+    )
+    risk_engine_securities = cardinality.get("risk_engine_securities", "UNAVAILABLE")
+    final_holdings = cardinality.get(
+        "final_decision_holdings", len(result.portfolio.positions)
+    )
     console.print(
         Panel(
             f"Status {stage.status.value if stage else 'NOT_RUN'}   "
@@ -682,7 +709,12 @@ def _pit_universe(result: DailyQuantResult, console: Console) -> None:
             f"Liquidity eligible {liq_ok}\n"
             f"Factor eligible {factor_ok}   Alpha positive {alpha_positive}   "
             f"Candidate pool {candidate_count}\n"
-            f"Optimizer input {optimizer_input}   Final holdings {final_holdings}   "
+            f"Optimizer input {optimizer_input}   Optimized holdings {optimized_holdings}\n"
+            f"Maximum allowed holdings "
+            f"{max_holdings if max_holdings is not None else 'UNLIMITED'}   "
+            f"Risk compared {risk_engine_securities}   Final decisions {final_holdings}\n"
+            f"Pre-optimizer Top10 {bool(cardinality.get('pre_optimizer_top10_truncation'))}   "
+            f"Optimizer Top10-only {bool(cardinality.get('optimizer_received_alpha_top10'))}\n"
             f"Operational tradable {tradable_ok}   "
             f"Quarantine {quarantine_count}\n"
             + candidate_lines
@@ -927,13 +959,22 @@ def _probability(result: DailyQuantResult, console: Console) -> None:
     active = bool(overlay.get("active", False))
     runtime_state = "ACTIVE_CALIBRATED" if active else "FALLBACK_CLASSICAL"
     console.print(
-        f"Probability assessment: COMPLETED   "
-        f"OOS incremental value: {'PROVED' if active else 'NOT PROVED'}   "
-        f"Production weight: {'ACTIVE' if active else '0%'}   "
-        f"Mode: {runtime_state}\n"
-        f"Overlay {overlay.get('state', 'RESEARCH_ONLY')}   "
-        f"Active {active}   "
-        f"Reason {overlay.get('reason', 'UNAVAILABLE')}"
+        _t(
+            f"??????: COMPLETED   "
+            f"OOS incremental value: {'PROVED' if active else 'NOT PROVED'}   "
+            f"????: {'ACTIVE' if active else '0%'}   "
+            f"Mode: {runtime_state}\n"
+            f"Overlay {overlay.get('state', 'RESEARCH_ONLY')}   "
+            f"Active {active}   "
+            f"Reason {overlay.get('reason', 'UNAVAILABLE')}",
+            f"Probability assessment: COMPLETED   "
+            f"OOS incremental value: {'PROVED' if active else 'NOT PROVED'}   "
+            f"Production weight: {'ACTIVE' if active else '0%'}   "
+            f"Mode: {runtime_state}\n"
+            f"Overlay {overlay.get('state', 'RESEARCH_ONLY')}   "
+            f"Active {active}   "
+            f"Reason {overlay.get('reason', 'UNAVAILABLE')}",
+        )
     )
     changed = [
         trace
@@ -981,7 +1022,7 @@ def _probability(result: DailyQuantResult, console: Console) -> None:
         if trace.get("target_weight") is not None
     ]
     if formation:
-        formation_table = Table(title="DECISION FORMATION PROCESS")
+        formation_table = Table(title=_t("??????", "DECISION FORMATION PROCESS"))
         for column in (
             "Ticker",
             "Factor rank",
@@ -1112,6 +1153,40 @@ def _risk(result: DailyQuantResult, console: Console) -> None:
             border_style="yellow" if risk.stress_status != "PASS" else "green",
         )
     )
+    size = risk.size_diagnostics
+    size = size if isinstance(size, dict) else {}
+    size_status = str(size.get("status", risk.size_exposure_status))
+    bucket_counts = size.get("candidate_size_bucket_counts", {})
+    bucket_counts = bucket_counts if isinstance(bucket_counts, dict) else {}
+    bucket_line = " ".join(
+        f"{name}={bucket_counts.get(name, 'N/A')}"
+        for name in ("micro_cap", "small_cap", "mid_cap", "large_cap", "mega_cap")
+    )
+    console.print(
+        Panel(
+            f"Size verdict {size_status}\n"
+            f"Coverage {_percent(_as_float(size.get('coverage_ratio')))}   "
+            f"Valid {size.get('market_cap_valid_count', 'N/A')}   "
+            f"Missing {size.get('market_cap_missing_count', 'N/A')}\n"
+            f"Candidate buckets: {bucket_line}\n"
+            f"Portfolio weighted average "
+            f"{_money(_as_float(size.get('portfolio_weighted_average_market_cap')))}\n"
+            f"Portfolio weighted median "
+            f"{_money(_as_float(size.get('portfolio_weighted_median_market_cap')))}\n"
+            f"Portfolio size percentile "
+            f"{_percent(_as_float(size.get('portfolio_weighted_size_percentile')))}\n"
+            f"Small/micro exposure {_percent(_as_float(size.get('final_small_micro_exposure')))}\n"
+            f"Largest bucket {size.get('final_size_bucket_concentration', 'N/A')} "
+            f"{_percent(_as_float(size.get('final_largest_size_bucket_weight')))}\n"
+            f"Smallest holding cap {_money(_as_float(size.get('smallest_holding_market_cap')))}\n"
+            f"Liquidity percentile {_percent(_as_float(size.get('liquidity_percentile')))}\n"
+            f"ADV {_money(_as_float(size.get('average_daily_dollar_volume')))}   "
+            f"Spread proxy {size.get('spread_proxy_bps', 'N/A')} bps   "
+            f"Impact {_number(_as_float(size.get('expected_market_impact_bps')))} bps",
+            title=_t("SIZE_TILT_DIAGNOSTIC ? ?????????", "SIZE_TILT_DIAGNOSTIC"),
+            border_style="yellow" if size_status != "SIZE_EXPOSURE_VALIDATED" else "green",
+        )
+    )
     console.print(
         Panel(
             f"Gate {risk.status}   Expected vol {_percent(risk.expected_volatility)}   "
@@ -1142,7 +1217,12 @@ def _risk(result: DailyQuantResult, console: Console) -> None:
 
 
 def _decisions(result: DailyQuantResult, console: Console) -> None:
-    table = Table(title="FINAL VALIDATED DECISIONS · ONLY FORMAL BUY/SELL AREA")
+    table = Table(
+        title=_t(
+            "?????? ? ????????",
+            "FINAL VALIDATED DECISIONS ? ONLY FORMAL BUY/SELL AREA",
+        )
+    )
     narrow = console.width < 100
     columns = (
         ("Ticker", "Action", "Current → Target", "Value", "Reason")
@@ -1156,6 +1236,7 @@ def _decisions(result: DailyQuantResult, console: Console) -> None:
             "Value",
             "Alpha",
             "Confidence",
+            "Confidence Source",
             "Risk",
             "Reason",
         )
@@ -1181,6 +1262,7 @@ def _decisions(result: DailyQuantResult, console: Console) -> None:
             else (
                 "ALL",
                 action,
+                "--",
                 "--",
                 "--",
                 "--",
@@ -1215,7 +1297,8 @@ def _decisions(result: DailyQuantResult, console: Console) -> None:
                 _signed_percent(item.delta_weight),
                 _money(item.estimated_value),
                 _signed_percent(item.expected_alpha),
-                _percent(item.confidence),
+                _confidence(item.confidence),
+                item.confidence_source,
                 f"{item.risk_contribution:.3f}",
                 item.reason,
             )
@@ -1225,7 +1308,7 @@ def _decisions(result: DailyQuantResult, console: Console) -> None:
 
 
 def _rejected(result: DailyQuantResult, console: Console) -> None:
-    table = Table(title="REJECTED SIGNALS / GATE BLOCKERS")
+    table = Table(title=_t("????? / ????", "REJECTED SIGNALS / GATE BLOCKERS"))
     table.add_column("Ticker")
     table.add_column("Rejected by")
     table.add_column("Reason", overflow="fold")
@@ -1284,10 +1367,11 @@ def _primary_blocker(result: DailyQuantResult) -> str:
 
 def _execution(result: DailyQuantResult, console: Console) -> None:
     plan = result.execution_plan
+    execution_state = "NOT_EXECUTED"
     table = Table(
         title=_t(
-            f"执行计划 · {plan.status} · {plan.broker} · 外部券商手动执行",
-            f"EXECUTION PLAN · {plan.status} · {plan.broker} · MANUAL",
+            f"???? ? {plan.status} ? ???? {execution_state} ? {plan.execution_mode}",
+            f"EXECUTION PLAN ? {plan.status} ? BROKER {execution_state} ? {plan.execution_mode}",
         )
     )
     for column in ("#", "Ticker", "Action", "Est Value", "Qty", "Est Cost", "Earliest"):
@@ -1305,6 +1389,13 @@ def _execution(result: DailyQuantResult, console: Console) -> None:
             leg.earliest_execution_time.isoformat(),
         )
     console.print(table)
+    console.print(
+        f"???? {'PASS' if plan.execution_plan_generated else 'BLOCKED'}   "
+        f"???? NOT_EXECUTED   ???? {plan.execution_mode}   "
+        f"?? {plan.broker}   Broker API {plan.broker_api}\n"
+        f"execution_plan_generated={str(plan.execution_plan_generated).lower()}   "
+        f"broker_order_submitted={str(plan.broker_order_submitted).lower()}"
+    )
     console.print(
         f"Cash before {_money(plan.estimated_cash_before)}  "
         f"+ Proceeds {_money(plan.estimated_proceeds)}  "
@@ -1526,6 +1617,10 @@ def _action(value: str) -> str:
 
 def _percent(value: float | None) -> str:
     return f"{value:.2%}" if value is not None else "--"
+
+
+def _confidence(value: float | None) -> str:
+    return f"{value:.2%}" if value is not None else "N/A"
 
 
 def _signed_percent(value: float | None) -> str:

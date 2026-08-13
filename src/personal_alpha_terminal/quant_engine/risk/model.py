@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from math import isfinite, sqrt
 
@@ -25,6 +25,7 @@ class AssetRiskMetadata:
     sector: str
     average_daily_dollar_volume: float
     size_score: float | None = None
+    market_cap: float | None = None
 
     def __post_init__(self) -> None:
         if not self.symbol.strip() or not self.sector.strip():
@@ -33,6 +34,10 @@ class AssetRiskMetadata:
             raise ValueError("risk metadata requires known positive ADV")
         if self.size_score is not None and not isfinite(self.size_score):
             raise ValueError("size score must be finite")
+        if self.market_cap is not None and (
+            not isfinite(self.market_cap) or self.market_cap <= 0
+        ):
+            raise ValueError("market_cap must be positive when present")
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,6 +57,7 @@ class RiskModelEstimate:
     shrinkage: float
     model_version: str
     limitations: tuple[str, ...]
+    market_caps: dict[str, float] = field(default_factory=dict)
 
     @property
     def valid_for_optimization(self) -> bool:
@@ -174,6 +180,11 @@ class PortfolioRiskModel:
             shrinkage=shrinkage,
             model_version=self.config.model_version,
             limitations=limitations,
+            market_caps={
+                item.symbol: float(item.market_cap)
+                for item in metadata
+                if item.market_cap is not None and isfinite(item.market_cap)
+            },
         )
 
     def _shrink_covariance(self, values: np.ndarray) -> tuple[np.ndarray, float, tuple[str, ...]]:
@@ -230,6 +241,11 @@ class PortfolioRiskModel:
             shrinkage=0.0,
             model_version=self.config.model_version,
             limitations=(reason,),
+            market_caps={
+                item.symbol: float(item.market_cap)
+                for item in metadata
+                if item.market_cap is not None and isfinite(item.market_cap)
+            },
         )
 
 

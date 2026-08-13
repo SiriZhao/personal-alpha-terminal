@@ -414,6 +414,9 @@ def resolve_effective_runtime_config(
             warning_ratio=_number(scalar, "stress_warning_ratio", 0.80),
         ),
         portfolio_constraints=PortfolioConstraints(
+            maximum_holdings=_optional_integer(
+                scalar, "portfolio_max_holdings", 10
+            ),
             no_trade_band=_number(scalar, "no_trade_band", 0.005),
             minimum_rebalance_weight=_number(
                 scalar, "minimum_rebalance_weight", 0.01
@@ -636,6 +639,17 @@ def _integer(values: Mapping[str, str], key: str, default: int) -> int:
     return int(values.get(key, str(default)))
 
 
+def _optional_integer(
+    values: Mapping[str, str], key: str, default: int | None
+) -> int | None:
+    if key not in values:
+        return default
+    normalized = values[key].strip().lower()
+    if normalized in {"none", "null", "unlimited", ""}:
+        return None
+    return int(values[key])
+
+
 def _number(values: Mapping[str, str], key: str, default: float) -> float:
     return float(values.get(key, str(default)))
 
@@ -698,6 +712,7 @@ night_execution_enabled: false
 default_execution_session: REGULAR
 allow_calendar_fallback: false
 stress_maximum_cvar_loss: 0.06
+portfolio_max_holdings: 10
 stress_maximum_liquidation_days: 5.0
 stress_maximum_correlation_spike_loss: 0.08
 stress_maximum_gap_loss: 0.08

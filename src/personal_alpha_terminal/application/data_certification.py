@@ -64,6 +64,15 @@ class DailyDataCertification:
     fallback_usage: tuple[dict[str, object], ...] = ()
     pit_integrity_status: str = "NOT_CERTIFIED"
     freshness_status: str = "NOT_CERTIFIED"
+    live_refresh_status: str = "LIVE_REFRESH_FAIL"
+    requested_security_count: int = 0
+    actual_refresh_count: int = 0
+    cache_reuse_count: int = 0
+    provider_returned_count: int = 0
+    certified_coverage: float = 0.0
+    quarantine_count: int = 0
+    provider_incident_count: int = 0
+    coverage_collapse: bool = False
 
     def metadata(self) -> dict[str, object]:
         return asdict(self)
@@ -445,6 +454,25 @@ class DailyDataCertifier:
                 else "FAIL"
             ),
             freshness_status="PASS" if not stale else "FAIL",
+            live_refresh_status=_live_refresh_status(
+                manifest=manifest,
+                status=status,
+                quarantined_bars=quarantined_bars,
+                fallback_usage=tuple(
+                    dict(item)
+                    for item in document.get("fallback_usage", [])
+                    if isinstance(item, dict)
+                ),
+                coverage_collapse=bool(blockers),
+            ),
+            requested_security_count=len(manifest.symbols) if manifest is not None else 0,
+            actual_refresh_count=_status_count(manifest, "success"),
+            cache_reuse_count=_status_count(manifest, "cached"),
+            provider_returned_count=len(received),
+            certified_coverage=matched / expected if expected else 0.0,
+            quarantine_count=quarantined_bars,
+            provider_incident_count=_provider_incident_count(manifest),
+            coverage_collapse=bool(blockers),
         )
 
     @staticmethod
@@ -484,3 +512,59 @@ def _parse_datetime(value: object) -> datetime | None:
 
 def _parse_date(value: object) -> date | None:
     return date.fromisoformat(value) if isinstance(value, str) and value else None
+
+
+def _live_refresh_status(
+    *,
+    manifest: DataSnapshotManifest | None,
+    status: StageStatus,
+    quarantined_bars: int,
+    fallback_usage: tuple[dict[str, object], ...],
+    coverage_collapse: bool,
+) -> str:
+    if status is StageStatus.FAIL_BLOCKING:
+        return "LIVE_REFRESH_FAIL"
+    if _provider_incident_count(manifest):
+        return "LIVE_REFRESH_DEGRADED_PROVIDER"
+    if coverage_collapse:
+        return "LIVE_REFRESH_PARTIAL_COVERAGE"
+    if quarantined_bars or fallback_usage or (
+        manifest is not None and bool(manifest.failed_symbols)
+    ):
+        return "LIVE_REFRESH_PASS_WITH_QUARANTINE"
+    return "LIVE_REFRESH_PASS"
+
+
+def _status_count(manifest: DataSnapshotManifest | None, status: str) -> int:
+    if manifest is None:
+        return 0
+    return sum(
+        1
+        for item in manifest.missingness_summary.values()
+        if isinstance(item, dict) and item.get("status") == status
+    )
+
+
+def _provider_incident_count(manifest: DataSnapshotManifest | None) -> int:
+    if manifest is None:
+        return 0
+    incident_markers = {
+        "RATE_LIMIT",
+        "TIMEOUT",
+        "SCHEMA",
+        "BOT_CHALLENGE",
+        "PROVIDER_ERROR",
+        "CIRCUIT",
+    }
+    return sum(
+        1
+        for item in manifest.missingness_summary.values()
+        if isinstance(item, dict)
+        and (
+            item.get("status") == "failed"
+            and any(
+                marker in str(item.get("error", "")).upper()
+                for marker in incident_markers
+            )
+        )
+    )

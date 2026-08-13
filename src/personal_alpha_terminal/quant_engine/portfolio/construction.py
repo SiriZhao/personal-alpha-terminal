@@ -34,6 +34,7 @@ class PortfolioConstraints:
     maximum_position_weight: float = 0.12
     maximum_sector_weight: float = 0.30
     maximum_cluster_weight: float = 0.35
+    maximum_holdings: int | None = 10
     maximum_hhi: float = 0.18
     minimum_cash_weight: float = 0.10
     maximum_gross_exposure: float = 0.90
@@ -77,6 +78,8 @@ class PortfolioConstraints:
             raise ValueError("volatility target and minimum trade value are invalid")
         if self.risk_aversion <= 0 or self.turnover_penalty < 0:
             raise ValueError("optimizer penalty parameters are invalid")
+        if self.maximum_holdings is not None and self.maximum_holdings < 1:
+            raise ValueError("maximum_holdings must be positive when configured")
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,6 +114,7 @@ class PortfolioTarget:
     cost_model_version: str
     data_version: str
     model_validation_id: str
+    target_holding_count: int = 0
 
     @property
     def production_approved(self) -> bool:
@@ -354,6 +358,20 @@ class PortfolioConstructionEngine:
             for index, symbol in enumerate(symbols)
             if weights[index] > 1e-12
         }
+        if (
+            self.constraints.maximum_holdings is not None
+            and len(target) > self.constraints.maximum_holdings
+        ):
+            return self._blocked(
+                decision_time,
+                authorization,
+                risk,
+                (
+                    "MAX_HOLDINGS_EXCEEDED: optimized target has "
+                    f"{len(target)} holdings; configured maximum is "
+                    f"{self.constraints.maximum_holdings}",
+                ),
+            )
         turnover = float(np.sum(np.abs(weights - current)))
         estimated_cost = 0.0
         try:
@@ -419,6 +437,7 @@ class PortfolioConstructionEngine:
             cost_model_version=self.cost_model.config.version,
             data_version=next(iter(versions)),
             model_validation_id=self.constraints.model_validation_id,
+            target_holding_count=len(target),
         )
 
     def _blocked(

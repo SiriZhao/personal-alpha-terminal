@@ -412,7 +412,12 @@ def _trade_evidence(signals: tuple[AlphaSignal, ...]) -> dict[str, TradeEvidence
         grouped.setdefault(signal.symbol, []).append(signal)
     output: dict[str, TradeEvidence] = {}
     for symbol, items in grouped.items():
-        confidence = sum(item.confidence for item in items) / len(items)
+        calibrated = all(item.confidence_calibrated for item in items)
+        confidence = (
+            sum(item.confidence for item in items) / len(items)
+            if calibrated
+            else None
+        )
         expected = sum(item.expected_excess_return for item in items) / len(items)
         horizon = max(1, round(sum(item.horizon for item in items) / len(items)))
         output[symbol] = TradeEvidence(
@@ -425,6 +430,7 @@ def _trade_evidence(signals: tuple[AlphaSignal, ...]) -> dict[str, TradeEvidence
                 for item in items
                 if item.confidence < 0.75
             ),
+            calibrated,
         )
     return output
 

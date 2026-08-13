@@ -77,7 +77,7 @@ class TodayRecommendation:
     estimated_quantity: int
     expected_cost: float
     expected_alpha: float
-    confidence: float
+    confidence: float | None
     risk_reason: str
     model_version: str
     data_version: str
@@ -87,6 +87,7 @@ class TodayRecommendation:
     risk_contribution: float = 0.0
     reason: str = ""
     data_quality: str = "UNAVAILABLE"
+    confidence_source: str = "NOT_CALIBRATED"
 
 
 @dataclass(frozen=True, slots=True)
@@ -456,7 +457,11 @@ class ProductionDailyWorkflow:
                     current_weight=Decimal(str(proposal.current_weight)),
                     target_weight=Decimal(str(proposal.target_weight)),
                     quant_score=Decimal("0"),
-                    confidence_score=Decimal(str(proposal.confidence * 100)),
+                    confidence_score=(
+                        Decimal(str(proposal.confidence * 100))
+                        if proposal.confidence is not None
+                        else None
+                    ),
                     component_scores={
                         "expected_alpha": proposal.expected_alpha,
                         "risk_contribution": proposal.risk_contribution,
@@ -511,7 +516,11 @@ class ProductionDailyWorkflow:
             risk_contribution = recommendation.component_scores.get(
                 "risk_contribution"
             )
-            confidence = float(recommendation.confidence_score)
+            confidence = (
+                float(recommendation.confidence_score)
+                if recommendation.confidence_score is not None
+                else None
+            )
             prediction = ForwardPrediction(
                 recommendation_id=recommendation.recommendation_id,
                 run_id=str(run.id),
@@ -520,7 +529,7 @@ class ProductionDailyWorkflow:
                 decision_time=run.as_of_time,
                 target_weight=float(recommendation.target_weight),
                 expected_alpha=expected_alpha,
-                probability=(confidence / 100.0 if confidence > 0 else None),
+                probability=(confidence / 100.0 if confidence is not None else None),
                 risk_contribution=(
                     float(risk_contribution)
                     if risk_contribution is not None
@@ -882,7 +891,11 @@ class ProductionDailyWorkflow:
                 estimated_quantity=item.suggested_shares,
                 expected_cost=float(item.component_scores.get("estimated_cost", 0.0)),
                 expected_alpha=float(item.component_scores.get("expected_alpha", 0.0)),
-                confidence=float(item.confidence_score) / 100,
+                confidence=(
+                    float(item.confidence_score) / 100
+                    if item.confidence_score is not None
+                    else None
+                ),
                 risk_reason="; ".join(item.risk_factors),
                 model_version=run.model_version,
                 data_version=run.data_version,
@@ -909,6 +922,11 @@ class ProductionDailyWorkflow:
                     )
                     if output is not None
                     else "UNAVAILABLE"
+                ),
+                confidence_source=(
+                    "CALIBRATED_LOCKED_OOS"
+                    if assembled is not None and assembled.probability_overlay_active
+                    else "NOT_CALIBRATED"
                 ),
             )
             for item in run.recommendations
