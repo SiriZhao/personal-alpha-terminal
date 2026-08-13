@@ -93,14 +93,37 @@ def _ai_intelligence(result: DailyQuantResult, console: Console) -> None:
             _t("LLM 连接", "Connectivity"),
             str(metadata.get("connectivity", "NOT_TESTED")),
         ),
+        (_t("新增文档", "New documents"), str(metadata.get("new_documents", 0))),
+        (
+            _t("PIT 合格文档", "PIT-eligible documents"),
+            str(metadata.get("pit_eligible_documents", 0)),
+        ),
+        (_t("LLM 调用", "LLM calls"), str(metadata.get("llm_calls", 0))),
+        (_t("缓存命中", "Cache hits"), str(metadata.get("cache_hits", 0))),
         (
             _t("\u5df2\u5904\u7406\u6587\u6863", "Processed documents"),
             str(metadata.get("processed_documents", 0)),
         ),
         (_t("PIT \u4e8b\u4ef6", "PIT events"), str(metadata.get("detected_events", 0))),
         (
+            _t("已接受事件", "Accepted events"),
+            str(metadata.get("accepted_events", metadata.get("detected_events", 0))),
+        ),
+        (
+            _t("隔离事件", "Quarantined events"),
+            str(metadata.get("quarantined_events", 0)),
+        ),
+        (
             _t("SHADOW \u56e0\u5b50\u89c2\u6d4b", "SHADOW factor observations"),
             str(metadata.get("shadow_factor_observations", 0)),
+        ),
+        (
+            _t("最新事件时间", "Latest event time"),
+            str(metadata.get("latest_event_time") or "--"),
+        ),
+        (
+            _t("预计 API 成本", "Estimated API cost"),
+            f"${float(str(metadata.get('estimated_api_cost_usd', 0.0))):.6f}",
         ),
         (
             _t("\u56e0\u5b50\u72b6\u6001", "Factor status"),

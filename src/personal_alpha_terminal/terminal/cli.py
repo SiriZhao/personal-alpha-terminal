@@ -20,6 +20,7 @@ from personal_alpha_terminal.terminal.broad_universe_cli import broad_universe_c
 from personal_alpha_terminal.terminal.config import default_config_text, load_config
 from personal_alpha_terminal.terminal.daily_renderer import render_daily_quant_result
 from personal_alpha_terminal.terminal.forward_track_cli import forward_track_command
+from personal_alpha_terminal.terminal.intelligence_cli import intelligence_command
 from personal_alpha_terminal.terminal.market_sessions import MarketSessionCalendar
 from personal_alpha_terminal.terminal.round7_cli import round7_research_command
 from personal_alpha_terminal.terminal.round8_cli import round8_research_command
@@ -1313,6 +1314,35 @@ def build_parser() -> argparse.ArgumentParser:
     research_import.add_argument("path", type=Path)
     research_import.add_argument("--required-start", default=None)
     research_import.add_argument("--required-end", default=None)
+    intelligence = subparsers.add_parser(
+        "intelligence", help="Acquire and process evidence-backed SEC intelligence (SHADOW only)"
+    )
+    intelligence.add_argument(
+        "--root", type=Path, default=Path("var/intelligence/sec-edgar")
+    )
+    intelligence_actions = intelligence.add_subparsers(
+        dest="intelligence_action", required=True
+    )
+    intelligence_actions.add_parser("status", help="Show sanitized SEC/PIT/LLM status")
+    for action in ("acquire", "backfill"):
+        acquisition = intelligence_actions.add_parser(
+            action, help=f"Run bounded SEC {action}"
+        )
+        acquisition.add_argument("--cik", type=int, required=True)
+        acquisition.add_argument("--mapping", type=Path, default=Path("config/cik-mapping.json"))
+        acquisition.add_argument("--start", default=None)
+        acquisition.add_argument("--end", default=None)
+        acquisition.add_argument("--max-documents", type=int, default=20)
+        acquisition.add_argument("--acquisition-id", default=None)
+    process = intelligence_actions.add_parser(
+        "process", help="Run real structured extraction and deterministic SHADOW transform"
+    )
+    process.add_argument("--max-documents", type=int, default=10)
+    process.add_argument("--cutoff", default=None)
+    process.add_argument("--historical-replay", action="store_true")
+    inspect = intelligence_actions.add_parser("inspect", help="Inspect accepted ticker evidence")
+    inspect.add_argument("--ticker", required=True)
+    intelligence_actions.add_parser("audit", help="Verify immutable raw and evidence ledgers")
     broad_universe = subparsers.add_parser(
         "broad-universe",
         help="Register, sync and report the broad tradable US equity universe",
@@ -1599,6 +1629,8 @@ def main(argv: list[str] | None = None) -> int:
             return _research(args.config)
         if command == "research-data":
             return _research_data_command(args)
+        if command == "intelligence":
+            return intelligence_command(args, load_config(args.config))
         if command == "broad-universe":
             return broad_universe_command(args)
         if command == "forward-track":

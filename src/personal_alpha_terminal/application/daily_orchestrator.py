@@ -6,7 +6,7 @@ from pathlib import Path
 from time import perf_counter
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -56,6 +56,12 @@ from personal_alpha_terminal.intelligence.llm_runtime import (
 )
 from personal_alpha_terminal.intelligence.storage import IntelligenceRepository
 from personal_alpha_terminal.models import Portfolio
+from personal_alpha_terminal.models.intelligence import (
+    IntelligenceExtractionCache,
+    IntelligenceFeature,
+    IntelligenceRawInformation,
+    IntelligenceResearchResult,
+)
 from personal_alpha_terminal.terminal.market_sessions import (
     MarketSession,
     MarketSessionCalendar,
@@ -381,6 +387,35 @@ class DailyQuantOrchestrator:
                     if events
                     else ()
                 )
+                latest_round13_record = session.scalar(
+                    select(IntelligenceResearchResult)
+                    .where(
+                        IntelligenceResearchResult.result_type
+                        == "ROUND13_SEC_SHADOW_FEATURES",
+                        IntelligenceResearchResult.data_cutoff <= as_of,
+                    )
+                    .order_by(IntelligenceResearchResult.data_cutoff.desc())
+                )
+                latest_round13 = (
+                    latest_round13_record.payload if latest_round13_record else {}
+                )
+                pit_document_count = session.scalar(
+                    select(func.count())
+                    .select_from(IntelligenceRawInformation)
+                    .where(IntelligenceRawInformation.observed_at <= as_of)
+                ) or 0
+                latest_event_time = max((item.observed_at for item in events), default=None)
+                cache_entries = session.scalar(
+                    select(func.count()).select_from(IntelligenceExtractionCache)
+                ) or 0
+                shadow_observations = session.scalar(
+                    select(func.count())
+                    .select_from(IntelligenceFeature)
+                    .where(
+                        IntelligenceFeature.status == "SHADOW_ONLY",
+                        IntelligenceFeature.data_cutoff <= as_of,
+                    )
+                ) or 0
                 if observations:
                     payload: dict[str, object] = {
                         "run_id": run_id,
@@ -417,7 +452,7 @@ class DailyQuantOrchestrator:
             message = (
                 "PIT-safe structured intelligence loaded in SHADOW mode"
                 if event_count
-                else "provider ready; no certified PIT text is available for this cutoff"
+                else "NO_NEW_PIT_DOCUMENTS"
             )
             stages["LLM_INTELLIGENCE"] = StageResult(
                 "LLM_INTELLIGENCE",
@@ -430,8 +465,22 @@ class DailyQuantOrchestrator:
                     "connectivity": connectivity,
                     "processed_documents": raw_count,
                     "detected_events": event_count,
-                    "shadow_factor_observations": len(observations),
-                    "cache_entry_count": cache_count,
+                    "new_documents": int(str(latest_round13.get("processed_documents", 0))),
+                    "pit_eligible_documents": pit_document_count,
+                    "llm_calls": int(str(latest_round13.get("llm_calls", 0))),
+                    "cache_hits": int(str(latest_round13.get("llm_cache_hits", 0))),
+                    "accepted_events": int(str(latest_round13.get("events_accepted", 0))),
+                    "quarantined_events": int(
+                        str(latest_round13.get("events_quarantined", 0))
+                    ),
+                    "shadow_factor_observations": shadow_observations,
+                    "latest_event_time": (
+                        latest_event_time.isoformat() if latest_event_time else None
+                    ),
+                    "estimated_api_cost_usd": float(
+                        str(latest_round13.get("estimated_api_cost_usd", 0.0))
+                    ),
+                    "cache_entry_count": max(cache_count, cache_entries),
                     "factor_status": "SHADOW",
                     "production_influence": False,
                     "fallback": "CLASSICAL_CHAMPION",

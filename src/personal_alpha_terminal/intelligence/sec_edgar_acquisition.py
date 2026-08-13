@@ -28,7 +28,10 @@ from personal_alpha_terminal.intelligence.text_corpus import TextCorpusSource
 
 SEC_EDGAR_SUBMISSIONS = "https://data.sec.gov/submissions/CIK{cik:010d}.json"
 SEC_EDGAR_ARCHIVE = "https://www.sec.gov/Archives/edgar/data/{cik}/{accession_no_dashes}/{primary_document}"
-SEC_FORM_TYPES = frozenset({"10-K", "10-Q", "8-K", "10-K/A", "10-Q/A", "8-K/A"})
+_BASE_SEC_FORM_TYPES = ("10-K", "10-Q", "8-K", "6-K", "20-F", "40-F", "DEF 14A", "4")
+SEC_FORM_TYPES = frozenset(
+    (*_BASE_SEC_FORM_TYPES, *(f"{form}/A" for form in _BASE_SEC_FORM_TYPES))
+)
 SEC_AVAILABILITY_POLICY_V1 = "SEC_AVAILABILITY_POLICY_V1"
 SEC_NORMALIZATION_VERSION = "sec-edgar-normalization-v1"
 
@@ -545,6 +548,13 @@ def acquire_company_corpus(
             )
         documents.append(raw)
         existing_raw_ids.add(raw_id)
+        _write_checkpoint(
+            output / "checkpoint.json",
+            acquisition_id=acquisition_id,
+            cik=cik,
+            completed_raw_ids=tuple(sorted(existing_raw_ids)),
+            last_accession=record.accession_number,
+        )
 
     sorted_documents = tuple(sorted(documents, key=lambda item: item.raw_id))
     existing_report = _read_existing_report(output / "acquisition.json")
@@ -602,7 +612,39 @@ def acquire_company_corpus(
         availability_policy=SEC_AVAILABILITY_POLICY_V1,
     )
     report = replace(report, manifest_path=_write_acquisition_manifest(output, report))
+    _write_checkpoint(
+        output / "checkpoint.json",
+        acquisition_id=acquisition_id,
+        cik=cik,
+        completed_raw_ids=tuple(sorted(existing_raw_ids)),
+        last_accession=records[-1].accession_number if records else None,
+        complete=True,
+    )
     return report
+
+
+def _write_checkpoint(
+    path: Path,
+    *,
+    acquisition_id: str,
+    cik: int,
+    completed_raw_ids: tuple[str, ...],
+    last_accession: str | None,
+    complete: bool = False,
+) -> None:
+    payload = {
+        "acquisition_id": acquisition_id,
+        "cik": cik,
+        "completed_raw_ids": completed_raw_ids,
+        "last_accession": last_accession,
+        "complete": complete,
+        "schema_version": "sec-acquisition-checkpoint-v1",
+    }
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8"
+    )
+    temporary.replace(path)
 
 
 def _read_document_jsonl(path: Path) -> tuple[RawInformation, ...]:

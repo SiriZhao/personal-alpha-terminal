@@ -261,6 +261,7 @@ def test_acquire_company_corpus_writes_immutable_raw_landing_zone(
     assert report.status == "ACQUIRED"
     assert report.blockers == ()
     assert (output / "acquisition.json").exists()
+    assert json.loads((output / "checkpoint.json").read_text(encoding="utf-8"))["complete"]
     assert (output / "documents.jsonl").exists()
     raw_files = tuple((output / "320193").glob("*/raw.txt"))
     assert len(raw_files) == 2
