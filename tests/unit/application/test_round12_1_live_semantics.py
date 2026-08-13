@@ -367,6 +367,8 @@ def test_zh_renderer_required_localization_labels_survive() -> None:
         "\u6267\u884c\u8ba1\u5212",
         "\u5238\u5546\u6267\u884c",
         "\u6267\u884c\u65b9\u5f0f",
+        "\u672a\u6267\u884c",
+        "\u4ec5\u624b\u52a8",
         "\u5238\u5546",
         "\u88ab\u62d2\u7edd\u4fe1\u53f7 / \u95e8\u7981\u539f\u56e0",
         "\u6700\u7ec8\u6709\u6548\u51b3\u7b56 "
@@ -398,8 +400,8 @@ def test_zh_renderer_blocked_execution_keeps_status_codes() -> None:
     )
     rendered = capture_daily_quant_result(blocked, locale="zh-CN", width=160)
     assert "\u6267\u884c\u8ba1\u5212\uff1aBLOCKED" in rendered
-    assert "\u5238\u5546\u6267\u884c\uff1aNOT_EXECUTED" in rendered
-    assert "\u6267\u884c\u65b9\u5f0f\uff1aMANUAL_ONLY" in rendered
+    assert "\u5238\u5546\u6267\u884c\uff1a\u672a\u6267\u884c NOT_EXECUTED" in rendered
+    assert "\u6267\u884c\u65b9\u5f0f\uff1a\u4ec5\u624b\u52a8 MANUAL_ONLY" in rendered
 
 
 def test_zh_renderer_probability_fallback_and_size_unavailable_labels() -> None:
@@ -458,6 +460,8 @@ def test_utf8_redirected_stdout_smoke() -> None:
     assert completed.returncode == 0, completed.stderr
     assert "\u6267\u884c\u8ba1\u5212\uff1aPASS" in completed.stdout
     assert "\u6761\u4ef6\u6982\u7387\u8bc4\u4f30" in completed.stdout
+    assert "\u672a\u6267\u884c" in completed.stdout
+    assert "\u4ec5\u624b\u52a8" in completed.stdout
 
 
 def test_legacy_windows_stdout_smoke() -> None:

@@ -1384,8 +1384,8 @@ def _execution(result: DailyQuantResult, console: Console) -> None:
     table = Table(
         title=_t(
             f"\u6267\u884c\u8ba1\u5212\uff1a{plan.status} \u00b7 "
-            f"\u5238\u5546\u6267\u884c\uff1a{execution_state} \u00b7 "
-            f"\u6267\u884c\u65b9\u5f0f\uff1a{plan.execution_mode}",
+            f"\u5238\u5546\u6267\u884c\uff1a\u672a\u6267\u884c {execution_state} \u00b7 "
+            f"\u6267\u884c\u65b9\u5f0f\uff1a\u4ec5\u624b\u52a8 {plan.execution_mode}",
             f"EXECUTION PLAN ? {plan.status} ? BROKER {execution_state} ? "
             f"{plan.execution_mode}",
         )
@@ -1409,8 +1409,8 @@ def _execution(result: DailyQuantResult, console: Console) -> None:
         _t(
             f"\u6267\u884c\u8ba1\u5212\uff1a"
             f"{'PASS' if plan.execution_plan_generated else 'BLOCKED'}   "
-            f"\u5238\u5546\u6267\u884c\uff1aNOT_EXECUTED   "
-            f"\u6267\u884c\u65b9\u5f0f\uff1a{plan.execution_mode}   "
+            f"\u5238\u5546\u6267\u884c\uff1a\u672a\u6267\u884c NOT_EXECUTED   "
+            f"\u6267\u884c\u65b9\u5f0f\uff1a\u4ec5\u624b\u52a8 {plan.execution_mode}   "
             f"\u5238\u5546\uff1a{plan.broker}   Broker API {plan.broker_api}\n"
             f"execution_plan_generated={str(plan.execution_plan_generated).lower()}   "
             f"broker_order_submitted={str(plan.broker_order_submitted).lower()}",
