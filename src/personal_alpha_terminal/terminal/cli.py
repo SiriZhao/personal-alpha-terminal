@@ -1939,6 +1939,79 @@ def _news_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _research_labs_command(args: argparse.Namespace) -> int:
+    """ROUND25 PHASE 8-11: research promotion labs with honest evidence labels."""
+
+    from datetime import UTC as _UTC, datetime as _datetime
+
+    from personal_alpha_terminal.data.database import get_session_factory
+    from personal_alpha_terminal.research.round25_labs import (
+        ExperimentRegistry,
+        ExperimentRegistryEntry,
+        evaluate_etf_sleeve_experiments,
+    )
+
+    config = load_config(args.config)
+    registry = ExperimentRegistry(Path("var/alpha-engine2"))
+    if getattr(args, "labs_action", None) == "list":
+        entries = registry.entries()
+        if not entries:
+            console.print("No registered ROUND25 experiments.")
+            return 0
+        for entry in entries:
+            console.print(
+                f"- {entry.get('experiment_id')} [{entry.get('status')}] "
+                f"hypothesis: {entry.get('hypothesis')}"
+            )
+        return 0
+    now = _datetime.now(_UTC)
+    with get_session_factory()() as session:
+        etf_result = evaluate_etf_sleeve_experiments(session, as_of=now)
+    artifacts = config.report_dir / "validation-artifacts"
+    artifacts.mkdir(parents=True, exist_ok=True)
+    (artifacts / "round25_etf_research.json").write_text(
+        json.dumps(etf_result, ensure_ascii=False, indent=2, default=str),
+        encoding="utf-8",
+    )
+    registry.register(
+        ExperimentRegistryEntry(
+            experiment_id=f"etf-sleeves-a-b-{now.strftime('%Y%m%d')}",
+            hypothesis=(
+                "ETF core/tactical sleeves improve after-cost risk-adjusted returns "
+                "vs equity-only baseline on identical windows and cost model"
+            ),
+            registered_at=now.isoformat(),
+            factor_definition={"engine": "etf-price-factors-v1", "champion": "USAdaptiveAlphaCoreV1:1.0.0:427671e52a53"},
+            parameters={
+                "core_weight": 0.25,
+                "tactical_weight": 0.10,
+                "cost_bps": 5.0,
+                "benchmark": "SPY",
+            },
+            train=("NOT_APPLICABLE_INSUFFICIENT_HISTORY", "NOT_APPLICABLE_INSUFFICIENT_HISTORY"),
+            validation=("NOT_APPLICABLE_INSUFFICIENT_HISTORY", "NOT_APPLICABLE_INSUFFICIENT_HISTORY"),
+            embargo_sessions=0,
+            locked_test=("NOT_APPLICABLE_INSUFFICIENT_HISTORY", "NOT_APPLICABLE_INSUFFICIENT_HISTORY"),
+            benchmark="SPY",
+            cost_model="fixed-entry-bps-v1",
+            result=etf_result,
+            status=etf_result["evidence"]["certification"],
+        )
+    )
+    console.print(f"status: {etf_result['status']}")
+    console.print(f"evidence: {etf_result['evidence']}")
+    for name, experiment in etf_result.get("experiments", {}).items():
+        metrics = experiment.get("metrics", {})
+        console.print(
+            f"- {name}: net {metrics.get('net_return')}, sharpe {metrics.get('sharpe')}, "
+            f"maxDD {metrics.get('max_drawdown')}"
+        )
+    console.print(
+        "No candidate is promoted automatically; promotion requires explicit user authorization."
+    )
+    return 0
+
+
 def _execution_costs_command(args: argparse.Namespace) -> int:
     """ROUND25 PHASE 15: realized execution cost evidence (research only)."""
 
@@ -2634,6 +2707,10 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("market-state", help="Deterministic MARKET_STATE_SNAPSHOT from verified price bars")
     subparsers.add_parser("execution", help="Interactive manual execution wizard (real ledger)")
     subparsers.add_parser("execution-costs", help="Realized execution cost observations (research only)")
+    labs = subparsers.add_parser("research-labs", help="ROUND25 research promotion labs (never auto-promote)")
+    labs_actions = labs.add_subparsers(dest='labs_action', required=True)
+    labs_actions.add_parser("evaluate", help="Run ETF/overlay research A/B and write evidence artifacts")
+    labs_actions.add_parser("list", help="List frozen experiment registry entries")
     reconcile = subparsers.add_parser(
         "portfolio-reconcile", help="Compare ledger vs broker CSV snapshot (PREVIEW default)"
     )
@@ -3130,6 +3207,8 @@ def main(argv: list[str] | None = None) -> int:
             return _execution_wizard_command(args)
         if command == "execution-costs":
             return _execution_costs_command(args)
+        if command == "research-labs":
+            return _research_labs_command(args)
         if command == "portfolio-reconcile":
             return _portfolio_reconcile_command(args)
         if command == "news":
