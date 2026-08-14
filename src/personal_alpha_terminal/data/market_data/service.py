@@ -328,6 +328,7 @@ class MarketDataEngine:
         assert batch_provider is not None
         chunk_size = int(getattr(batch_provider, "chunk_size", 100))
         requested = [item for item in stocks if item.symbol]
+        planning_started = perf_counter()
         target = sorted(item.symbol for item in requested)
         stock_by_symbol = {item.symbol: item for item in requested}
         required_history_start = end_date - timedelta(
@@ -342,13 +343,17 @@ class MarketDataEngine:
         state_changed = False
         decisions: dict[str, tuple[str, date, date]] = {}
         deferred_until: dict[str, tuple[str, date | None]] = {}
+        # ROUND25 PHASE 13: one GROUP BY query instead of one
+        # price_date_bounds roundtrip per symbol (N+1 elimination).
+        bounds_by_id = self._repository.price_date_bounds_batch(
+            (stock.id for stock in requested),
+            batch_provider.source,
+        )
         for symbol in target:
             stock = stock_by_symbol.get(symbol)
             if stock is None:
                 continue
-            earliest, latest = self._repository.price_date_bounds(
-                stock.id, batch_provider.source
-            )
+            earliest, latest = bounds_by_id.get(stock.id, (None, None))
             listing_date = getattr(stock, "list_date", None)
             refresh_class, eligible_after = classify_backfill_decision(
                 symbol,
@@ -434,6 +439,7 @@ class MarketDataEngine:
                 RETRY_AFTER,
             }:
                 pending_by_window.setdefault((request_start, request_end), []).append(symbol)
+        planning_seconds = perf_counter() - planning_started
         if progress is not None:
             cached_count = sum(
                 1
@@ -444,7 +450,13 @@ class MarketDataEngine:
                 f"[\u5e02\u573a\u6570\u636e] \u68c0\u67e5\u7f13\u5b58 "
                 f"{cached_count} / {len(target)}"
             )
-        batch_timings: list[dict[str, object]] = []
+        batch_timings: list[dict[str, object]] = [
+            {
+                "phase": "cache_status_planning",
+                "symbol_count": len(target),
+                "duration_seconds": round(planning_seconds, 4),
+            }
+        ]
         for (request_start, request_end), symbols in sorted(pending_by_window.items()):
             chunks = [
                 symbols[index : index + chunk_size]

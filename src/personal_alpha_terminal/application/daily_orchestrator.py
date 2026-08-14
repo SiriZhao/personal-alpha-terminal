@@ -202,14 +202,23 @@ class DailyQuantOrchestrator:
         certification: DailyDataCertification | None = None
         data_failure_reasons: list[str] = []
         stage_started = perf_counter()
+        _data_segment_log: list[tuple[str, float]] = []
+
+        def _segment(name: str, started: float) -> None:
+            _data_segment_log.append((name, round(perf_counter() - started, 4)))
+
         try:
+            _seg = perf_counter()
             with self._factory.begin() as session:
+                _segment("session_begin", _seg)
+                _seg = perf_counter()
                 data_service = DataService(
                     session,
                     self._settings,
                     snapshot_root=self._snapshot_root.parent / "data-snapshots",
                     sync_runner=self._sync_runner,
                 )
+                _segment("data_service_init", _seg)
                 if refresh:
                     if progress is not None:
                         progress("[\u5e02\u573a\u6570\u636e] \u5237\u65b0\u4e2d")
@@ -233,21 +242,29 @@ class DailyQuantOrchestrator:
                         # A live decision can only occur after the newly retrieved evidence
                         # exists.  Calendar/trade-date resolution remains anchored to run start.
                         effective_decision_time = datetime.now(UTC)
+                _seg = perf_counter()
                 readiness = data_service.get_data_readiness(as_of=effective_decision_time)
+                _segment("get_data_readiness", _seg)
+                _seg = perf_counter()
                 manifest = data_service.latest_manifest()
+                _segment("latest_manifest", _seg)
+                _seg = perf_counter()
                 certification = data_service.daily_certification(
                     analysis_date=analysis_date,
                     decision_time=effective_decision_time,
                 )
+                _segment("daily_certification_1", _seg)
                 if certification.latest_completed_session is not None:
                     resolved_analysis = certification.latest_completed_session
                     if resolved_analysis != analysis_date:
                         analysis_date = resolved_analysis
                         trade_date = self._calendar.next_trading_day(analysis_date)
+                    _seg = perf_counter()
                     certification = data_service.daily_certification(
                         analysis_date=analysis_date,
                         decision_time=effective_decision_time,
                     )
+                    _segment("daily_certification_2", _seg)
                 data_health = (
                     DataHealthItem(
                         dataset="LIVE_RAW_OHLCV",
@@ -296,6 +313,8 @@ class DailyQuantOrchestrator:
                     "refresh": refresh,
                     **certification.metadata(),
                     "output_row_count": certification.valid_bars,
+                    "data_stage_profile": data_service.profile_document(),
+                    "data_stage_segments": dict(_data_segment_log),
                 },
             )
         except (OSError, RuntimeError, SQLAlchemyError, ValueError) as error:

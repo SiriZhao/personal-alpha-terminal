@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
+from time import perf_counter
 from typing import Protocol
 
 from sqlalchemy import func, select
@@ -98,6 +99,12 @@ class SyncOutcome:
 class DataService:
     """Research-data orchestration without presentation-layer dependencies."""
 
+    # ROUND25 PHASE 13: DATA internal profiler.  Named wall-time segments are
+    # recorded so the daily terminal reports where the data stage spends time
+    # (universe load / cache status / provider planning / download / writes /
+    # certification) instead of one opaque number.
+    _profile_segments: dict[str, float]
+
     def __init__(
         self,
         session: Session,
@@ -113,6 +120,17 @@ class DataService:
         self._uses_default_sync_runner = sync_runner is None
         self._sync_runner = sync_runner or self._run_market_engine
         self._lineage_runner = lineage_runner
+        self._profile_segments = {}
+
+    def profile_segment(self, name: str, elapsed_seconds: float) -> None:
+        previous = self._profile_segments.get(name, 0.0)
+        self._profile_segments[name] = previous + float(elapsed_seconds)
+
+    def profile_document(self) -> dict[str, object]:
+        return {
+            "segments_seconds": dict(self._profile_segments),
+            "total_seconds": sum(self._profile_segments.values()),
+        }
 
     def get_data_readiness(self, *, as_of: datetime | None = None) -> StatusDetail:
         now = as_of or datetime.now(UTC)
@@ -203,11 +221,20 @@ class DataService:
         end_date: date,
         progress: Callable[[str], None] | None = None,
     ) -> SyncOutcome:
+        segment_started = perf_counter()
         if self._uses_default_sync_runner:
             self._refresh_broad_current_directory()
+        self.profile_segment("directory_refresh", perf_counter() - segment_started)
+        segment_started = perf_counter()
         self._register_minimum_universe()
+        self.profile_segment("minimum_universe_register", perf_counter() - segment_started)
+        segment_started = perf_counter()
         self._register_catalog_etfs()
+        self.profile_segment("catalog_etf_register", perf_counter() - segment_started)
+        segment_started = perf_counter()
         self._create_universe_snapshot(end_date)
+        self.profile_segment("universe_snapshot", perf_counter() - segment_started)
+        segment_started = perf_counter()
         calendar_start = min(
             start_date - timedelta(days=5),
             end_date - timedelta(days=self._settings.console_initial_history_days),
@@ -216,11 +243,19 @@ class DataService:
             calendar_start,
             end_date + timedelta(days=5),
         )
+        self.profile_segment("exchange_calendar", perf_counter() - segment_started)
         requested_at = datetime.now(UTC)
         self._active_progress = progress
+        segment_started = perf_counter()
         report = self._sync_runner(self._session, start_date, end_date)
+        self.profile_segment("provider_sync", perf_counter() - segment_started)
         completed_at = datetime.now(UTC)
-        return self._persist_manifest(report, requested_at, completed_at, start_date, end_date)
+        segment_started = perf_counter()
+        manifest = self._persist_manifest(
+            report, requested_at, completed_at, start_date, end_date
+        )
+        self.profile_segment("manifest_persist", perf_counter() - segment_started)
+        return manifest
 
     def _refresh_broad_current_directory(self) -> None:
         """Refresh current listings once per UTC day without blocking price sync."""

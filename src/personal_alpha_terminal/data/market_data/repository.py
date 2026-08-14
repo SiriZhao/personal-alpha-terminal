@@ -84,6 +84,38 @@ class PriceRepository:
         earliest, latest = self._session.execute(statement).one()
         return earliest, latest
 
+    def price_date_bounds_batch(
+        self, stock_ids: Iterable[int], source: str
+    ) -> dict[int, tuple[date | None, date | None]]:
+        """Batch price bounds for many stocks in one GROUP BY query.
+
+        ROUND25 PHASE 13: the per-symbol ``price_date_bounds`` call is an N+1
+        hot path for 5000+ securities; this method collapses the whole lookup
+        into a single indexed aggregation.
+        """
+
+        ids = [int(stock_id) for stock_id in stock_ids if stock_id is not None]
+        bounds: dict[int, tuple[date | None, date | None]] = {
+            stock_id: (None, None) for stock_id in ids
+        }
+        if not ids:
+            return bounds
+        statement = (
+            select(
+                Price.stock_id,
+                func.min(Price.trade_date),
+                func.max(Price.trade_date),
+            )
+            .where(
+                Price.stock_id.in_(ids),
+                Price.source == source,
+            )
+            .group_by(Price.stock_id)
+        )
+        for stock_id, earliest, latest in self._session.execute(statement).all():
+            bounds[int(stock_id)] = (earliest, latest)
+        return bounds
+
     def latest_price_date(self, stock_id: int, source: str) -> date | None:
         return self.price_date_bounds(stock_id, source)[1]
 

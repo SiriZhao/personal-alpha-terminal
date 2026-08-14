@@ -121,6 +121,38 @@ class BroadUSUniverseService:
             (item.exchange, item.symbol): item for item in securities if item.asset_type == "stock"
         }
         directory_by_key = {(item.exchange, item.symbol): item for item in directory.records}
+        # ROUND25 PHASE 13: hoist the two per-symbol queries out of the loop.
+        # The exchange-session calendar is identical for every symbol, and the
+        # PIT total-return version lookup is batched with one IN query; both
+        # previously cost ~10k SQLite roundtrips for a 5k-symbol universe.
+        expected_dates = tuple(
+            self.session.scalars(
+                select(distinct(ExchangeSession.session_date))
+                .where(
+                    ExchangeSession.session_date < universe_date,
+                    ExchangeSession.is_open.is_(True),
+                    ExchangeSession.available_time <= decision_time,
+                )
+                .order_by(ExchangeSession.session_date.desc())
+                .limit(rules.minimum_trading_sessions)
+            )
+        )
+        candidate_stock_ids = [stock.id for stock in stock_by_key.values()]
+        pit_covered: frozenset[int] = frozenset()
+        if candidate_stock_ids:
+            pit_covered = frozenset(
+                self.session.scalars(
+                    select(PITTotalReturnVersion.stock_id)
+                    .where(
+                        PITTotalReturnVersion.stock_id.in_(candidate_stock_ids),
+                        PITTotalReturnVersion.as_of_time <= decision_time,
+                        PITTotalReturnVersion.data_cutoff.is_not(None),
+                        PITTotalReturnVersion.data_cutoff <= decision_time,
+                        PITTotalReturnVersion.certification_status == "CERTIFIED",
+                    )
+                    .distinct()
+                )
+            )
         observations: list[SecurityEligibilityObservation] = []
         for key, stock in stock_by_key.items():
             record = directory_by_key.get(key)
@@ -132,6 +164,8 @@ class BroadUSUniverseService:
                 universe_date=universe_date,
                 decision_time=decision_time,
                 rules=rules,
+                expected_dates=expected_dates,
+                pit_covered=pit_covered,
             )
             if observation is not None:
                 observations.append(observation)
@@ -229,6 +263,8 @@ class BroadUSUniverseService:
         universe_date: date,
         decision_time: datetime,
         rules: EligibilityRules,
+        expected_dates: tuple[date, ...],
+        pit_covered: frozenset[int],
     ) -> SecurityEligibilityObservation | None:
         # Eligibility for the session uses data strictly before the universe date.
         rows = tuple(
@@ -249,18 +285,6 @@ class BroadUSUniverseService:
             return None
         unique_rows = {item.trade_date: item for item in rows}
         ordered = tuple(unique_rows[key] for key in sorted(unique_rows))
-        expected_dates = tuple(
-            self.session.scalars(
-                select(distinct(ExchangeSession.session_date))
-                .where(
-                    ExchangeSession.session_date < universe_date,
-                    ExchangeSession.is_open.is_(True),
-                    ExchangeSession.available_time <= decision_time,
-                )
-                .order_by(ExchangeSession.session_date.desc())
-                .limit(rules.minimum_trading_sessions)
-            )
-        )
         expected = len(expected_dates) or rules.minimum_trading_sessions
         expected_set = set(expected_dates)
         covered = (
@@ -275,18 +299,7 @@ class BroadUSUniverseService:
             for item in recent
             if item.volume is not None and float(item.volume) >= 0
         )
-        version = self.session.scalar(
-            select(PITTotalReturnVersion)
-            .where(
-                PITTotalReturnVersion.stock_id == stock.id,
-                PITTotalReturnVersion.as_of_time <= decision_time,
-                PITTotalReturnVersion.data_cutoff.is_not(None),
-                PITTotalReturnVersion.data_cutoff <= decision_time,
-                PITTotalReturnVersion.certification_status == "CERTIFIED",
-            )
-            .order_by(PITTotalReturnVersion.as_of_time.desc(), PITTotalReturnVersion.id.desc())
-            .limit(1)
-        )
+        version_available = stock.id in pit_covered
         available_at = max(
             item.available_time for item in ordered if item.available_time is not None
         )
@@ -305,7 +318,7 @@ class BroadUSUniverseService:
             median_dollar_volume=(median(dollar_volumes) if dollar_volumes else None),
             valid_bar_coverage=coverage,
             missing_ratio=max(0.0, 1.0 - coverage),
-            corporate_action_integrity=version is not None,
+            corporate_action_integrity=version_available,
             feature_available=len(ordered) >= rules.minimum_trading_sessions,
         )
 
