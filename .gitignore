@@ -14,6 +14,8 @@ __pycache__/
 .var/
 .mypy_cache/
 .ruff_cache/
+.tox/
+.nox/
 .hypothesis/
 .ipynb_checkpoints/
 .coverage
@@ -40,13 +42,14 @@ data/research/checkpoints/
 *.part
 source_audit_export/
 logs/
+temp/
 /reports/
-/docs/reports/*
-!/docs/reports/INDEX.md
+/docs/reports/
 diagnostics/
 updates/
 *.log
 *.log.[0-9]*
+*.pyd.tmp
 *.dmp
 *.dump
 *.zip.tmp

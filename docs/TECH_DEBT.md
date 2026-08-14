@@ -72,13 +72,14 @@
 
 ### TECH-007 — Dual local virtual environments
 
-- Severity: P2
-- Area: `.venv` (~1.1 GB), `.venv314` (~0.9 GB)
-- Description: Two local envs both git-ignored.
-- Why retained: Environment migration is outside audit scope and may be intentional.
-- Risk: Disk usage and version drift.
-- Recommended future action: Pick one canonical env; keep the other only if a Python-version
-  matrix is required.
+- Severity: P2 / IN PROGRESS (2026-08-14)
+- Area: `.venv`, `.venv314`
+- Description: Current execution paths and long-term documentation use the existing Python
+  3.12 `.venv`; `.venv314` has no active source/config dependency but remains on disk pending
+  a safe local filesystem cleanup while the terminal instance is active.
+- Remaining risk: Disk usage and version drift remain until the obsolete environment is removed.
+- Next action: Stop the active terminal instance, re-verify the path, then remove `.venv314`
+  with the approved workspace cleanup mechanism.
 
 ## P3
 

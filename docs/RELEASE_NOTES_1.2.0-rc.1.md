@@ -29,8 +29,8 @@ Status: RELEASE CANDIDATE, not final release.
 ## Install
 
 ```powershell
-python -m venv .venv314
-.\.venv314\Scripts\python.exe -m pip install -e ".[dev,ai]"
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".[dev,ai]"
 ```
 
 User guide: docs/USER_GUIDE_zh-CN.md

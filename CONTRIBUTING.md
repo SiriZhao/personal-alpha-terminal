@@ -21,10 +21,10 @@ calibrated, survivorship-safe approval artifact exists.
 
 ## Development environment
 
-Use `.venv314`:
+Use `.venv`:
 
 ```powershell
-.\.venv314\Scripts\python.exe -m pip install -e ".[dev,ai]"
+.\.venv\Scripts\python.exe -m pip install -e ".[dev,ai]"
 ```
 
 ## Required checks
@@ -32,10 +32,10 @@ Use `.venv314`:
 Before commit:
 
 ```powershell
-.\.venv314\Scripts\ruff.exe check .
-.\.venv314\Scripts\python.exe -m mypy src\personal_alpha_terminal
-.\.venv314\Scripts\python.exe scripts\secret_scan.py
-.\.venv314\Scripts\python.exe -m pytest -q --basetemp=.tmp\pytest-basetemp
+.\.venv\Scripts\ruff.exe check .
+.\.venv\Scripts\python.exe -m mypy src\personal_alpha_terminal
+.\.venv\Scripts\python.exe scripts\secret_scan.py
+.\.venv\Scripts\python.exe -m pytest -q --basetemp=.tmp\pytest-basetemp
 ```
 
 Use repository-local basetemp on Windows when the system pytest temp directory

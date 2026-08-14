@@ -16,7 +16,7 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from personal_alpha_terminal.data.broad_market.batch_provider import (
@@ -790,6 +790,121 @@ class BroadUniverseDataService:
                 key: value for key, value in counts.items() if key.startswith(("ADV", "MEDIAN"))
             }
         return {}
+
+    def history_sufficiency(
+        self,
+        *,
+        universe_date: date,
+        decision_time: datetime,
+        required_history_sessions: int | None = None,
+    ) -> dict[str, object]:
+        """Measure per-symbol factor-history sufficiency against an explicit contract."""
+        from personal_alpha_terminal.application.broad_universe_service import (
+            BroadUSUniverseService,
+        )
+
+        service = BroadUSUniverseService(
+            self.session,
+            cache_root=self.directory_root,
+            rules=self.rules,
+        )
+        selection = service.select(
+            universe_date=universe_date,
+            decision_time=decision_time,
+            reference_symbols=("SPY", "QQQ"),
+        )
+        required = required_history_sessions or self.rules.minimum_trading_sessions
+        stocks = {
+            (item.exchange, item.symbol): item
+            for item in self.session.scalars(
+                select(SecurityMaster).where(
+                    SecurityMaster.market == "US",
+                    SecurityMaster.asset_type == "stock",
+                )
+            )
+        }
+        rows = self.session.execute(
+            select(
+                Price.stock_id,
+                func.count(Price.id),
+                func.min(Price.trade_date),
+                func.max(Price.trade_date),
+                func.sum(
+                    case((Price.open <= 0, 1), (Price.high <= 0, 1), (Price.close <= 0, 1), else_=0)
+                ),
+            )
+            .where(
+                Price.source == self.SOURCE,
+                Price.price_type == "unadjusted_ohlcv",
+                Price.trade_date < universe_date,
+                Price.available_time.is_not(None),
+                Price.available_time <= decision_time,
+            )
+            .group_by(Price.stock_id)
+        ).all()
+        by_stock = {
+            stock_id: (count, min_date, max_date, invalid)
+            for stock_id, count, min_date, max_date, invalid in rows
+        }
+        recent_cutoff = universe_date - timedelta(days=5)
+        listing_cutoff = universe_date - timedelta(days=max(2, int(required) * 2))
+        buckets: dict[str, int] = {}
+        samples: dict[str, list[str]] = {}
+        unresolved: list[str] = []
+        for record in selection.eligibility.security_type_eligible:
+            stock = stocks.get((record.exchange, record.symbol))
+            symbol = record.symbol
+            if stock is None:
+                unresolved.append(symbol)
+                continue
+            stats = by_stock.get(stock.id)
+            if stats is None:
+                buckets["NO_DATA"] = buckets.get("NO_DATA", 0) + 1
+                samples.setdefault("NO_DATA", []).append(symbol)
+                continue
+            count, min_date, max_date, invalid = stats
+            if int(invalid or 0) > 0:
+                buckets["INVALID_DATA"] = buckets.get("INVALID_DATA", 0) + 1
+                samples.setdefault("INVALID_DATA", []).append(symbol)
+                continue
+            if max_date is None or max_date < recent_cutoff:
+                buckets["MISSING_RECENT_BARS"] = buckets.get("MISSING_RECENT_BARS", 0) + 1
+                samples.setdefault("MISSING_RECENT_BARS", []).append(symbol)
+                continue
+            if (
+                stock.list_date is not None
+                and stock.list_date > listing_cutoff
+                and count < required
+            ):
+                buckets["NEW_LISTING"] = buckets.get("NEW_LISTING", 0) + 1
+                samples.setdefault("NEW_LISTING", []).append(symbol)
+                continue
+            if count < required:
+                span = (max_date - min_date).days + 1
+                reason = "MISSING_INTERNAL_BARS" if span >= required else "INSUFFICIENT_LOOKBACK"
+                buckets[reason] = buckets.get(reason, 0) + 1
+                samples.setdefault(reason, []).append(symbol)
+                continue
+            buckets["HISTORY_SUFFICIENT"] = buckets.get("HISTORY_SUFFICIENT", 0) + 1
+            samples.setdefault("HISTORY_SUFFICIENT", []).append(symbol)
+        denominator = len(selection.eligibility.security_type_eligible)
+        sufficient = buckets.get("HISTORY_SUFFICIENT", 0)
+        if unresolved:
+            buckets["IDENTIFIER_UNRESOLVED"] = buckets.get("IDENTIFIER_UNRESOLVED", 0) + 1
+            samples["IDENTIFIER_UNRESOLVED"] = unresolved[:200]
+        return {
+            "universe_date": universe_date.isoformat(),
+            "decision_time": decision_time.isoformat(),
+            "required_history_sessions": required,
+            "denominator": denominator,
+            "history_sufficient": sufficient,
+            "coverage_pct": round(100 * sufficient / denominator, 2) if denominator else None,
+            "reasons": dict(sorted(buckets.items())),
+            "samples": {key: value[:200] for key, value in samples.items()},
+            "directory_provider": selection.directory.provider,
+            "directory_hash": selection.directory.content_hash,
+            "snapshot_id": selection.eligibility.snapshot_hash,
+        }
 
     # ------------------------------------------------------------------
     # Coverage

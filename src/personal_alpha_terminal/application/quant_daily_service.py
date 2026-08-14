@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass, field, replace
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from hashlib import sha256
 from math import floor
@@ -21,6 +21,10 @@ from personal_alpha_terminal.application.regime_link import (
     REGIME_UNAVAILABLE,
     RegimeLinkResult,
     latest_regime_link,
+)
+from personal_alpha_terminal.application.strategy_approval import (
+    StrategyApproval,
+    StrategyApprovalStore,
 )
 from personal_alpha_terminal.core.effective_config import EffectiveRuntimeConfig
 from personal_alpha_terminal.data.us_market.session import CertifiedUSSessionService
@@ -156,6 +160,9 @@ class TodayResult:
     operational_policy_reason: str = "OPERATIONAL_POLICY_NOT_CONFIGURED"
     operational_policy_hash: str = "NOT_CONFIGURED"
     operational_policy_identity_hash: str = "NOT_CONFIGURED"
+    strategy_approval_id: str = "NOT_CONFIGURED"
+    strategy_approval_decision: str = "BLOCK"
+    strategy_approval_effective: bool = False
     signal_authorization_class: str = "FAIL_BLOCKING"
     signal_evidence_level: str = "DIAGNOSTIC_ONLY"
     operationally_allowed: bool = False
@@ -182,6 +189,9 @@ class ProductionDailyWorkflow:
         )
         self.operational_store = OperationalPolicyStore(
             self.effective_config.operational_policy_path
+        )
+        self.strategy_approval_store = StrategyApprovalStore(
+            self.effective_config.strategy_approval_path
         )
 
     def _pipeline(
@@ -215,12 +225,19 @@ class ProductionDailyWorkflow:
             operational_mode=operational_mode,
         )
 
-    def run(self, *, portfolio_id: int | None, decision_time: datetime) -> TodayResult:
+    def run(
+        self,
+        *,
+        portfolio_id: int | None,
+        decision_time: datetime,
+        analysis_date: date | None = None,
+    ) -> TodayResult:
         if decision_time.tzinfo is None:
             raise ValueError("decision_time must be timezone-aware")
         try:
             research = self.assembler.assemble_research(
                 decision_time=decision_time,
+                analysis_date=analysis_date,
             )
         except (ArithmeticError, LookupError, RuntimeError, ValueError) as error:
             blocker = str(error) or type(error).__name__
@@ -287,11 +304,15 @@ class ProductionDailyWorkflow:
                 )
             )
             provisional_policy = self._operational_policy(decision_time)
+            strategy_approval = self._strategy_approval(decision_time)
             if portfolio_approval is not None:
                 validation_id = portfolio_approval.validation_id
                 operational_mode = False
             elif provisional_policy is not None:
                 validation_id = provisional_policy.policy_id
+                operational_mode = True
+            elif strategy_approval is not None:
+                validation_id = strategy_approval.approval_id
                 operational_mode = True
             else:
                 validation_id = None
@@ -810,6 +831,9 @@ class ProductionDailyWorkflow:
             ),
             signal_authorization_class=research.signal_authorization_class,
             signal_evidence_level=research.signal_evidence_level,
+            strategy_approval_id=research.strategy_approval_id,
+            strategy_approval_decision=research.strategy_approval_decision,
+            strategy_approval_effective=research.strategy_approval_effective,
             operationally_allowed=operationally_allowed,
             operational_degraded_reason=_operational_degraded_reason(
                 allowed=operational,
@@ -830,6 +854,26 @@ class ProductionDailyWorkflow:
             now=decision_time,
         )
         return status.policy if status.effective else None
+
+    def _strategy_approval(self, decision_time: datetime) -> StrategyApproval | None:
+        from personal_alpha_terminal.application.strategy_approval import (
+            StrategyApprovalDecision,
+        )
+
+        identity = resolve_current_operational_identity(
+            self.effective_config,
+            self.assembler.strategy,
+            decision_time=decision_time,
+        )
+        approval, _reason = self.strategy_approval_store.status(
+            identity, now=decision_time
+        )
+        if (
+            approval is not None
+            and approval.decision is StrategyApprovalDecision.ALLOW_PROVISIONAL_FORWARD
+        ):
+            return approval
+        return None
 
     def _persist_blocked(
         self,

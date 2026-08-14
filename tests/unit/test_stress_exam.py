@@ -30,6 +30,14 @@ def test_stress_exam_preserves_long_only_and_caps() -> None:
         assert scenario.final_gross_exposure <= 1.0 + 1e-12
 
 
+def test_stress_exam_has_no_fixed_cardinality_cap_for_25_symbols() -> None:
+    symbols = ("SPY", *(f"S{index:02d}" for index in range(1, 25)))
+    summary = run_stress_exam(symbols=symbols)
+    assert all("MAX_HOLDINGS_VIOLATION" not in item.risk_violations for item in summary.scenarios)
+    assert all(item.largest_position_max <= 0.15 + 1e-12 for item in summary.scenarios)
+    assert all(item.gross_exposure_mean <= 1.0 + 1e-12 for item in summary.scenarios)
+
+
 def test_stress_exam_classification_is_pass_with_warnings() -> None:
     summary = run_stress_exam()
     assert summary.classification == "STRESS_EXAM_PASS_WITH_WARNINGS"

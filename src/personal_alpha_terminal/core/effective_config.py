@@ -58,8 +58,6 @@ class BroadUniverseConfig:
     # Fail-closed guards for the current operational universe.
     minimum_operational_universe: int = 50
     coverage_collapse_ratio: float = 0.5
-    # Candidate compression bound feeding the portfolio optimizer.
-    candidate_max: int = 100
     candidate_min_alpha: float = 0.0
 
     def __post_init__(self) -> None:
@@ -81,8 +79,6 @@ class BroadUniverseConfig:
             raise ValueError("broad universe minimum operational size is invalid")
         if not 0 < self.coverage_collapse_ratio <= 1:
             raise ValueError("broad universe coverage collapse ratio is invalid")
-        if self.candidate_max < 1:
-            raise ValueError("broad universe candidate bound is invalid")
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,6 +94,7 @@ class EffectiveRuntimeConfig:
     cache_dir: Path = Path("data/cache")
     report_dir: Path = Path("reports")
     operational_policy_path: Path = Path("var/operational/operational_policy.json")
+    strategy_approval_path: Path = Path("var/operational/strategy_approval.json")
     operational_universe_baseline_path: Path = Path(
         "var/operational-universe-baseline.json"
     )
@@ -395,7 +392,6 @@ def resolve_effective_runtime_config(
             coverage_collapse_ratio=_number(
                 scalar, "universe_coverage_collapse_ratio", 0.5
             ),
-            candidate_max=_integer(scalar, "universe_candidate_max", 100),
             candidate_min_alpha=_number(scalar, "universe_candidate_min_alpha", 0.0),
         ),
         stress_risk=StressRiskConfig(
@@ -414,9 +410,6 @@ def resolve_effective_runtime_config(
             warning_ratio=_number(scalar, "stress_warning_ratio", 0.80),
         ),
         portfolio_constraints=PortfolioConstraints(
-            maximum_holdings=_optional_integer(
-                scalar, "portfolio_max_holdings", 10
-            ),
             no_trade_band=_number(scalar, "no_trade_band", 0.005),
             minimum_rebalance_weight=_number(
                 scalar, "minimum_rebalance_weight", 0.01
@@ -712,7 +705,6 @@ night_execution_enabled: false
 default_execution_session: REGULAR
 allow_calendar_fallback: false
 stress_maximum_cvar_loss: 0.06
-portfolio_max_holdings: 10
 stress_maximum_liquidation_days: 5.0
 stress_maximum_correlation_spike_loss: 0.08
 stress_maximum_gap_loss: 0.08

@@ -15,10 +15,10 @@
 ## 快速开始
 
 ```powershell
-python -m venv .venv314
-.\.venv314\Scripts\python.exe -m pip install -e ".[dev,ai]"
-.\.venv314\Scripts\python.exe main.py doctor
-.\.venv314\Scripts\python.exe main.py daily
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".[dev,ai]"
+.\.venv\Scripts\python.exe main.py doctor
+.\.venv\Scripts\python.exe main.py daily
 ```
 
 ## 常用命令

@@ -185,4 +185,4 @@ python scripts/export_historical_data_acquisition.py --config config.yaml
 
 详细审计见 [Broad Universe 与 Probability Overlay 报告](docs/BROAD_UNIVERSE_PROBABILITY_OVERLAY_REPORT.md)。
 
-更多资料：[统一主链收口报告](docs/UNIFIED_LIVE_CLOSURE_REPORT.md)、[中文终端架构](docs/CHINESE_TERMINAL_ARCHITECTURE.md)、[历史数据基础报告](docs/RESEARCH_DATA_FOUNDATION_REPORT.md)、[历史数据获取与认证报告](docs/HISTORICAL_DATA_ACQUISITION_REPORT.md)、[Provider 决策](docs/DATA_PROVIDER_DECISION.md)、[Alpha 研究认证报告](docs/ALPHA_RESEARCH_CERTIFICATION_REPORT.md)。
+更多资料：[Current status](docs/CURRENT_STATUS.md)、[中文终端架构](docs/CHINESE_TERMINAL_ARCHITECTURE.md)、[历史数据基础报告](docs/RESEARCH_DATA_FOUNDATION_REPORT.md)、[历史数据获取与认证报告](docs/HISTORICAL_DATA_ACQUISITION_REPORT.md)、[Provider 决策](docs/DATA_PROVIDER_DECISION.md)、[Alpha 研究认证报告](docs/ALPHA_RESEARCH_CERTIFICATION_REPORT.md)。

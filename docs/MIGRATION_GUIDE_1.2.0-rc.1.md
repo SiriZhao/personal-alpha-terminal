@@ -41,9 +41,9 @@ python main.py operational-policy create --decision ALLOW_PROVISIONAL
 ## Fresh install
 
 ```powershell
-python -m venv .venv314
-.\.venv314\Scripts\python.exe -m pip install -e ".[dev,ai]"
-.\.venv314\Scripts\python.exe main.py doctor
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".[dev,ai]"
+.\.venv\Scripts\python.exe main.py doctor
 ```
 
 ## Rollback

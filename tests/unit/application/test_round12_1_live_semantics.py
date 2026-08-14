@@ -156,21 +156,15 @@ def _result_with_decision(confidence: float | None) -> DailyQuantResult:
     )
 
 
-def test_maximum_holdings_is_canonical_and_validated() -> None:
+def test_production_constraints_have_no_fixed_holdings_cap() -> None:
     constraints = PortfolioConstraints()
-    assert constraints.maximum_holdings == 10
-    try:
-        PortfolioConstraints(maximum_holdings=0)
-    except ValueError as error:
-        assert "maximum_holdings" in str(error)
-    else:
-        raise AssertionError("invalid maximum holdings accepted")
+    assert not hasattr(constraints, "maximum_holdings")
 
 
 def test_candidate_compression_is_alpha_pool_not_top10_truncation() -> None:
     signals = tuple(_signal(f"S{i:03d}", 0.1 - i * 0.001) for i in range(25))
-    result = compress_candidates(signals, candidate_max=15, candidate_min_alpha=0.0)
-    assert len(result.candidate_symbols) == 15
+    result = compress_candidates(signals, candidate_min_alpha=0.0)
+    assert len(result.candidate_symbols) == 25
     assert result.steps[0].name == "factor_ranked"
     assert result.steps[0].count == 25
     assert result.candidate_symbols[0] == "S000"
@@ -279,10 +273,10 @@ def test_size_diagnostics_separate_valid_missing_and_future_independent() -> Non
     assert missing["market_cap_missing_count"] == 2
 
 
-def test_canonical_config_defaults_to_candidate_100_and_holdings_10() -> None:
+def test_canonical_config_has_no_fixed_candidate_or_holdings_cap() -> None:
     config = EffectiveRuntimeConfig()
-    assert config.broad_universe.candidate_max == 100
-    assert config.portfolio_constraints.maximum_holdings == 10
+    assert not hasattr(config.broad_universe, "candidate_max")
+    assert not hasattr(config.portfolio_constraints, "maximum_holdings")
 
 
 def test_daily_cardinality_trace_has_optimizer_not_top10_evidence() -> None:
@@ -298,9 +292,9 @@ def test_daily_cardinality_trace_has_optimizer_not_top10_evidence() -> None:
                 "candidate_pool": 100,
                 "optimizer_input": 100,
                 "risk_engine_securities": 100,
-                "maximum_allowed_holdings": 10,
-                "optimized_target_holdings": 10,
-                "final_decision_holdings": 10,
+                "maximum_allowed_holdings": None,
+                "optimized_target_holdings": 15,
+                "final_decision_holdings": 15,
                 "pre_optimizer_top10_truncation": False,
                 "optimizer_received_alpha_top10": False,
             },
@@ -308,9 +302,9 @@ def test_daily_cardinality_trace_has_optimizer_not_top10_evidence() -> None:
     )
     rendered = capture_daily_quant_result(result, locale="en-US")
     assert "Optimizer input 100" in rendered
-    assert "Maximum allowed holdings 10" in rendered
-    assert "Pre-optimizer Top10 False" in rendered
-    assert "Optimizer Top10-only False" in rendered
+    assert "Fixed holdings cap NONE" in rendered
+    assert "Pre-optimizer fixed Top-N NONE" in rendered
+    assert "Optimizer cardinality cap NONE" in rendered
 
 
 def test_daily_refresh_taxonomy_is_rendered() -> None:
@@ -379,7 +373,7 @@ def test_zh_renderer_required_localization_labels_survive() -> None:
         "SIZE_TILT_DIAGNOSTIC \u00b7 \u89c4\u6a21\u503e\u659c\u8bca\u65ad",
         "\u5019\u9009\u6c60",
         "\u4f18\u5316\u5668\u8f93\u5165",
-        "\u6700\u5927\u5141\u8bb8\u6301\u4ed3",
+        "\u56fa\u5b9a\u6301\u4ed3\u6570\u91cf\u4e0a\u9650",
         "\u4f18\u5316\u540e\u76ee\u6807\u6301\u4ed3",
     )
     for label in labels:

@@ -193,6 +193,7 @@ class ApplicationService:
         portfolio_id: int | str | None = None,
         decision_time: datetime | None = None,
         refresh: bool = True,
+        progress: Callable[[str], None] | None = None,
     ) -> DailyQuantResult:
         """Run the only production daily orchestrator consumed by terminals."""
 
@@ -211,6 +212,7 @@ class ApplicationService:
             portfolio_id=resolved_id,
             decision_time=decision_time,
             refresh=refresh,
+            progress=progress,
         )
 
     def get_daily_dashboard(self) -> DashboardView:

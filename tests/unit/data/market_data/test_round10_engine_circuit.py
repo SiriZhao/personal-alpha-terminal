@@ -288,3 +288,100 @@ def test_batch_refresh_routes_non_stock_assets_outside_stock_batch(
     assert batch.symbols == ("A", "B", "C")
     assert routed == ["etf"]
     engine.dispose()
+
+
+def test_batch_cache_reuse_requires_full_request_window(tmp_path: Path) -> None:
+    """A cache with only the latest bar must not count as reusable history."""
+    engine = build_engine("sqlite://")
+    Base.metadata.create_all(engine)
+
+    class _Batch:
+        source = "yahoo_finance"
+        provider_id = "yahoo_finance.broad_universe_batch"
+        chunk_size = 100
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def download(self, symbols, *, start_date, end_date):
+            del symbols, start_date, end_date
+            self.calls += 1
+            return type(
+                "Report",
+                (),
+                {"received_symbols": (), "failed_symbols": (), "bars": ()},
+            )()
+
+    batch = _Batch()
+    available = datetime(2026, 7, 3, 20, 30, tzinfo=__import__("datetime").timezone.utc)
+    with Session(engine) as session:
+        stock = Stock(
+            canonical_code="US:XNAS:CACHE",
+            symbol="CACHE",
+            name="Cache Test",
+            market="US",
+            exchange="XNAS",
+            asset_type="stock",
+            currency="USD",
+            timezone="America/New_York",
+            list_date=date(2020, 1, 1),
+            is_active=True,
+            source="fixture",
+            provider="fixture",
+            available_time=available,
+            ingested_time=available,
+        )
+        session.add(stock)
+        session.flush()
+        session.add(
+            __import__("personal_alpha_terminal.models", fromlist=["Price"]).Price(
+                stock_id=stock.id,
+                trade_date=END,
+                open=__import__("decimal").Decimal("100"),
+                high=__import__("decimal").Decimal("101"),
+                low=__import__("decimal").Decimal("99"),
+                close=__import__("decimal").Decimal("100"),
+                volume=1000,
+                asset_type="stock",
+                volume_unit="share",
+                price_type="unadjusted_ohlcv",
+                source="yahoo_finance",
+                provider="yahoo_finance.broad_universe_batch",
+                event_time=available - __import__("datetime").timedelta(minutes=30),
+                available_time=available,
+                ingested_at=available,
+            )
+        )
+        session.flush()
+        service = MarketDataEngine(
+            providers=[],
+            repository=PriceRepository(session),
+            settings=_settings(tmp_path),
+            batch_provider=batch,
+            batch_threshold=1,
+        )
+        service._run_batch_refresh([stock], END, forced_start_date=None)
+        assert batch.calls == 1
+        session.add(
+            __import__("personal_alpha_terminal.models", fromlist=["Price"]).Price(
+                stock_id=stock.id,
+                trade_date=date(2024, 6, 1),
+                open=__import__("decimal").Decimal("100"),
+                high=__import__("decimal").Decimal("101"),
+                low=__import__("decimal").Decimal("99"),
+                close=__import__("decimal").Decimal("100"),
+                volume=1000,
+                asset_type="stock",
+                volume_unit="share",
+                price_type="unadjusted_ohlcv",
+                source="yahoo_finance",
+                provider="yahoo_finance.broad_universe_batch",
+                event_time=available - __import__("datetime").timedelta(minutes=30),
+                available_time=available,
+                ingested_at=available,
+            )
+        )
+        session.flush()
+        service._run_batch_refresh([stock], END, forced_start_date=None)
+        assert batch.calls == 1
+    engine.dispose()

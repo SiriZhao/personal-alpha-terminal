@@ -43,7 +43,7 @@ including live credentials or personal holdings.
 Before any push or release, run:
 
 ```powershell
-.\.venv314\Scripts\python.exe scripts\secret_scan.py
+.\.venv\Scripts\python.exe scripts\secret_scan.py
 ```
 
 The expected result is `SECRET_SCAN_PASS`.

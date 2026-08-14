@@ -20,7 +20,6 @@ _SKIP_PARTS = {
     ".ruff_cache",
     ".tmp",
     ".venv",
-    ".venv314",
     "__pycache__",
     "build",
     "release",

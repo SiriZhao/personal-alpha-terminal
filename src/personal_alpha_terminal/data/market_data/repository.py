@@ -75,12 +75,17 @@ class PriceRepository:
             record.raw_share_unit = capability.raw_share_unit
         self._session.flush()
 
-    def latest_price_date(self, stock_id: int, source: str) -> date | None:
-        statement = select(func.max(Price.trade_date)).where(
+    def price_date_bounds(self, stock_id: int, source: str) -> tuple[date | None, date | None]:
+        """Return the stored source window used to prove a resumable cache complete."""
+        statement = select(func.min(Price.trade_date), func.max(Price.trade_date)).where(
             Price.stock_id == stock_id,
             Price.source == source,
         )
-        return self._session.scalar(statement)
+        earliest, latest = self._session.execute(statement).one()
+        return earliest, latest
+
+    def latest_price_date(self, stock_id: int, source: str) -> date | None:
+        return self.price_date_bounds(stock_id, source)[1]
 
     def upsert_bars(
         self,

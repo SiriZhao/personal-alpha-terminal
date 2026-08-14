@@ -34,7 +34,6 @@ universe_include_reit: false
 universe_require_pit_total_return: false
 universe_minimum_operational_universe: 50
 universe_coverage_collapse_ratio: 0.5
-universe_candidate_max: 100
 universe_candidate_min_alpha: 0.0
 # ROUND 6: live-portfolio rebalance / no-trade thresholds.  These are
 # part of the portfolio constraint hash and therefore of the strategy

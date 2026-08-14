@@ -6,7 +6,10 @@ import argparse
 import json
 import logging
 import os
+import re
+import sqlite3
 import sys
+from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -28,6 +31,7 @@ from personal_alpha_terminal.terminal.round9_cli import round9_research_command
 
 if TYPE_CHECKING:
     from personal_alpha_terminal.application import ApplicationService
+    from personal_alpha_terminal.application.daily_result import DailyQuantResult
     from personal_alpha_terminal.core.effective_config import EffectiveRuntimeConfig
 
 console = Console()
@@ -87,6 +91,164 @@ def _llm_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _startup_panel(config: EffectiveRuntimeConfig, *, refresh: bool) -> None:
+    """Print an immediate first frame; never wait for network refresh."""
+    db_connected = False
+    portfolio_loaded = False
+    manifest_id = "--"
+    try:
+        url = str(getattr(config.settings, "database_url", ""))
+        if url.startswith("sqlite:///"):
+            database = Path(url.removeprefix("sqlite:///"))
+            connection = sqlite3.connect(str(database), timeout=1)
+            try:
+                manifest_row = connection.execute(
+                    "select snapshot_id from data_snapshot_manifests "
+                    "order by completed_at desc limit 1"
+                ).fetchone()
+                if manifest_row is not None:
+                    manifest_id = str(manifest_row[0])
+                portfolio_count = connection.execute(
+                    "select count(*) from portfolios"
+                ).fetchone()[0]
+                portfolio_loaded = bool(portfolio_count)
+                db_connected = True
+            finally:
+                connection.close()
+    except (OSError, sqlite3.Error, ValueError):
+        db_connected = False
+    latest_run = "--"
+    try:
+        runs = sorted(
+            (config.report_dir / "daily-runs").glob("*.json"),
+            key=lambda item: item.stat().st_mtime,
+            reverse=True,
+        )
+        if runs:
+            latest_run = runs[0].stem
+    except (OSError, AttributeError):
+        pass
+    state = "REFRESHING" if refresh else "CACHE_REPLAY"
+    table = Table(show_header=False, box=None, pad_edge=False)
+    table.add_column(style="bold cyan")
+    table.add_column()
+    rows = (
+        ("\u72b6\u6001", state),
+        (
+            "\u6570\u636e\u5e93",
+            "\u5df2\u8fde\u63a5" if db_connected else "\u8fde\u63a5\u5931\u8d25",
+        ),
+        (
+            "\u6295\u8d44\u7ec4\u5408",
+            "\u5df2\u52a0\u8f7d" if portfolio_loaded else "\u672a\u521d\u59cb\u5316",
+        ),
+        ("\u6700\u8fd1\u5b8c\u6210\u8fd0\u884c", latest_run),
+        ("\u6700\u8fd1\u884c\u60c5\u5feb\u7167", manifest_id),
+        ("\u5e02\u573a\u6570\u636e", "\u6b63\u5728\u68c0\u67e5"),
+        (
+            "\u5b9e\u65f6\u5237\u65b0",
+            "\u8fd0\u884c\u4e2d" if refresh else "\u8df3\u8fc7\uff08\u7f13\u5b58\u8bca\u65ad\uff09",
+        ),
+    )
+    for label, value in rows:
+        table.add_row(label, value)
+    console.print(
+        Panel(
+            table,
+            title="PERSONAL ALPHA TERMINAL \u00b7 \u4e2a\u4eba\u91cf\u5316\u4ea4\u6613\u7ec8\u7aef",
+            border_style="cyan",
+        )
+    )
+    console.file.flush()
+
+
+def _progress_printer(config: EffectiveRuntimeConfig) -> Callable[[str], None]:
+    """Return a progress callback that prints immediately and writes a heartbeat."""
+    heartbeat_dir = Path(str(config.report_dir)).parent / "var" / "logs"
+    heartbeat_path = heartbeat_dir / "terminal-heartbeat.json"
+
+    def notify(message: str) -> None:
+        console.print("  " + message, soft_wrap=True)
+        console.file.flush()
+        match = re.search(r"(\d+)\s*/\s*(\d+)", message)
+        processed = int(match.group(1)) if match else None
+        total = int(match.group(2)) if match else None
+        try:
+            heartbeat_dir.mkdir(parents=True, exist_ok=True)
+            temporary = heartbeat_path.with_suffix(".tmp")
+            temporary.write_text(
+                json.dumps(
+                    {
+                        "pid": os.getpid(),
+                        "current_stage": message,
+                        "updated_at": datetime.now(UTC).isoformat(),
+                        "processed": processed,
+                        "total": total,
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+            temporary.replace(heartbeat_path)
+        except OSError:
+            pass
+
+    return notify
+
+
+def _as_trace_int(value: object) -> int:
+    try:
+        return int(value) if isinstance(value, (int, float, str)) else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+def _write_performance_trace(result: DailyQuantResult, config: EffectiveRuntimeConfig) -> None:
+    """Write a machine-readable per-stage performance trace for the daily run."""
+    try:
+        stages = {
+            str(item.name): float(item.duration_seconds or 0.0)
+            for item in result.stages
+        }
+        started = getattr(result, "started_at", None)
+        finished = getattr(result, "finished_at", None)
+        total = None
+        if started is not None and finished is not None:
+            total = round((finished - started).total_seconds(), 4)
+        data_meta: dict[str, object] = next(
+            (item.metadata for item in result.stages if item.name == "DATA"),
+            {},
+        )
+        trace = {
+            "run_id": str(getattr(result, "run_id", "UNAVAILABLE")),
+            "started_at": started.isoformat() if started else None,
+            "finished_at": finished.isoformat() if finished else None,
+            "total_seconds": total,
+            "stages_seconds": stages,
+            "data": {
+                "requested": _as_trace_int(data_meta.get("requested_security_count")),
+                "refreshed": _as_trace_int(data_meta.get("actual_refresh_count")),
+                "cache_reused": _as_trace_int(data_meta.get("cache_reuse_count")),
+                "historical_cache_reused": _as_trace_int(
+                    data_meta.get("historical_cache_reused_count")
+                ),
+                "incremental_refresh": _as_trace_int(
+                    data_meta.get("incremental_refresh_requested_count")
+                ),
+                "full_backfill": _as_trace_int(data_meta.get("full_backfill_requested_count")),
+            },
+        }
+        target = config.report_dir / "validation-artifacts"
+        target.mkdir(parents=True, exist_ok=True)
+        (target / "daily_performance_trace.json").write_text(
+            json.dumps(trace, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+
+
 def run_daily(
     config_path: Path,
     *,
@@ -98,13 +260,41 @@ def run_daily(
 
     try:
         config = load_config(config_path)
-        result = _application_service(
-            snapshot_root=config.report_dir, effective_config=config
-        ).run_daily_quant_report(
-            portfolio_id=config.portfolio_id,
-            refresh=refresh,
+        progress = _progress_printer(config) if refresh else None
+        if refresh:
+            from personal_alpha_terminal.terminal.instance import ConsoleInstanceLock
+
+            with ConsoleInstanceLock():
+                _startup_panel(config, refresh=True)
+                result = _application_service(
+                    snapshot_root=config.report_dir, effective_config=config
+                ).run_daily_quant_report(
+                    portfolio_id=config.portfolio_id,
+                    refresh=True,
+                    progress=progress,
+                )
+        else:
+            _startup_panel(config, refresh=False)
+            result = _application_service(
+                snapshot_root=config.report_dir, effective_config=config
+            ).run_daily_quant_report(
+                portfolio_id=config.portfolio_id,
+                refresh=False,
+            )
+    except RuntimeError as error:
+        console.print(
+            Panel(
+                str(error),
+                title=(
+                    "PERSONAL ALPHA TERMINAL \u00b7 "
+                    "\u4e2a\u4eba\u91cf\u5316\u4ea4\u6613\u7ec8\u7aef"
+                ),
+                border_style="yellow",
+            )
         )
-    except (FileNotFoundError, OSError, RuntimeError, ValueError) as error:
+        console.print("Press Enter to exit")
+        return 1
+    except (FileNotFoundError, OSError, ValueError) as error:
         logger.exception("Daily quant orchestration failed")
         console.print(
             Panel(
@@ -118,6 +308,7 @@ def run_daily(
         render_daily_quant_result(result, console)
     else:
         render_daily_quant_result(result, console, locale=locale)
+    _write_performance_trace(result, config)
     console.print(f"\nRun snapshot directory: {(config.report_dir / 'daily-runs').resolve()}")
     if wait and sys.stdin.isatty() and os.environ.get("PAT_NONINTERACTIVE") != "1":
         try:
@@ -125,6 +316,136 @@ def run_daily(
         except EOFError:
             logger.info("Skipping exit prompt because stdin reached EOF")
     return 0 if result.actionable else 3
+
+
+def _terminal_status_command(args: argparse.Namespace) -> int:
+    from personal_alpha_terminal.core.runtime_bootstrap import (
+        application_data_dir,
+        process_is_running,
+    )
+
+    config = load_config(args.config)
+    heartbeat_path = config.report_dir.parent / "var" / "logs" / "terminal-heartbeat.json"
+    heartbeat = None
+    if heartbeat_path.exists():
+        try:
+            heartbeat = json.loads(heartbeat_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            heartbeat = None
+    lock_path = application_data_dir() / "run" / "console-instance.json"
+    lock_pid = None
+    lock_running = False
+    if lock_path.exists():
+        try:
+            lock_pid = int(json.loads(lock_path.read_text(encoding="utf-8"))["pid"])
+            lock_running = process_is_running(lock_pid)
+        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+            lock_pid = None
+    latest_run = "--"
+    latest_manifest = "--"
+    try:
+        runs = sorted(
+            (config.report_dir / "daily-runs").glob("*.json"),
+            key=lambda item: item.stat().st_mtime,
+            reverse=True,
+        )
+        if runs:
+            latest_run = runs[0].stem
+        url = str(config.settings.database_url)
+        if url.startswith("sqlite:///"):
+            connection = sqlite3.connect(str(Path(url.removeprefix("sqlite:///"))), timeout=1)
+            try:
+                row = connection.execute(
+                    "select snapshot_id from data_snapshot_manifests "
+                    "order by completed_at desc limit 1"
+                ).fetchone()
+                if row is not None:
+                    latest_manifest = str(row[0])
+            finally:
+                connection.close()
+    except (OSError, sqlite3.Error, ValueError):
+        pass
+    logs: list[Path] = []
+    for directory in (config.report_dir.parent / "logs", config.report_dir.parent / "var" / "logs"):
+        if directory.is_dir():
+            logs.extend(directory.glob("*.log"))
+    latest_log = max(logs, key=lambda item: item.stat().st_mtime, default=None)
+    document = {
+        "pid": os.getpid(),
+        "lock_pid": lock_pid,
+        "lock_running": lock_running,
+        "heartbeat": heartbeat,
+        "latest_completed_run": latest_run,
+        "latest_market_snapshot": latest_manifest,
+        "latest_log": str(latest_log.resolve()) if latest_log else None,
+    }
+    if args.json:
+        console.print(json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0
+    console.print("[bold]TERMINAL STATUS[/bold]")
+    console.print(f"Current PID: {document['pid']}")
+    if lock_pid:
+        console.print(f"Refresh process: PID {lock_pid} running={lock_running}")
+    else:
+        console.print("Refresh process: none")
+    heartbeat_text = json.dumps(heartbeat, ensure_ascii=False) if heartbeat else "none"
+    console.print(f"Heartbeat: {heartbeat_text}")
+    console.print(f"Latest completed run: {latest_run}")
+    console.print(f"Latest market snapshot: {latest_manifest}")
+    console.print(f"Latest log: {document['latest_log'] or 'none'}")
+    return 0
+
+
+def _strategy_approval_command(args: argparse.Namespace) -> int:
+    from personal_alpha_terminal.application.operational_readiness import (
+        resolve_current_operational_identity,
+    )
+    from personal_alpha_terminal.application.strategy_approval import (
+        StrategyApprovalDecision,
+        StrategyApprovalStore,
+        issue_strategy_approval,
+    )
+    from personal_alpha_terminal.quant_engine.strategies.us_adaptive_alpha_core import (
+        USAdaptiveAlphaCoreV1,
+    )
+
+    config = load_config(args.config)
+    strategy = USAdaptiveAlphaCoreV1(config.strategy)
+    now = datetime.now(UTC)
+    identity = resolve_current_operational_identity(config, strategy, decision_time=now)
+    store = StrategyApprovalStore(config.strategy_approval_path)
+    if args.strategy_approval_action == "status":
+        approval, reason = store.status(identity, now=now)
+        console.print("[bold]STRATEGY APPROVAL STATUS[/bold]")
+        console.print("Historical research certification: NOT_CERTIFIABLE")
+        console.print(
+            "Forward strategy authorization: "
+            f"{approval.decision.value if approval else 'NOT_CONFIGURED'}"
+        )
+        console.print(f"Approval id: {approval.approval_id if approval else 'none'}")
+        console.print(f"Effective: {approval is not None}")
+        console.print(f"Reason: {reason}")
+        return 0
+    if os.environ.get("PAT_NONINTERACTIVE") == "1":
+        console.print("Refusing to create strategy approval in noninteractive mode.")
+        return 3
+    decision = StrategyApprovalDecision(args.decision)
+    approval = issue_strategy_approval(
+        identity=identity,
+        decision=decision,
+        operator_intent=args.intent,
+    )
+    console.print(
+        f"About to create strategy approval {approval.approval_id} "
+        f"({decision.value}). This is NOT production certification."
+    )
+    answer = console.input("Type YES to continue: ")
+    if answer.strip().upper() != "YES":
+        console.print("Cancelled; no strategy approval was created.")
+        return 3
+    store.save(approval, force=bool(args.force))
+    console.print(f"Created strategy approval: {approval.approval_id}")
+    return 0
 
 
 def _operational_policy_command(args: argparse.Namespace) -> int:
@@ -1340,6 +1661,46 @@ def _stress_exam_command() -> int:
     print(f"{summary.classification}: {target.resolve()}")
     return 0
 
+def _add_broad_universe_parser(
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+    name: str,
+) -> None:
+    """Register the shared official-universe command surface (broad-universe alias)."""
+    parser = subparsers.add_parser(
+        name,
+        help="Register, sync and report the broad tradable US equity universe",
+    )
+    parser.add_argument("--database", type=Path, default=Path("var/personal_alpha.db"))
+    parser.add_argument("--json", action="store_true")
+    actions = parser.add_subparsers(dest="broad_universe_action", required=True)
+    actions.add_parser("status", help="Show snapshots, registration, coverage and quarantine")
+    actions.add_parser("register", help="Register current-directory common stocks")
+    actions.add_parser("capture", help="Capture a new immutable official directory snapshot")
+    broad_universe_sync = actions.add_parser(
+        "sync", help="Download prices for the registered broad universe"
+    )
+    broad_universe_sync.add_argument(
+        "--mode", choices=("incremental", "backfill"), default="incremental"
+    )
+    broad_universe_sync.add_argument("--start-date", default=None)
+    broad_universe_sync.add_argument("--end-date", default=None)
+    broad_universe_sync.add_argument("--sessions-back", type=int, default=10)
+    broad_universe_sync.add_argument("--max-symbols", type=int, default=None)
+    broad_universe_sync.add_argument("--chunk-size", type=int, default=None)
+    funnel = actions.add_parser("funnel", help="Report the per-layer tradable universe funnel")
+    funnel.add_argument("--as-of", default=None)
+    funnel.add_argument("--artifact", type=Path, default=None)
+    audit = actions.add_parser("audit", help="Audit immutable official universe snapshots")
+    audit.add_argument("--as-of", default=None)
+    audit.add_argument("--artifact", type=Path, default=None)
+    history = actions.add_parser(
+        "history-sufficiency", help="Report factor-history sufficiency by symbol"
+    )
+    history.add_argument("--as-of", default=None)
+    history.add_argument("--required-sessions", type=int, default=None)
+    history.add_argument("--artifact", type=Path, default=None)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="PersonalAlphaTerminal",
@@ -1354,6 +1715,27 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command")
     subparsers.add_parser("daily", help="Run and render the complete daily quant chain")
     subparsers.add_parser("refresh", help="Refresh data, then run the daily quant chain")
+    terminal_status = subparsers.add_parser(
+        "terminal-status", help="Show terminal, refresh, heartbeat and latest run status"
+    )
+    terminal_status.add_argument("--json", action="store_true")
+    strategy_approval = subparsers.add_parser(
+        "strategy-approval", help="Show or create the immutable forward strategy authorization"
+    )
+    strategy_approval_actions = strategy_approval.add_subparsers(
+        dest="strategy_approval_action", required=True
+    )
+    strategy_approval_actions.add_parser("status", help="Show forward authorization status")
+    strategy_approval_create = strategy_approval_actions.add_parser(
+        "create", help="Create an immutable forward strategy approval (operator only)"
+    )
+    strategy_approval_create.add_argument(
+        "--decision",
+        choices=("ALLOW_PROVISIONAL_FORWARD", "ALLOW_FULL_PRODUCTION"),
+        required=True,
+    )
+    strategy_approval_create.add_argument("--intent", required=True)
+    strategy_approval_create.add_argument("--force", action="store_true")
     for name, help_text in (
         ("data", "Render data status through the daily snapshot"),
         ("factors", "Render factor results from the daily snapshot"),
@@ -1516,33 +1898,8 @@ def build_parser() -> argparse.ArgumentParser:
     identity_actions.add_parser(
         "import-filings", help="Extract generic SEC filing identity evidence into the DB store"
     )
-    broad_universe = subparsers.add_parser(
-        "broad-universe",
-        help="Register, sync and report the broad tradable US equity universe",
-    )
-    broad_universe.add_argument("--database", type=Path, default=Path("var/personal_alpha.db"))
-    broad_universe.add_argument("--json", action="store_true")
-    broad_universe_actions = broad_universe.add_subparsers(
-        dest="broad_universe_action",
-        required=True,
-    )
-    broad_universe_actions.add_parser("status", help="Show registration, coverage and quarantine")
-    broad_universe_actions.add_parser("register", help="Register current-directory common stocks")
-    broad_universe_sync = broad_universe_actions.add_parser(
-        "sync", help="Download prices for the registered broad universe"
-    )
-    broad_universe_sync.add_argument(
-        "--mode", choices=("incremental", "backfill"), default="incremental"
-    )
-    broad_universe_sync.add_argument("--start-date", default=None)
-    broad_universe_sync.add_argument("--end-date", default=None)
-    broad_universe_sync.add_argument("--sessions-back", type=int, default=10)
-    broad_universe_sync.add_argument("--max-symbols", type=int, default=None)
-    broad_universe_sync.add_argument("--chunk-size", type=int, default=None)
-    broad_universe_funnel = broad_universe_actions.add_parser(
-        "funnel", help="Report the per-layer tradable universe funnel"
-    )
-    broad_universe_funnel.add_argument("--as-of", default=None)
+    _add_broad_universe_parser(subparsers, "broad-universe")
+    _add_broad_universe_parser(subparsers, "universe")
     forward_track = subparsers.add_parser(
         "forward-track",
         help="Inspect and append the immutable forward prediction/outcome ledger",
@@ -1786,6 +2143,10 @@ def main(argv: list[str] | None = None) -> int:
             args.config.write_text(default_config_text(), encoding="utf-8")
             console.print(f"Created configuration: {args.config}")
             return 0
+        if command == "terminal-status":
+            return _terminal_status_command(args)
+        if command == "strategy-approval":
+            return _strategy_approval_command(args)
         if command in {"doctor", "diagnostics"}:
             return _doctor(args.config)
         if command == "stress-exam":
@@ -1829,7 +2190,7 @@ def main(argv: list[str] | None = None) -> int:
             return _research_data_command(args)
         if command == "intelligence":
             return intelligence_command(args, load_config(args.config))
-        if command == "broad-universe":
+        if command in {"broad-universe", "universe"}:
             return broad_universe_command(args)
         if command == "forward-track":
             return forward_track_command(args)

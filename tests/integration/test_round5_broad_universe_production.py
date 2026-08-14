@@ -162,7 +162,6 @@ def _broad_config(config: EffectiveRuntimeConfig) -> EffectiveRuntimeConfig:
             require_pit_total_return=False,
             minimum_operational_universe=5,
             coverage_collapse_ratio=0.5,
-            candidate_max=15,
             candidate_min_alpha=0.0,
         ),
     )

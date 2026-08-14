@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, replace
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 
 import numpy as np
 import pandas as pd
@@ -17,6 +17,10 @@ from personal_alpha_terminal.application.operational_readiness import (
     OperationalPolicyDecision,
     OperationalPolicyStore,
     resolve_current_operational_identity,
+)
+from personal_alpha_terminal.application.strategy_approval import (
+    StrategyApprovalDecision,
+    StrategyApprovalStore,
 )
 from personal_alpha_terminal.core.effective_config import EffectiveRuntimeConfig
 from personal_alpha_terminal.data.us_market.broad_universe import (
@@ -117,6 +121,9 @@ class AssembledDailyInput:
     operational_policy_identity_hash: str = "NOT_CONFIGURED"
     signal_authorization_class: str = "FAIL_BLOCKING"
     signal_evidence_level: str = "DIAGNOSTIC_ONLY"
+    strategy_approval_id: str = "NOT_CONFIGURED"
+    strategy_approval_decision: str = "BLOCK"
+    strategy_approval_effective: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,6 +167,9 @@ class AssembledResearchInput:
     operational_policy_identity_hash: str = "NOT_CONFIGURED"
     signal_authorization_class: str = "FAIL_BLOCKING"
     signal_evidence_level: str = "DIAGNOSTIC_ONLY"
+    strategy_approval_id: str = "NOT_CONFIGURED"
+    strategy_approval_decision: str = "BLOCK"
+    strategy_approval_effective: bool = False
 
 
 def _funnel_counts(eligibility: BroadUniverseEligibility) -> dict[str, int]:
@@ -208,6 +218,9 @@ class ProductionDailyQuantInputAssembler:
         self.operational_store = OperationalPolicyStore(
             self.effective_config.operational_policy_path
         )
+        self.strategy_approval_store = StrategyApprovalStore(
+            self.effective_config.strategy_approval_path
+        )
 
     def assemble(
         self,
@@ -230,6 +243,7 @@ class ProductionDailyQuantInputAssembler:
         decision_time: datetime,
         history_days: int = 550,
         benchmark_symbol: str = "SPY",
+        analysis_date: date | None = None,
     ) -> AssembledResearchInput:
         if decision_time.tzinfo is None:
             raise ValueError("decision_time must be timezone-aware")
@@ -254,7 +268,7 @@ class ProductionDailyQuantInputAssembler:
             broad_universe_production_eligible,
         ) = self._select_alpha_universe(
             universe.securities,
-            universe_date=decision_time.date(),
+            universe_date=analysis_date or decision_time.date(),
             decision_time=decision_time,
             reference_symbols=(benchmark_symbol, self.effective_config.nasdaq_benchmark),
         )
@@ -322,15 +336,29 @@ class ProductionDailyQuantInputAssembler:
         policy = None
         operational_policy = None
         operational_policy_reason = "OPERATIONAL_POLICY_NOT_CONFIGURED"
+        strategy_approval = None
+        strategy_approval_reason = "STRATEGY_APPROVAL_NOT_CONFIGURED"
+        strategy_approval_effective = False
+        operational_identity = self._operational_identity_at(decision_time)
         if broad_universe_production_eligible and approval is None:
             policy_status = self.operational_store.status(
-                self._operational_identity_at(decision_time),
+                operational_identity,
                 research_state="NOT_CERTIFIABLE",
                 now=decision_time,
             )
             policy = policy_status.policy
             operational_policy_reason = policy_status.reason
             operational_policy = policy if policy_status.effective else None
+            strategy_approval, strategy_approval_reason = (
+                self.strategy_approval_store.status(
+                    operational_identity, now=decision_time
+                )
+            )
+            strategy_approval_effective = (
+                strategy_approval is not None
+                and strategy_approval.decision
+                is StrategyApprovalDecision.ALLOW_PROVISIONAL_FORWARD
+            )
         approval_data_version = (
             approval.data_version if approval is not None else 'NOT_APPROVED'
         )
@@ -353,12 +381,16 @@ class ProductionDailyQuantInputAssembler:
             operational_approval_hash=(
                 operational_policy.policy_id
                 if operational_policy is not None
-                else None
+                else (
+                    strategy_approval.approval_id
+                    if strategy_approval is not None and strategy_approval_effective
+                    else None
+                )
             ),
             calibration=calibration,
             fundamentals=fundamentals,
             allow_degraded_neutralization=(
-                operational_policy is not None
+                operational_policy is not None or strategy_approval_effective
             ),
         )
         strategy_version = (
@@ -428,7 +460,6 @@ class ProductionDailyQuantInputAssembler:
         # step is recorded and reported.
         candidate_compression = compress_candidates(
             tuple(overlay_application.signals),
-            candidate_max=self.effective_config.broad_universe.candidate_max,
             candidate_min_alpha=self.effective_config.broad_universe.candidate_min_alpha,
             adv_by_symbol=(
                 {
@@ -449,7 +480,6 @@ class ProductionDailyQuantInputAssembler:
         )
         classical_compression = compress_candidates(
             tuple(strategy_result.signals),
-            candidate_max=self.effective_config.broad_universe.candidate_max,
             candidate_min_alpha=self.effective_config.broad_universe.candidate_min_alpha,
             adv_by_symbol=(
                 {
@@ -607,7 +637,7 @@ class ProductionDailyQuantInputAssembler:
                 if approval is not None
                 else (
                     "PASS_PROVISIONAL"
-                    if operational_policy is not None
+                    if operational_policy is not None or strategy_approval_effective
                     else "FAIL_BLOCKING"
                 )
             ),
@@ -616,10 +646,21 @@ class ProductionDailyQuantInputAssembler:
                 if approval is not None
                 else (
                     "PROVISIONAL_OPERATIONAL_ADVISORY"
-                    if operational_policy is not None
+                    if operational_policy is not None or strategy_approval_effective
                     else "DIAGNOSTIC_ONLY"
                 )
             ),
+            strategy_approval_id=(
+                strategy_approval.approval_id
+                if strategy_approval is not None and strategy_approval_effective
+                else "NOT_CONFIGURED"
+            ),
+            strategy_approval_decision=(
+                strategy_approval.decision.value
+                if strategy_approval is not None
+                else "BLOCK"
+            ),
+            strategy_approval_effective=strategy_approval_effective,
         )
 
     def _operational_policy(self, decision_time: datetime) -> OperationalPolicy | None:
@@ -766,6 +807,9 @@ class ProductionDailyQuantInputAssembler:
             research.operational_policy_identity_hash,
             research.signal_authorization_class,
             research.signal_evidence_level,
+            strategy_approval_id=research.strategy_approval_id,
+            strategy_approval_decision=research.strategy_approval_decision,
+            strategy_approval_effective=research.strategy_approval_effective,
         )
 
     def _select_alpha_universe(
@@ -781,7 +825,27 @@ class ProductionDailyQuantInputAssembler:
         dict[str, object],
         bool,
     ]:
-        rules = EligibilityRules(**asdict(self.effective_config.broad_universe))
+        base_rules = EligibilityRules(**asdict(self.effective_config.broad_universe))
+        # Historical sufficiency must satisfy the active Classical Champion
+        # factor contract, not an unrelated configured magic number.
+        required_history = max(
+            base_rules.minimum_trading_sessions,
+            self.strategy.config.required_history_sessions,
+        )
+        rules = EligibilityRules(
+            **{
+                **asdict(base_rules),
+                "minimum_trading_sessions": required_history,
+            }
+        )
+        # Current-directory membership is only trustworthy up to the end of the
+        # analysis date; a snapshot acquired after that date must not leak
+        # future listings into this analysis.  Price visibility keeps using the
+        # real decision time so bars published later the same evening remain PIT.
+        directory_cutoff = min(
+            decision_time,
+            datetime.combine(universe_date, time(23, 59, 59), tzinfo=UTC),
+        )
         service = BroadUSUniverseService(
             self.session,
             cache_root=self.effective_config.cache_dir / "us-current-directory",
@@ -795,6 +859,7 @@ class ProductionDailyQuantInputAssembler:
             universe_date=universe_date,
             decision_time=decision_time,
             reference_symbols=reference_symbols,
+            directory_cutoff=directory_cutoff,
         )
         official = selection.directory.provider == "nasdaq_trader_symbol_directory"
         if official:
@@ -805,6 +870,11 @@ class ProductionDailyQuantInputAssembler:
             evidence["qualification"] = operational.qualification.value
             evidence["pit_status"] = operational.pit_status
             evidence["funnel"] = _funnel_counts(operational)
+            evidence["history_requirement"] = {
+                "required_history_sessions": required_history,
+                "factors": list(self.strategy.config.history_requirements),
+                "derivation": "max(active factor lookback + warmup; configured universe minimum)",
+            }
             # HISTORICAL_RESEARCH_PIT tier is evaluated independently.  A
             # degraded historical certification must never collapse the current
             # operational universe by itself.
@@ -812,12 +882,13 @@ class ProductionDailyQuantInputAssembler:
                 historical = BroadUSUniverseService(
                     self.session,
                     cache_root=self.effective_config.cache_dir / "us-current-directory",
-                    rules=EligibilityRules(**asdict(self.effective_config.broad_universe)),
+                    rules=rules,
                 ).select(
                     universe_date=universe_date,
                     decision_time=decision_time,
                     reference_symbols=reference_symbols,
                     require_pit_total_return=True,
+                    directory_cutoff=directory_cutoff,
                 )
                 historical_eligibility = historical.eligibility
                 evidence["historical_research"] = {

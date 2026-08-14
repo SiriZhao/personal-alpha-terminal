@@ -431,6 +431,14 @@ def _operational_status(result: DailyQuantResult, console: Console) -> None:
             "No effective Operational Policy is configured; production recommendations "
             "remain blocked.",
         )
+    forward_auth = str(
+        result.provenance.get(
+            "strategy_approval_decision",
+            "NOT_CONFIGURED",
+        )
+        if result.provenance.get("strategy_approval_effective", False)
+        else "NOT_CONFIGURED"
+    )
     body = _t(
         f"【研究认证】{research}\n"
         f"【生产数据】{data}\n"
@@ -440,7 +448,8 @@ def _operational_status(result: DailyQuantResult, console: Console) -> None:
         f"【运行策略】{policy}\n"
         f"【最终状态】{final_state}\n\n"
         f"{policy_explanation}",
-        f"Research certification: {research}\n"
+        f"Historical research certification: {research}\n"
+        f"Forward strategy authorization: {forward_auth}\n"
         f"Data: {data}\n"
         f"PIT: {pit}\n"
         f"Signal: {signal}\n"
@@ -499,6 +508,8 @@ def _market_data(result: DailyQuantResult, console: Console) -> None:
     actual_refresh = str(data_meta.get("actual_refresh_count", "N/A"))
     cache_reuse = str(data_meta.get("cache_reuse_count", "N/A"))
     provider_returned = str(data_meta.get("provider_returned_count", "N/A"))
+    provider_response_coverage = _as_float(data_meta.get("provider_response_coverage"))
+    latest_price_coverage = _as_float(data_meta.get("latest_price_coverage"))
     certified_coverage = _as_float(data_meta.get("certified_coverage"))
     quarantine = str(data_meta.get("quarantine_count", "N/A"))
     provider_incident = str(data_meta.get("provider_incident_count", "N/A"))
@@ -524,8 +535,31 @@ def _market_data(result: DailyQuantResult, console: Console) -> None:
         (_t("\u8bf7\u6c42\u8bc1\u5238", "Requested securities"), requested_securities),
         (_t("\u5b9e\u9645\u5237\u65b0", "Actual refresh"), actual_refresh),
         (_t("\u7f13\u5b58\u590d\u7528", "Cache reuse"), cache_reuse),
+        (
+            _t("\u5386\u53f2\u7f13\u5b58\u590d\u7528", "Historical cache reused"),
+            str(data_meta.get("historical_cache_reused_count", "N/A")),
+        ),
+        (
+            _t("\u589e\u91cf\u5237\u65b0", "Incremental refresh"),
+            str(data_meta.get("incremental_refresh_requested_count", "N/A")),
+        ),
+        (
+            _t("\u5168\u91cf\u56de\u586b", "Full backfill"),
+            str(data_meta.get("full_backfill_requested_count", "N/A")),
+        ),
         (_t("Provider \u8fd4\u56de", "Provider returned"), provider_returned),
-        (_t("\u8ba4\u8bc1\u8986\u76d6", "Certified coverage"), _percent(certified_coverage)),
+        (
+            _t("Provider \u54cd\u5e94\u8986\u76d6", "Provider response coverage"),
+            _percent(provider_response_coverage),
+        ),
+        (
+            _t("\u6700\u65b0\u884c\u60c5\u8986\u76d6", "Latest-price coverage"),
+            _percent(latest_price_coverage),
+        ),
+        (
+            _t("\u6838\u5fc3\u8ba4\u8bc1\u8986\u76d6", "Core certified-bar coverage"),
+            _percent(certified_coverage),
+        ),
         (_t("\u9694\u79bb", "Quarantine"), quarantine),
         (_t("Provider \u4e8b\u4ef6", "Provider incident"), provider_incident),
         (_t("\u8986\u76d6\u574d\u5854", "Coverage collapse"), collapse),
@@ -584,9 +618,9 @@ def _data_certification(result: DailyQuantResult, console: Console) -> None:
         f"Snapshot {evidence.get('snapshot_id', 'UNAVAILABLE')}   "
         "Refresh requested symbols "
         f"{_item_count(evidence.get('requested_symbols'))}   "
-        "Provider-returned symbols "
+        "Core received symbols "
         f"{_item_count(evidence.get('received_symbols'))}   "
-        "PIT-certified symbols "
+        "PIT-certified core symbols "
         f"{_item_count(evidence.get('certified_symbols'))}   "
         f"Rejected {_item_count(evidence.get('rejected_symbols'))}   "
         f"Missing {_item_count(evidence.get('missing_symbols'))}   "
@@ -598,9 +632,13 @@ def _data_certification(result: DailyQuantResult, console: Console) -> None:
         f"missing {evidence.get('missing_bars', 0)}   "
         f"received {evidence.get('received_bars', 0)}   "
         f"valid {evidence.get('valid_bars', 0)}   "
-        "Certified-bar coverage "
+        "Core certified-bar coverage "
         f"{_percent(_as_float(evidence.get('coverage')))}   "
-        f"Cache reused {evidence.get('cache_reused', 'NOT_REPORTED')}\n"
+        "(denominator core certification bars)\n"
+        "Broad provider response coverage "
+        f"{_percent(_as_float(evidence.get('provider_response_coverage')))}   "
+        "Latest-price coverage "
+        f"{_percent(_as_float(evidence.get('latest_price_coverage')))}\n"
         f"Latest {evidence.get('latest_timestamp', 'UNAVAILABLE')}   "
         f"PIT cutoff {result.data_cutoff.isoformat() if result.data_cutoff else 'UNAVAILABLE'}\n"
         f"Corporate actions {evidence.get('corporate_action_status', 'NOT_CERTIFIED')}   "
@@ -764,11 +802,10 @@ def _pit_universe(result: DailyQuantResult, console: Console) -> None:
             f"{_t('\u4f18\u5316\u5668\u8f93\u5165', 'Optimizer input')} {optimizer_input}   "
             f"{_t('\u4f18\u5316\u540e\u76ee\u6807\u6301\u4ed3', 'Optimized holdings')} "
             f"{optimized_holdings}\n"
-            f"{_t('\u6700\u5927\u5141\u8bb8\u6301\u4ed3', 'Maximum allowed holdings')} "
-            f"{max_holdings if max_holdings is not None else 'UNLIMITED'}   "
+            f"{_t('\u56fa\u5b9a\u6301\u4ed3\u6570\u91cf\u4e0a\u9650', 'Fixed holdings cap')} "
+            f"{max_holdings if max_holdings is not None else 'NONE'}   "
             f"Risk compared {risk_engine_securities}   Final decisions {final_holdings}\n"
-            f"Pre-optimizer Top10 {bool(cardinality.get('pre_optimizer_top10_truncation'))}   "
-            f"Optimizer Top10-only {bool(cardinality.get('optimizer_received_alpha_top10'))}\n"
+            "Pre-optimizer fixed Top-N NONE   Optimizer cardinality cap NONE\n"
             f"Operational tradable {tradable_ok}   "
             f"Quarantine {quarantine_count}\n"
             + candidate_lines

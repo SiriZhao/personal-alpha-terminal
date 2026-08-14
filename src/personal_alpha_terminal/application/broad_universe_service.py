@@ -20,6 +20,7 @@ from personal_alpha_terminal.data.us_market.broad_universe import (
     SecurityEligibilityObservation,
     current_snapshot_from_local_records,
     evaluate_broad_universe,
+    latest_directory_snapshot_at,
     read_directory_snapshot,
     write_directory_snapshot,
 )
@@ -90,6 +91,7 @@ class BroadUSUniverseService:
         decision_time: datetime,
         reference_symbols: tuple[str, ...],
         require_pit_total_return: bool | None = None,
+        directory_cutoff: datetime | None = None,
     ) -> BroadUniverseSelection:
         rules = self.rules
         if require_pit_total_return is not None:
@@ -111,7 +113,9 @@ class BroadUSUniverseService:
                 .order_by(SecurityMaster.canonical_code)
             )
         )
-        directory, warnings = self._directory_or_fallback(securities, decision_time)
+        directory, warnings = self._directory_or_fallback(
+            securities, directory_cutoff if directory_cutoff is not None else decision_time
+        )
         stock_by_key = {
             (item.exchange, item.symbol): item for item in securities if item.asset_type == "stock"
         }
@@ -182,15 +186,24 @@ class BroadUSUniverseService:
         securities: tuple[SecurityMaster, ...],
         decision_time: datetime,
     ) -> tuple[CurrentDirectorySnapshot, list[str]]:
+        warnings: list[str] = []
+        selected = latest_directory_snapshot_at(self.cache_root, decision_time)
+        if selected is not None:
+            latest = self.cache_root / "latest.json"
+            if latest.exists():
+                try:
+                    current = read_directory_snapshot(latest)
+                    if current.content_hash != selected.content_hash:
+                        warnings = [
+                            "CURRENT_DIRECTORY_NOT_YET_AVAILABLE_AT_DECISION_TIME; "
+                            "using decision-visible immutable snapshot"
+                        ]
+                except (KeyError, OSError, TypeError, ValueError):
+                    warnings = ["CURRENT_DIRECTORY_CACHE_INVALID; using decision-visible snapshot"]
+            return selected, warnings
         latest = self.cache_root / "latest.json"
         if latest.exists():
-            try:
-                snapshot = read_directory_snapshot(latest)
-                if snapshot.retrieved_at <= decision_time:
-                    return snapshot, []
-                warnings = ["CURRENT_DIRECTORY_NOT_YET_AVAILABLE_AT_DECISION_TIME"]
-            except (KeyError, OSError, TypeError, ValueError):
-                warnings = ["CURRENT_DIRECTORY_CACHE_INVALID"]
+            warnings = ["CURRENT_DIRECTORY_NOT_YET_AVAILABLE_AT_DECISION_TIME"]
         else:
             warnings = ["CURRENT_DIRECTORY_METADATA_UNAVAILABLE"]
         local = tuple(

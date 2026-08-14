@@ -6,7 +6,7 @@ import json
 from argparse import Namespace
 from collections.abc import Callable
 from dataclasses import asdict
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, time
 from pathlib import Path
 
 from rich.console import Console
@@ -17,7 +17,11 @@ from personal_alpha_terminal.core.effective_config import EffectiveRuntimeConfig
 from personal_alpha_terminal.data.broad_market.service import (
     BroadUniverseDataService,
 )
-from personal_alpha_terminal.data.us_market.broad_universe import EligibilityRules
+from personal_alpha_terminal.data.us_market.broad_universe import (
+    EligibilityRules,
+    latest_directory_snapshot_at,
+    list_directory_snapshots,
+)
 
 console = Console()
 
@@ -37,7 +41,12 @@ def _service(
 ) -> BroadUniverseDataService:
     factory = _session_factory(database)
     session = factory()
-    rules = EligibilityRules(**asdict(config.broad_universe))
+    base_rules = asdict(config.broad_universe)
+    base_rules["minimum_trading_sessions"] = max(
+        int(base_rules["minimum_trading_sessions"]),
+        config.strategy.required_history_sessions,
+    )
+    rules = EligibilityRules(**base_rules)
     from personal_alpha_terminal.data.broad_market.batch_provider import (
         YahooBatchStockProvider,
     )
@@ -80,6 +89,17 @@ def broad_universe_command(args: Namespace) -> int:
             return result
         if action == "funnel":
             return _broad_funnel(service, args)
+        if action == "capture":
+            return _broad_capture(service, args)
+        if action == "audit":
+            return _broad_audit(service, args)
+        if action == "history-sufficiency":
+            if getattr(args, "required_sessions", None) is None:
+                args.required_sessions = max(
+                    config.broad_universe.minimum_trading_sessions,
+                    config.strategy.required_history_sessions,
+                )
+            return _broad_history_sufficiency(service, args)
         console.print(f"Unknown broad-universe action: {action}")
         return 2
     finally:
@@ -88,11 +108,24 @@ def broad_universe_command(args: Namespace) -> int:
 
 def _broad_status(service: BroadUniverseDataService, args: Namespace) -> int:
     coverage = service.coverage()
+    now = datetime.now(UTC)
+    snapshots = list_directory_snapshots(service.directory_root)
+    visible = latest_directory_snapshot_at(service.directory_root, now)
     console.print("[bold]BROAD UNIVERSE STATUS[/bold]")
     console.print(f"Registered stocks: {coverage['registered_stocks']}")
     console.print(f"Stocks with prices: {coverage['stocks_with_prices']}")
     console.print(f"Price rows: {coverage['price_rows']}")
     console.print(f"Latest price date: {coverage['latest_price_date']}")
+    console.print(f"Immutable snapshots: {len(snapshots)}")
+    if snapshots:
+        latest = snapshots[-1]
+        console.print(f"Latest snapshot: {latest.content_hash}")
+        console.print(f"Acquired at: {latest.retrieved_at.isoformat()}")
+        console.print(f"Records: {len(latest.records)}")
+        console.print(
+            f"Decision-visible now: {'YES' if visible is not None else 'NO'} "
+            f"({visible.content_hash if visible else 'none'})"
+        )
     quarantine = service.quarantine_status()
     console.print(f"Quarantined symbols: {len(quarantine)}")
     if quarantine:
@@ -155,10 +188,139 @@ def _broad_sync(service: BroadUniverseDataService, args: Namespace) -> int:
     return 0
 
 
+def _broad_capture(service: BroadUniverseDataService, args: Namespace) -> int:
+    from personal_alpha_terminal.application.broad_universe_service import (
+        BroadUSUniverseService,
+    )
+
+    snapshot = BroadUSUniverseService(
+        service.session,
+        cache_root=service.directory_root,
+        rules=service.rules,
+    ).refresh_directory()
+    console.print("[bold]OFFICIAL UNIVERSE CAPTURE[/bold]")
+    console.print(f"Snapshot: {snapshot.content_hash}")
+    console.print(f"Acquired at: {snapshot.retrieved_at.isoformat()}")
+    console.print(f"Records: {len(snapshot.records)}")
+    console.print(f"Provider: {snapshot.provider}")
+    console.print(f"Historical use allowed: {snapshot.historical_use_allowed}")
+    if args.json:
+        console.print(
+            json.dumps(snapshot.document(), ensure_ascii=False, indent=2, sort_keys=True)
+        )
+    return 0
+
+
+def _broad_audit(service: BroadUniverseDataService, args: Namespace) -> int:
+    as_of = _optional_date(getattr(args, "as_of", None))
+    decision_time = (
+        datetime.combine(as_of, time(20, 30), tzinfo=UTC) if as_of else datetime.now(UTC)
+    )
+    snapshots = list_directory_snapshots(service.directory_root)
+    visible = latest_directory_snapshot_at(service.directory_root, decision_time)
+    console.print("[bold]OFFICIAL UNIVERSE SNAPSHOT AUDIT[/bold]")
+    console.print(f"Decision as-of: {decision_time.isoformat()}")
+    console.print(f"Immutable snapshots: {len(snapshots)}")
+    table = Table(title="Official Universe Snapshots")
+    table.add_column("Acquired at")
+    table.add_column("Records")
+    table.add_column("Content hash")
+    for snapshot in snapshots:
+        marker = (
+            "*"
+            if visible is not None and snapshot.content_hash == visible.content_hash
+            else ""
+        )
+        table.add_row(
+            snapshot.retrieved_at.isoformat(),
+            str(len(snapshot.records)),
+            snapshot.content_hash[:16] + marker,
+        )
+    console.print(table)
+    console.print(
+        f"Decision-visible snapshot: {visible.content_hash if visible else 'NONE'}"
+    )
+    console.print(
+        "Historical membership capability: "
+        + str(visible.capabilities.historical_membership if visible else False)
+    )
+    console.print(
+        "Historical use allowed for visible snapshot: "
+        + str(visible.historical_use_allowed if visible else False)
+    )
+    artifact = {
+        "decision_time": decision_time.isoformat(),
+        "snapshot_count": len(snapshots),
+        "snapshots": [
+            {
+                "content_hash": item.content_hash,
+                "acquired_at": item.retrieved_at.isoformat(),
+                "record_count": len(item.records),
+                "provider": item.provider,
+                "historical_use_allowed": item.historical_use_allowed,
+                "historical_membership": item.capabilities.historical_membership,
+            }
+            for item in snapshots
+        ],
+        "decision_visible_snapshot": (
+            visible.content_hash if visible is not None else None
+        ),
+    }
+    _write_artifact(args, artifact)
+    if args.json:
+        console.print(json.dumps(artifact, ensure_ascii=False, indent=2, sort_keys=True))
+    return 0
+
+
+def _broad_history_sufficiency(service: BroadUniverseDataService, args: Namespace) -> int:
+    now = datetime.now(UTC)
+    as_of = _optional_date(getattr(args, "as_of", None))
+    universe_date = as_of or now.date()
+    decision_time = (
+        datetime.combine(as_of, time(20, 30), tzinfo=UTC) if as_of else now
+    )
+    report = service.history_sufficiency(
+        universe_date=universe_date,
+        decision_time=decision_time,
+        required_history_sessions=getattr(args, "required_sessions", None),
+    )
+    console.print("[bold]BROAD HISTORY SUFFICIENCY[/bold]")
+    console.print(
+        f"Required history sessions: {report['required_history_sessions']}   "
+        f"Denominator: {report['denominator']}   "
+        f"History sufficient: {report['history_sufficient']}   "
+        f"Coverage: {report['coverage_pct']}%"
+    )
+    reasons = report.get("reasons") or {}
+    if isinstance(reasons, dict):
+        for reason, count in reasons.items():
+            console.print(f"{reason}: {count}")
+    _write_artifact(args, report)
+    if args.json:
+        console.print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+    return 0
+
+
+def _write_artifact(args: Namespace, payload: object) -> None:
+    artifact = getattr(args, "artifact", None)
+    if artifact is None:
+        return
+    path = Path(artifact)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
 def _broad_funnel(service: BroadUniverseDataService, args: Namespace) -> int:
     now = datetime.now(UTC)
-    universe_date = _optional_date(getattr(args, "as_of", None)) or now.date()
-    report = service.funnel(universe_date=universe_date, decision_time=now)
+    as_of = _optional_date(getattr(args, "as_of", None))
+    universe_date = as_of or now.date()
+    decision_time = (
+        datetime.combine(as_of, time(20, 30), tzinfo=UTC) if as_of else now
+    )
+    report = service.funnel(universe_date=universe_date, decision_time=decision_time)
     console.print("[bold]FULL TRADABLE UNIVERSE FUNNEL[/bold]")
     console.print(
         f"Universe date: {report.universe_date} | "
@@ -188,6 +350,7 @@ def _broad_funnel(service: BroadUniverseDataService, args: Namespace) -> int:
     console.print(f"Quarantined symbols: {report.quarantine_count}")
     console.print(f"Eligible symbols ({len(report.eligible_symbols)}):")
     console.print(", ".join(report.eligible_symbols[:60]))
+    _write_artifact(args, report.document())
     if args.json:
         console.print(json.dumps(report.document(), ensure_ascii=False, indent=2, sort_keys=True))
     return 0

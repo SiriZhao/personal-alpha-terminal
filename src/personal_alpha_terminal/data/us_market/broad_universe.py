@@ -181,9 +181,6 @@ class EligibilityRules:
     # run cross-sectionally (fail-closed) or has collapsed versus recent runs.
     minimum_operational_universe: int = 50
     coverage_collapse_ratio: float = 0.5
-    # Candidate compression feeds the portfolio optimizer a bounded, ranked
-    # pool instead of the full operational cross-section.
-    candidate_max: int = 100
     candidate_min_alpha: float = 0.0
 
     def __post_init__(self) -> None:
@@ -199,8 +196,6 @@ class EligibilityRules:
             raise ValueError("minimum_operational_universe must be positive")
         if not 0 < self.coverage_collapse_ratio <= 1:
             raise ValueError("coverage_collapse_ratio must be in (0, 1]")
-        if self.candidate_max < 1:
-            raise ValueError("candidate_max must be positive")
 
     @property
     def fingerprint(self) -> str:
@@ -581,6 +576,49 @@ def write_directory_snapshot(snapshot: CurrentDirectorySnapshot, root: Path) -> 
     temporary.write_text(rendered, encoding="utf-8")
     temporary.replace(root / "latest.json")
     return versioned
+
+
+def list_directory_snapshots(root: Path) -> tuple[CurrentDirectorySnapshot, ...]:
+    """Return immutable, content-addressed directory snapshots ordered by acquisition time."""
+    if not root.is_dir():
+        return ()
+    snapshots: list[CurrentDirectorySnapshot] = []
+    for candidate in sorted(root.glob("*.json")):
+        if candidate.name == "latest.json" or candidate.name.endswith(".tmp"):
+            continue
+        try:
+            snapshots.append(read_directory_snapshot(candidate))
+        except (KeyError, OSError, TypeError, ValueError):
+            continue
+    return tuple(sorted(snapshots, key=lambda item: (item.retrieved_at, item.content_hash)))
+
+
+def latest_directory_snapshot_at(
+    root: Path,
+    decision_time: datetime,
+) -> CurrentDirectorySnapshot | None:
+    """Select the newest snapshot whose acquisition time is visible at decision_time.
+
+    When the current ``latest.json`` pointer is decision-visible it is preferred:
+    two captures can share an acquisition timestamp and the pointer records the
+    most recent capture at that instant.
+    """
+    if decision_time.tzinfo is None:
+        raise ValueError("directory snapshot decision_time must be timezone-aware")
+    latest = root / "latest.json"
+    if latest.exists():
+        try:
+            pointer = read_directory_snapshot(latest)
+            if pointer.retrieved_at <= decision_time:
+                return pointer
+        except (KeyError, OSError, TypeError, ValueError):
+            pass
+    visible = tuple(
+        item for item in list_directory_snapshots(root) if item.retrieved_at <= decision_time
+    )
+    if not visible:
+        return None
+    return max(visible, key=lambda item: (item.retrieved_at, item.content_hash))
 
 
 def read_directory_snapshot(path: Path) -> CurrentDirectorySnapshot:

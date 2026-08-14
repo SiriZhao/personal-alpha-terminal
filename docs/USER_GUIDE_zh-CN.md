@@ -27,50 +27,50 @@ git clone <仓库地址> E:\CSDIY\Vibe Coding Project\personal-alpha-terminal
 cd E:\CSDIY\Vibe Coding Project\personal-alpha-terminal
 ```
 
-## C. Python 与 .venv314
+## C. Python 与 .venv
 
-项目当前统一使用 `.venv314`。
+项目当前统一使用 `.venv`。
 
 ```powershell
-python -m venv .venv314
-.\.venv314\Scripts\python.exe -m pip install --upgrade pip
-.\.venv314\Scripts\python.exe -m pip install -e ".[dev,ai]"
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install -e ".[dev,ai]"
 ```
 
 安装后确认：
 
 ```powershell
-.\.venv314\Scripts\python.exe -m pip check
-.\.venv314\Scripts\python.exe main.py doctor
+.\.venv\Scripts\python.exe -m pip check
+.\.venv\Scripts\python.exe main.py doctor
 ```
 
-不要混用 `.venv` 和 `.venv314` 跑正式流程；如果旧环境仍存在，只作为历史参考。
+不要混用 `.venv` 和 `.venv` 跑正式流程；如果旧环境仍存在，只作为历史参考。
 
 ## D. 首次初始化
 
 先确认配置：
 
 ```powershell
-.\.venv314\Scripts\python.exe main.py settings
+.\.venv\Scripts\python.exe main.py settings
 ```
 
 初始化一个可审计的纯现金组合：
 
 ```powershell
-.\.venv314\Scripts\python.exe main.py portfolio-init --portfolio-id main --cash 100000 --currency USD
+.\.venv\Scripts\python.exe main.py portfolio-init --portfolio-id main --cash 100000 --currency USD
 ```
 
 查看组合：
 
 ```powershell
-.\.venv314\Scripts\python.exe main.py portfolio-list
-.\.venv314\Scripts\python.exe main.py portfolio-show
+.\.venv\Scripts\python.exe main.py portfolio-list
+.\.venv\Scripts\python.exe main.py portfolio-show
 ```
 
 如果已有真实持仓，可以在初始化时录入：
 
 ```powershell
-.\.venv314\Scripts\python.exe main.py portfolio-init --portfolio-id main --cash 50000 --position "AAPL=10:180" --position "MSFT=5"
+.\.venv\Scripts\python.exe main.py portfolio-init --portfolio-id main --cash 50000 --position "AAPL=10:180" --position "MSFT=5"
 ```
 
 系统只维护一个正式组合，默认标识为 `main`。不要创建 paper 模式，不要模拟持仓进入正式 ledger。
@@ -91,9 +91,9 @@ DEEPSEEK_API_KEY=<你的密钥>
 检查方式只显示 PRESENT/MISSING，不输出密钥：
 
 ```powershell
-.\.venv314\Scripts\python.exe main.py doctor
-.\.venv314\Scripts\python.exe main.py llm status
-.\.venv314\Scripts\python.exe main.py llm test
+.\.venv\Scripts\python.exe main.py doctor
+.\.venv\Scripts\python.exe main.py llm status
+.\.venv\Scripts\python.exe main.py llm test
 ```
 
 `llm test` 会发起一次真实最小请求，只用于确认连通性。
@@ -111,7 +111,7 @@ SEC_EDGAR_USER_AGENT=YourName your-email@example.com
 检查：
 
 ```powershell
-.\.venv314\Scripts\python.exe main.py doctor
+.\.venv\Scripts\python.exe main.py doctor
 ```
 
 doctor 只显示 `PRESENT` 或 `MISSING`，不会输出实际值。不要把 User-Agent 写入源码。
@@ -125,7 +125,7 @@ OperationalPolicy 是“在历史研究认证不足时，是否允许生成降�
 检查：
 
 ```powershell
-.\.venv314\Scripts\python.exe main.py operational-policy status
+.\.venv\Scripts\python.exe main.py operational-policy status
 ```
 
 如果看到：
@@ -140,7 +140,7 @@ Effective: false
 重新授权必须由你本人显式执行：
 
 ```powershell
-.\.venv314\Scripts\python.exe main.py operational-policy create --decision ALLOW_PROVISIONAL
+.\.venv\Scripts\python.exe main.py operational-policy create --decision ALLOW_PROVISIONAL
 ```
 
 该命令会要求输入确认，不会在无人值守时自动签发。普通研究、诊断和每日 no-action 不需要 policy 也能运行。
@@ -160,13 +160,13 @@ Effective: false
 具体时钟由系统 XNYS calendar 与 PIT 检查决定。不要只依赖固定墙钟时间。通常美东收盘后、北京时间晚上/次日凌晨，只要数据稳定且 doctor 的 timezone/calendar 检查通过，即可运行。
 
 ```powershell
-.\.venv314\Scripts\python.exe main.py --no-refresh daily
+.\.venv\Scripts\python.exe main.py --no-refresh daily
 ```
 
 需要刷新市场数据时：
 
 ```powershell
-.\.venv314\Scripts\python.exe main.py refresh
+.\.venv\Scripts\python.exe main.py refresh
 ```
 
 最终是否生成可执行建议取决于 DATA/PIT/SIGNAL/PORTFOLIO/RISK/DECISION/EXECUTION 门禁，不取决于运行时间是否“看起来像”。
@@ -178,19 +178,19 @@ Effective: false
 1. 检查环境：
 
 ```powershell
-.\.venv314\Scripts\python.exe main.py doctor
+.\.venv\Scripts\python.exe main.py doctor
 ```
 
 2. 更新数据并运行 daily：
 
 ```powershell
-.\.venv314\Scripts\python.exe main.py refresh
+.\.venv\Scripts\python.exe main.py refresh
 ```
 
 或只使用缓存/已完成数据：
 
 ```powershell
-.\.venv314\Scripts\python.exe main.py --no-refresh daily
+.\.venv\Scripts\python.exe main.py --no-refresh daily
 ```
 
 3. 阅读 gate：
@@ -230,7 +230,7 @@ EXECUTION_PLAN PASS
 6. 真实成交后同步持仓：
 
 ```powershell
-.\.venv314\Scripts\python.exe main.py mark-executed <recommendation-id> --run-id <run-id> --price 190.25 --quantity 5 --fees 0.50 --timestamp 2026-08-14T14:31:00+00:00 --fill-id schwab-fill-001
+.\.venv\Scripts\python.exe main.py mark-executed <recommendation-id> --run-id <run-id> --price 190.25 --quantity 5 --fees 0.50 --timestamp 2026-08-14T14:31:00+00:00 --fill-id schwab-fill-001
 ```
 
 ## J. 持仓更新
@@ -240,7 +240,7 @@ EXECUTION_PLAN PASS
 新增成交：
 
 ```powershell
-.\.venv314\Scripts\python.exe main.py portfolio-update --portfolio-id main --as-of 2026-08-14 --cash 25000 --position "AAPL=10:190.25"
+.\.venv\Scripts\python.exe main.py portfolio-update --portfolio-id main --as-of 2026-08-14 --cash 25000 --position "AAPL=10:190.25"
 ```
 
 更新数量、价格、手续费：
@@ -252,13 +252,13 @@ EXECUTION_PLAN PASS
 部分成交：
 
 ```powershell
-.\.venv314\Scripts\python.exe main.py mark-executed <recommendation-id> --run-id <run-id> --price 190.25 --quantity 2 --fees 0.20 --timestamp 2026-08-14T14:31:00+00:00 --fill-id schwab-partial-001
+.\.venv\Scripts\python.exe main.py mark-executed <recommendation-id> --run-id <run-id> --price 190.25 --quantity 2 --fees 0.20 --timestamp 2026-08-14T14:31:00+00:00 --fill-id schwab-partial-001
 ```
 
 卖出或减仓：
 
 ```powershell
-.\.venv314\Scripts\python.exe main.py portfolio-update --portfolio-id main --as-of 2026-08-15 --cash 30000 --position "AAPL=8:191.00"
+.\.venv\Scripts\python.exe main.py portfolio-update --portfolio-id main --as-of 2026-08-15 --cash 30000 --position "AAPL=8:191.00"
 ```
 
 现金：
@@ -272,15 +272,15 @@ EXECUTION_PLAN PASS
 查看 ledger：
 
 ```powershell
-.\.venv314\Scripts\python.exe main.py portfolio-list
-.\.venv314\Scripts\python.exe main.py portfolio-show
-.\.venv314\Scripts\python.exe main.py forward-track --help
+.\.venv\Scripts\python.exe main.py portfolio-list
+.\.venv\Scripts\python.exe main.py portfolio-show
+.\.venv\Scripts\python.exe main.py forward-track --help
 ```
 
 验证 ledger：
 
 ```powershell
-.\.venv314\Scripts\python.exe main.py doctor
+.\.venv\Scripts\python.exe main.py doctor
 ```
 
 doctor 会检查组合、数据库、迁移和 runtime 一致性。
@@ -292,28 +292,28 @@ DeepSeek 通过 OpenAI-compatible API 接入。
 常用命令：
 
 ```powershell
-.\.venv314\Scripts\python.exe main.py llm status
-.\.venv314\Scripts\python.exe main.py llm test
-.\.venv314\Scripts\python.exe main.py doctor
-.\.venv314\Scripts\python.exe main.py intelligence status
+.\.venv\Scripts\python.exe main.py llm status
+.\.venv\Scripts\python.exe main.py llm test
+.\.venv\Scripts\python.exe main.py doctor
+.\.venv\Scripts\python.exe main.py intelligence status
 ```
 
 SEC acquisition：
 
 ```powershell
-.\.venv314\Scripts\python.exe main.py intelligence acquire --cik 320193 --max-documents 20
+.\.venv\Scripts\python.exe main.py intelligence acquire --cik 320193 --max-documents 20
 ```
 
 历史 backfill：
 
 ```powershell
-.\.venv314\Scripts\python.exe main.py intelligence backfill --cik 320193 --max-documents 20
+.\.venv\Scripts\python.exe main.py intelligence backfill --cik 320193 --max-documents 20
 ```
 
 真实处理：
 
 ```powershell
-.\.venv314\Scripts\python.exe main.py intelligence process --max-documents 10
+.\.venv\Scripts\python.exe main.py intelligence process --max-documents 10
 ```
 
 LLM cache 由 raw content hash、model、prompt version 决定。重复处理相同原始文档会命中缓存，不会伪造新的 LLM call。
@@ -321,7 +321,7 @@ LLM cache 由 raw content hash、model、prompt version 决定。重复处理相
 成本：
 
 ```powershell
-.\.venv314\Scripts\python.exe main.py intelligence status
+.\.venv\Scripts\python.exe main.py intelligence status
 ```
 
 status 会显示 estimated API cost。当前 LLM production influence 必须是 `NONE`。
@@ -361,11 +361,11 @@ production influence = 0
 常用：
 
 ```powershell
-.\.venv314\Scripts\python.exe main.py intelligence status
-.\.venv314\Scripts\python.exe main.py intelligence audit
-.\.venv314\Scripts\python.exe main.py intelligence outcomes
-.\.venv314\Scripts\python.exe main.py intelligence alpha-research
-.\.venv314\Scripts\python.exe main.py intelligence probability-research
+.\.venv\Scripts\python.exe main.py intelligence status
+.\.venv\Scripts\python.exe main.py intelligence audit
+.\.venv\Scripts\python.exe main.py intelligence outcomes
+.\.venv\Scripts\python.exe main.py intelligence alpha-research
+.\.venv\Scripts\python.exe main.py intelligence probability-research
 ```
 
 ## N. Portfolio / Risk
@@ -388,8 +388,8 @@ production influence = 0
 检查：
 
 ```powershell
-.\.venv314\Scripts\python.exe main.py doctor
-.\.venv314\Scripts\python.exe main.py data
+.\.venv\Scripts\python.exe main.py doctor
+.\.venv\Scripts\python.exe main.py data
 ```
 
 确认 provider 是否可用、缓存是否过期、是否 coverage collapse。
@@ -401,7 +401,7 @@ production influence = 0
 ### POLICY mismatch
 
 ```powershell
-.\.venv314\Scripts\python.exe main.py operational-policy status
+.\.venv\Scripts\python.exe main.py operational-policy status
 ```
 
 看到 `IDENTITY_MISMATCH` 后，由你本人显式重新授权。
@@ -419,13 +419,13 @@ production influence = 0
 检查 `SEC_EDGAR_USER_AGENT` 是否 PRESENT，再运行：
 
 ```powershell
-.\.venv314\Scripts\python.exe main.py doctor
+.\.venv\Scripts\python.exe main.py doctor
 ```
 
 ### missing dependency
 
 ```powershell
-.\.venv314\Scripts\python.exe -m pip install -e ".[dev,ai]"
+.\.venv\Scripts\python.exe -m pip install -e ".[dev,ai]"
 ```
 
 ### quarantine

@@ -117,6 +117,24 @@ class MarketSessionCalendar:
                 f"certified XNYS calendar unavailable: {type(error).__name__}: {error}"
             ) from error
 
+    def completed_session_date(self, value: datetime) -> date:
+        """Return the most recent session whose data is observable after close.
+
+        An after-close or overnight clock on a trading day resolves to that same
+        trading day; before the close it resolves to the previous trading day.
+        """
+        if value.tzinfo is None:
+            raise ValueError("market timestamp must be timezone-aware")
+        utc_value = value.astimezone(UTC)
+        local = utc_value.astimezone(NEW_YORK)
+        candidate = local.date()
+        if self.is_trading_day(candidate) and utc_value >= self.market_close_utc(candidate):
+            return candidate
+        candidate -= timedelta(days=1)
+        while not self.is_trading_day(candidate):
+            candidate -= timedelta(days=1)
+        return candidate
+
     def next_trading_day(self, value: date) -> date:
         candidate = value + timedelta(days=1)
         while not self.is_trading_day(candidate):

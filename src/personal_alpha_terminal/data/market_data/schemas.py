@@ -135,6 +135,7 @@ class InstrumentUpdateResult:
     updated_count: int = 0
     quality_issues: tuple[QualityIssue, ...] = ()
     error: str | None = None
+    refresh_class: str = "UNKNOWN"
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,6 +144,7 @@ class DailyUpdateReport:
     results: tuple[InstrumentUpdateResult, ...] = field(default_factory=tuple)
     provider_reconciled: bool = False
     corporate_action_certified: bool = False
+    batch_timings: tuple[dict[str, object], ...] = field(default_factory=tuple)
 
     @property
     def success_count(self) -> int:

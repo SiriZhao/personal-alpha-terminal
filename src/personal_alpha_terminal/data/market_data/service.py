@@ -5,6 +5,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import date, timedelta
 from functools import partial
+from time import perf_counter
 from typing import Any
 
 from sqlalchemy.exc import SQLAlchemyError
@@ -131,6 +132,7 @@ class MarketDataEngine:
         symbols: set[str] | None = None,
         start_date: date | None = None,
         end_date: date | None = None,
+        progress: Callable[[str], None] | None = None,
     ) -> DailyUpdateReport:
         if symbols and (not markets or len(markets) != 1):
             raise ValueError("A symbol filter requires exactly one market.")
@@ -162,6 +164,7 @@ class MarketDataEngine:
                 batch_stocks,
                 effective_end,
                 forced_start_date=start_date,
+                progress=progress,
             )
             remaining_results = tuple(
                 self._update_stock(
@@ -174,6 +177,7 @@ class MarketDataEngine:
             return DailyUpdateReport(
                 started_on=batch_report.started_on,
                 results=(*batch_report.results, *remaining_results),
+                batch_timings=batch_report.batch_timings,
             )
 
         if symbols:
@@ -214,13 +218,15 @@ class MarketDataEngine:
         end_date: date,
         *,
         forced_start_date: date | None,
+        progress: Callable[[str], None] | None = None,
     ) -> DailyUpdateReport:
-        """Batch-first refresh for large universes.
+        """Batch-first incremental refresh for large universes.
 
-        The broad universe is fetched in bounded chunks via the batch provider;
-        successes are persisted per chunk (never all-or-nothing) and failures
-        are recorded per symbol.  Symbols already fresh through ``end_date`` are
-        skipped, giving a resume-friendly incremental run.
+        Each symbol is classified from real DB bounds: fully current caches are
+        reused, symbols with historical depth but a missing recent session are
+        refreshed only for the missing window, and only symbols without usable
+        history enter a full backfill. Provider work is grouped by the same
+        missing window so one batch serves many symbols.
         """
         from personal_alpha_terminal.data.market_data.schemas import InstrumentUpdateResult
 
@@ -229,141 +235,210 @@ class MarketDataEngine:
         chunk_size = int(getattr(batch_provider, "chunk_size", 100))
         requested = [item for item in stocks if item.symbol]
         target = sorted(item.symbol for item in requested)
-        fresh: set[str] = set()
-        pending: list[str] = []
+        stock_by_symbol = {item.symbol: item for item in requested}
+        required_history_start = end_date - timedelta(
+            days=self._settings.console_initial_history_days
+        )
+        decisions: dict[str, tuple[str, date, date]] = {}
         for symbol in target:
-            stock = next((item for item in requested if item.symbol == symbol), None)
+            stock = stock_by_symbol.get(symbol)
             if stock is None:
                 continue
-            latest = self._repository.latest_price_date(stock.id, batch_provider.source)
-            if latest is not None and latest >= end_date:
-                fresh.add(symbol)
+            earliest, latest = self._repository.price_date_bounds(
+                stock.id, batch_provider.source
+            )
+            if earliest is None or latest is None or earliest > required_history_start:
+                decisions[symbol] = ("FULL_BACKFILL", required_history_start, end_date)
+            elif latest >= end_date:
+                decisions[symbol] = ("CACHED_UP_TO_DATE", required_history_start, end_date)
             else:
-                pending.append(symbol)
+                gap_days = (end_date - latest).days
+                refresh_class = (
+                    "INCREMENTAL_ONE_SESSION" if gap_days <= 5 else "INCREMENTAL_GAP"
+                )
+                decisions[symbol] = (refresh_class, latest + timedelta(days=1), end_date)
 
         results: list[InstrumentUpdateResult] = []
-        start_date = forced_start_date or self._incremental_start(None)
-        for symbol in sorted(fresh):
-            results.append(
-                InstrumentUpdateResult(
-                    symbol=symbol,
-                    market="US",
-                    source=batch_provider.source,
-                    provider=batch_provider.provider_id,
-                    status="cached",
-                    start_date=start_date,
-                    end_date=end_date,
-                    error="already fresh through end_date; skipped by resume logic",
-                )
-            )
-        chunks = [
-            pending[index : index + chunk_size]
-            for index in range(0, len(pending), chunk_size)
-        ]
-        stock_by_symbol = {item.symbol: item for item in requested}
-        for chunk in chunks:
-            try:
-                report = batch_provider.download(
-                    tuple(chunk),
-                    start_date=start_date,
-                    end_date=end_date,
-                )
-            except Exception as exc:  # noqa: BLE001 - isolation boundary
-                structured = classify_provider_error(
-                    batch_provider.source,
-                    exc,
-                    symbol=", ".join(chunk[:3]),
-                    attempt=1,
-                )
-                self._record_outcome(
-                    batch_provider.source,
-                    structured.classification.value,
-                    structured.sanitized_reason,
-                )
-                self._circuit.record_failure(
-                    batch_provider.source,
-                    structured.classification,
-                    symbol=chunk[0] if chunk else "BATCH",
-                )
-                for symbol in chunk:
-                    results.append(
-                        InstrumentUpdateResult(
-                            symbol=symbol,
-                            market="US",
-                            source=batch_provider.source,
-                            provider=batch_provider.provider_id,
-                            status="failed",
-                            start_date=start_date,
-                            end_date=end_date,
-                            error=structured.classification.value,
-                        )
-                    )
-                continue
-            self._circuit.record_success(batch_provider.source)
-            self._record_outcome(batch_provider.source, "SUCCESS", None)
-            received = set(report.received_symbols)
-            failed = set(report.failed_symbols)
-            for symbol in chunk:
-                stock = stock_by_symbol.get(symbol)
-                if stock is None or symbol not in received:
-                    results.append(
-                        InstrumentUpdateResult(
-                            symbol=symbol,
-                            market="US",
-                            source=batch_provider.source,
-                            provider=batch_provider.provider_id,
-                            status="no_data" if symbol not in failed else "failed",
-                            start_date=start_date,
-                            end_date=end_date,
-                            error=(
-                                "SYMBOL_NOT_RECEIVED"
-                                if symbol not in failed
-                                else "NO_PRICE_HISTORY"
-                            ),
-                        )
-                    )
-                    continue
-                batch_bars = [
-                    bar for bar in report.bars if getattr(bar, "symbol", None) == symbol
-                ]
-                if not batch_bars:
-                    results.append(
-                        InstrumentUpdateResult(
-                            symbol=symbol,
-                            market="US",
-                            source=batch_provider.source,
-                            provider=batch_provider.provider_id,
-                            status="no_data",
-                            start_date=start_date,
-                            end_date=end_date,
-                            error="NO_PRICE_HISTORY",
-                        )
-                    )
-                    continue
-                with self._repository.savepoint():
-                    upsert = self._repository.upsert_bars(
-                        stock=stock,
-                        source=batch_provider.source,
-                        provider=batch_provider.provider_id,
-                        bars=batch_bars,
-                    )
+        for symbol in sorted(target):
+            refresh_class, request_start, request_end = decisions[symbol]
+            if refresh_class == "CACHED_UP_TO_DATE":
                 results.append(
                     InstrumentUpdateResult(
                         symbol=symbol,
                         market="US",
                         source=batch_provider.source,
                         provider=batch_provider.provider_id,
-                        status="success",
-                        start_date=start_date,
-                        end_date=end_date,
-                        fetched_count=len(batch_bars),
-                        inserted_count=upsert.inserted_count,
-                        updated_count=upsert.updated_count,
+                        status="cached",
+                        start_date=request_start,
+                        end_date=request_end,
+                        error="HISTORICAL_CACHE_REUSED_UP_TO_DATE",
+                        refresh_class=refresh_class,
                     )
+                )
+        pending_by_window: dict[tuple[date, date], list[str]] = {}
+        for symbol in sorted(target):
+            refresh_class, request_start, request_end = decisions[symbol]
+            if refresh_class != "CACHED_UP_TO_DATE":
+                pending_by_window.setdefault((request_start, request_end), []).append(symbol)
+        if progress is not None:
+            cached_count = sum(
+                1
+                for refresh_class, _, _ in decisions.values()
+                if refresh_class == "CACHED_UP_TO_DATE"
+            )
+            progress(
+                f"[\u5e02\u573a\u6570\u636e] \u68c0\u67e5\u7f13\u5b58 "
+                f"{cached_count} / {len(target)}"
+            )
+        batch_timings: list[dict[str, object]] = []
+        for (request_start, request_end), symbols in sorted(pending_by_window.items()):
+            chunks = [
+                symbols[index : index + chunk_size]
+                for index in range(0, len(symbols), chunk_size)
+            ]
+            for chunk_index, chunk in enumerate(chunks, start=1):
+                started = perf_counter()
+                if progress is not None:
+                    progress(
+                        f"[Provider] \u6279\u6b21 {chunk_index} / {len(chunks)} "
+                        f"{request_start} -> {request_end}"
+                    )
+                try:
+                    report = batch_provider.download(
+                        tuple(chunk),
+                        start_date=request_start,
+                        end_date=request_end,
+                    )
+                except Exception as exc:  # noqa: BLE001 - isolation boundary
+                    structured = classify_provider_error(
+                        batch_provider.source,
+                        exc,
+                        symbol=", ".join(chunk[:3]),
+                        attempt=1,
+                    )
+                    self._record_outcome(
+                        batch_provider.source,
+                        structured.classification.value,
+                        structured.sanitized_reason,
+                    )
+                    self._circuit.record_failure(
+                        batch_provider.source,
+                        structured.classification,
+                        symbol=chunk[0] if chunk else "BATCH",
+                    )
+                    for symbol in chunk:
+                        results.append(
+                            InstrumentUpdateResult(
+                                symbol=symbol,
+                                market="US",
+                                source=batch_provider.source,
+                                provider=batch_provider.provider_id,
+                                status="failed",
+                                start_date=request_start,
+                                end_date=request_end,
+                                error=structured.classification.value,
+                                refresh_class=decisions[symbol][0],
+                            )
+                        )
+                    batch_timings.append(
+                        {
+                            "batch": chunk_index,
+                            "symbol_count": len(chunk),
+                            "start_date": request_start.isoformat(),
+                            "end_date": request_end.isoformat(),
+                            "duration_seconds": round(perf_counter() - started, 4),
+                            "success": 0,
+                            "failure": len(chunk),
+                        }
+                    )
+                    continue
+                self._circuit.record_success(batch_provider.source)
+                self._record_outcome(batch_provider.source, "SUCCESS", None)
+                received = set(report.received_symbols)
+                failed = set(report.failed_symbols)
+                success_in_batch = 0
+                failure_in_batch = 0
+                for symbol in chunk:
+                    refresh_class = decisions[symbol][0]
+                    stock = stock_by_symbol.get(symbol)
+                    if stock is None or symbol not in received:
+                        failure_in_batch += 1
+                        results.append(
+                            InstrumentUpdateResult(
+                                symbol=symbol,
+                                market="US",
+                                source=batch_provider.source,
+                                provider=batch_provider.provider_id,
+                                status="no_data" if symbol not in failed else "failed",
+                                start_date=request_start,
+                                end_date=request_end,
+                                error=(
+                                    "SYMBOL_NOT_RECEIVED"
+                                    if symbol not in failed
+                                    else "NO_PRICE_HISTORY"
+                                ),
+                                refresh_class=refresh_class,
+                            )
+                        )
+                        continue
+                    batch_bars = [
+                        bar for bar in report.bars if getattr(bar, "symbol", None) == symbol
+                    ]
+                    if not batch_bars:
+                        failure_in_batch += 1
+                        results.append(
+                            InstrumentUpdateResult(
+                                symbol=symbol,
+                                market="US",
+                                source=batch_provider.source,
+                                provider=batch_provider.provider_id,
+                                status="no_data",
+                                start_date=request_start,
+                                end_date=request_end,
+                                error="NO_PRICE_HISTORY",
+                                refresh_class=refresh_class,
+                            )
+                        )
+                        continue
+                    with self._repository.savepoint():
+                        upsert = self._repository.upsert_bars(
+                            stock=stock,
+                            source=batch_provider.source,
+                            provider=batch_provider.provider_id,
+                            bars=batch_bars,
+                        )
+                    success_in_batch += 1
+                    results.append(
+                        InstrumentUpdateResult(
+                            symbol=symbol,
+                            market="US",
+                            source=batch_provider.source,
+                            provider=batch_provider.provider_id,
+                            status="success",
+                            start_date=request_start,
+                            end_date=request_end,
+                            fetched_count=len(batch_bars),
+                            inserted_count=upsert.inserted_count,
+                            updated_count=upsert.updated_count,
+                            error=refresh_class,
+                            refresh_class=refresh_class,
+                        )
+                    )
+                batch_timings.append(
+                    {
+                        "batch": chunk_index,
+                        "symbol_count": len(chunk),
+                        "start_date": request_start.isoformat(),
+                        "end_date": request_end.isoformat(),
+                        "duration_seconds": round(perf_counter() - started, 4),
+                        "success": success_in_batch,
+                        "failure": failure_in_batch,
+                    }
                 )
         return DailyUpdateReport(
             started_on=date.today(),
             results=tuple(results),
+            batch_timings=tuple(batch_timings),
         )
 
     def _update_stock(

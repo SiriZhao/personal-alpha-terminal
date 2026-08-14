@@ -23,7 +23,6 @@ from personal_alpha_terminal.quant_engine.costs import TransactionCostConfig
 SYMBOLS = ("SPY", "QQQ", "IWM", "VTI", "TLT", "GLD", "AAPL", "MSFT")
 SESSIONS = 252
 REBALANCE_EVERY = 21
-MAX_HOLDINGS = 10
 MAX_POSITION_WEIGHT = 0.15
 MAX_GROSS = 1.0
 TARGET_GROSS = 0.80
@@ -270,11 +269,11 @@ def _simulate_scenario(
             returns.loc[dates[day], momentum_symbols] -= 0.10
 
     weights = pd.DataFrame(
-        np.full((len(dates), count), 0.10),
+        np.full((len(dates), count), TARGET_GROSS / count),
         index=dates,
         columns=symbols,
     )
-    cash = np.full(len(dates), 0.20)
+    cash = np.full(len(dates), 1.0 - TARGET_GROSS)
     daily_portfolio = np.zeros(len(dates))
     turnover_total = 0.0
     cost_total = 0.0
@@ -332,8 +331,6 @@ def _simulate_scenario(
         violations.append("GROSS_CAP_VIOLATION")
     if (weights.max(axis=1) > MAX_POSITION_WEIGHT + 1e-12).any():
         violations.append("POSITION_CAP_VIOLATION")
-    if weights.shape[1] > MAX_HOLDINGS:
-        violations.append("MAX_HOLDINGS_VIOLATION")
     if not returns.index.is_monotonic_increasing or returns.index.has_duplicates:
         violations.append("FUTURE_OR_DUPLICATE_TIMESTAMP")
     gate_blocks: tuple[str, ...] = ()

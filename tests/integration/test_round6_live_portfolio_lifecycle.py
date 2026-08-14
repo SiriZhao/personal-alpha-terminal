@@ -63,7 +63,6 @@ def _config(base_config):
             require_pit_total_return=False,
             minimum_operational_universe=5,
             coverage_collapse_ratio=0.5,
-            candidate_max=50,
             candidate_min_alpha=0.0,
         ),
     )

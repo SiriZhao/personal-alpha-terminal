@@ -47,7 +47,6 @@ def test_candidate_compression_records_each_step() -> None:
     signals = _many(count=40)
     result = compress_candidates(
         signals,
-        candidate_max=10,
         candidate_min_alpha=0.0,
     )
     names = [step.name for step in result.steps]
@@ -57,36 +56,36 @@ def test_candidate_compression_records_each_step() -> None:
         "minimum_alpha",
         "liquidity",
         "risk_screening",
-        "candidate_bound",
+        "optimizer_eligible",
     ]
     assert result.steps[0].count == 40
-    assert result.steps[-1].count == 10
-    assert len(result.candidate_symbols) == 10
-    assert result.document()["candidate_count"] == 10
+    assert result.steps[-1].count == 39
+    assert len(result.candidate_symbols) == 39
+    assert result.document()["candidate_count"] == 39
 
 
 def test_candidate_compression_orders_by_alpha_descending() -> None:
     signals = _many(count=20)
-    result = compress_candidates(signals, candidate_max=5, candidate_min_alpha=0.0)
+    result = compress_candidates(signals, candidate_min_alpha=0.0)
     by_alpha = {item.symbol: item.expected_excess_return for item in signals}
     expected = sorted(
-        (item.symbol for item in signals),
+        (item.symbol for item in signals if item.expected_excess_return > 0),
         key=lambda symbol: (-by_alpha[symbol], symbol),
-    )[:5]
+    )
     assert result.candidate_symbols == tuple(expected)
 
 
 def test_candidate_compression_is_deterministic() -> None:
     signals = _many(count=30)
-    first = compress_candidates(signals, candidate_max=8, candidate_min_alpha=0.0)
-    second = compress_candidates(signals, candidate_max=8, candidate_min_alpha=0.0)
+    first = compress_candidates(signals, candidate_min_alpha=0.0)
+    second = compress_candidates(signals, candidate_min_alpha=0.0)
     assert first.candidate_symbols == second.candidate_symbols
     assert first.document() == second.document()
 
 
 def test_candidate_compression_with_min_alpha_threshold() -> None:
     signals = _many(count=20)  # all positive
-    result = compress_candidates(signals, candidate_max=100, candidate_min_alpha=0.015)
+    result = compress_candidates(signals, candidate_min_alpha=0.015)
     # Only symbols with expected alpha >= 0.015 survive the minimum-alpha step.
     by_alpha = {item.symbol: item.expected_excess_return for item in signals}
     expected = tuple(
@@ -100,6 +99,6 @@ def test_candidate_compression_with_min_alpha_threshold() -> None:
 
 def test_candidate_compression_no_positive_alpha_yields_empty_pool() -> None:
     signals = tuple(_signal(f"Z{index:03d}", -0.01) for index in range(10))
-    result = compress_candidates(signals, candidate_max=5, candidate_min_alpha=0.0)
+    result = compress_candidates(signals, candidate_min_alpha=0.0)
     assert result.candidate_symbols == ()
     assert result.steps[1].rejected == 10

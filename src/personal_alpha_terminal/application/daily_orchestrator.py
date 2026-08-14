@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import replace
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 from pathlib import Path
 from time import perf_counter
 from uuid import uuid4
@@ -66,8 +67,8 @@ from personal_alpha_terminal.models.intelligence import (
     IntelligenceResearchResult,
 )
 from personal_alpha_terminal.terminal.market_sessions import (
-    MarketSession,
     MarketSessionCalendar,
+    MarketSessionState,
 )
 
 _STAGE_ORDER = (
@@ -125,6 +126,7 @@ class DailyQuantOrchestrator:
         portfolio_id: int | None = None,
         decision_time: datetime | None = None,
         refresh: bool = True,
+        progress: Callable[[str], None] | None = None,
     ) -> DailyQuantResult:
         started_at = datetime.now(UTC)
         run_id = f"daily-{uuid4().hex}"
@@ -139,7 +141,8 @@ class DailyQuantOrchestrator:
         stage_started = perf_counter()
         try:
             market = self._calendar.classify(now)
-            analysis_date = self._analysis_date(market.timestamp_et, market.session)
+            analysis_date = self._analysis_date(market)
+            trade_date = market.trade_date
             stages["CALENDAR"] = StageResult(
                 "CALENDAR",
                 StageStatus.PASS,
@@ -183,10 +186,15 @@ class DailyQuantOrchestrator:
                     sync_runner=self._sync_runner,
                 )
                 if refresh:
+                    if progress is not None:
+                        progress("[\u5e02\u573a\u6570\u636e] \u5237\u65b0\u4e2d")
                     sync = data_service.sync_market_data(
                         start_date=data_service.refresh_start_date(analysis_date=analysis_date),
                         end_date=analysis_date,
+                        progress=progress,
                     )
+                    if progress is not None:
+                        progress("[\u5e02\u573a\u6570\u636e] \u5237\u65b0\u5b8c\u6210")
                     if sync.status == "BLOCKED":
                         data_failure_reasons.append(
                             "required provider refresh failed: " + ", ".join(sync.failed_symbols)
@@ -206,6 +214,15 @@ class DailyQuantOrchestrator:
                     analysis_date=analysis_date,
                     decision_time=effective_decision_time,
                 )
+                if certification.latest_completed_session is not None:
+                    resolved_analysis = certification.latest_completed_session
+                    if resolved_analysis != analysis_date:
+                        analysis_date = resolved_analysis
+                        trade_date = self._calendar.next_trading_day(analysis_date)
+                    certification = data_service.daily_certification(
+                        analysis_date=analysis_date,
+                        decision_time=effective_decision_time,
+                    )
                 data_health = (
                     DataHealthItem(
                         dataset="LIVE_RAW_OHLCV",
@@ -286,7 +303,7 @@ class DailyQuantOrchestrator:
                 started_at,
                 effective_decision_time,
                 analysis_date,
-                market.trade_date,
+                trade_date,
                 market.session.value,
                 market.structure_version.value,
                 stages,
@@ -296,13 +313,18 @@ class DailyQuantOrchestrator:
             )
 
         stage_started = perf_counter()
+        if progress is not None:
+            progress("[PIT] \u80a1\u7968\u6c60\u6784\u5efa\u4e2d")
         with self._factory.begin() as session:
             workflow_result = ProductionDailyWorkflow(session, self._effective_config).run(
                 portfolio_id=resolved_portfolio,
                 decision_time=effective_decision_time,
+                analysis_date=analysis_date,
             )
         quant_duration = perf_counter() - stage_started
         self._merge_quant_stages(stages, workflow_result, quant_duration)
+        if progress is not None:
+            progress("[FACTOR] \u8ba1\u7b97\u5b8c\u6210")
         stage_started = perf_counter()
         self._add_llm_intelligence_stage(
             stages,
@@ -328,7 +350,7 @@ class DailyQuantOrchestrator:
             started_at=started_at,
             now=effective_decision_time,
             analysis_date=analysis_date,
-            trade_date=market.trade_date,
+            trade_date=trade_date,
             market_session=market.session.value,
             market_structure=market.structure_version.value,
             stages=stages,
@@ -606,14 +628,8 @@ class DailyQuantOrchestrator:
             "the manual ledger"
         )
 
-    def _analysis_date(self, timestamp_et: datetime, session: MarketSession) -> date:
-        candidate = timestamp_et.date()
-        if session is MarketSession.POSTMARKET and self._calendar.is_trading_day(candidate):
-            return candidate
-        candidate -= timedelta(days=1)
-        while not self._calendar.is_trading_day(candidate):
-            candidate -= timedelta(days=1)
-        return candidate
+    def _analysis_date(self, market: MarketSessionState) -> date:
+        return self._calendar.completed_session_date(market.timestamp_utc)
 
     @staticmethod
     def _merge_quant_stages(
@@ -1016,7 +1032,6 @@ class DailyQuantOrchestrator:
         candidate_count = int(
             str(
                 workflow.universe_evidence.get("candidate_count", 0)
-                or workflow.universe_evidence.get("candidate_bound", 0)
                 or 0
             )
         )
@@ -1033,15 +1048,13 @@ class DailyQuantOrchestrator:
             "risk_engine_securities": (
                 len(workflow.risk.symbols) if workflow.risk is not None else 0
             ),
-            "maximum_allowed_holdings": (
-                self._effective_config.portfolio_constraints.maximum_holdings
-            ),
+            "maximum_allowed_holdings": None,
             "optimized_target_holdings": len(target_weights),
             "final_decision_holdings": len(decisions),
             "pre_optimizer_top10_truncation": False,
             "optimizer_received_alpha_top10": False,
             "display_candidates_limited_to": 10,
-            "holding_cap_policy": "EXPLICIT_POST_OPTIMIZATION_CAP",
+            "holding_cap_policy": "NO_FIXED_CARDINALITY_CAP",
         }
 
         return DailyQuantResult(

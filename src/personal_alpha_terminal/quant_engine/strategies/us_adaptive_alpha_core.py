@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
+from typing import cast
 
 import pandas as pd
 
@@ -38,6 +39,37 @@ class USAdaptiveAlphaCoreV1Config:
     @property
     def parameter_fingerprint(self) -> str:
         return fingerprint_parameters(asdict(self))
+
+    @property
+    def history_requirements(self) -> tuple[dict[str, object], ...]:
+        """Explicit history contract derived from active factor definitions."""
+        return (
+            {
+                "factor": "momentum_12_1",
+                "lookback_sessions": self.momentum_lookback,
+                "warmup_sessions": self.momentum_skip,
+                "effective_required_sessions": self.momentum_lookback + 1,
+            },
+            {
+                "factor": "trend_slope",
+                "lookback_sessions": self.trend_window,
+                "warmup_sessions": 0,
+                "effective_required_sessions": self.trend_window,
+            },
+            {
+                "factor": "volatility",
+                "lookback_sessions": self.volatility_window,
+                "warmup_sessions": 1,
+                "effective_required_sessions": self.volatility_window + 1,
+            },
+        )
+
+    @property
+    def required_history_sessions(self) -> int:
+        return max(
+            int(cast(int, item["effective_required_sessions"]))
+            for item in self.history_requirements
+        )
 
 
 @dataclass(frozen=True, slots=True)

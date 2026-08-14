@@ -196,16 +196,27 @@ class DataService:
         notify(InitializationProgress(6, 6, "完成", f"快照 {outcome.snapshot_id}"))
         return outcome
 
-    def sync_market_data(self, *, start_date: date, end_date: date) -> SyncOutcome:
+    def sync_market_data(
+        self,
+        *,
+        start_date: date,
+        end_date: date,
+        progress: Callable[[str], None] | None = None,
+    ) -> SyncOutcome:
         if self._uses_default_sync_runner:
             self._refresh_broad_current_directory()
         self._register_minimum_universe()
         self._create_universe_snapshot(end_date)
-        self._initialize_exchange_calendar(
+        calendar_start = min(
             start_date - timedelta(days=5),
+            end_date - timedelta(days=self._settings.console_initial_history_days),
+        )
+        self._initialize_exchange_calendar(
+            calendar_start,
             end_date + timedelta(days=5),
         )
         requested_at = datetime.now(UTC)
+        self._active_progress = progress
         report = self._sync_runner(self._session, start_date, end_date)
         completed_at = datetime.now(UTC)
         return self._persist_manifest(report, requested_at, completed_at, start_date, end_date)
@@ -279,7 +290,10 @@ class DataService:
         self, session: Session, start_date: date, end_date: date
     ) -> DailyUpdateReport:
         return build_market_data_engine(session, self._settings).update_daily_data(
-            markets={"US"}, start_date=start_date, end_date=end_date
+            markets={"US"},
+            start_date=start_date,
+            end_date=end_date,
+            progress=getattr(self, "_active_progress", None),
         )
 
     def _register_minimum_universe(self) -> None:
@@ -609,11 +623,13 @@ class DataService:
                     "source": item.source,
                     "provider": item.provider,
                     "error": item.error,
+                    "refresh_class": item.refresh_class,
                 }
                 for item in report.results
             },
             "stale_symbol_summary": sorted(stale_required),
             "failed_symbols": sorted(failures | required_coverage_failures),
+            "batch_timings": [dict(item) for item in report.batch_timings],
             "fallback_usage": [
                 {
                     "symbol": item.symbol,
@@ -705,6 +721,7 @@ class DataService:
                         "source": item.source,
                         "provider": item.provider,
                         "error": item.error,
+                        "refresh_class": item.refresh_class,
                     }
                     for item in report.results
                 },

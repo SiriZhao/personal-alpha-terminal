@@ -1,5 +1,5 @@
 param(
-    [string]$Python = ".\.venv314\Scripts\python.exe"
+    [string]$Python = ".\.venv\Scripts\python.exe"
 )
 
 $ErrorActionPreference = "Stop"

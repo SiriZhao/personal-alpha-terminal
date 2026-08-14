@@ -68,8 +68,18 @@ class DailyDataCertification:
     requested_security_count: int = 0
     actual_refresh_count: int = 0
     cache_reuse_count: int = 0
+    historical_cache_reused_count: int = 0
+    incremental_refresh_requested_count: int = 0
+    full_backfill_requested_count: int = 0
+    no_cache_count: int = 0
     provider_returned_count: int = 0
+    provider_response_coverage: float | None = None
+    provider_response_denominator: int = 0
+    latest_price_coverage: float | None = None
+    latest_price_denominator: int = 0
     certified_coverage: float = 0.0
+    certified_coverage_denominator: int = 0
+    certified_coverage_scope: str = "CORE_REQUIRED_SYMBOLS"
     quarantine_count: int = 0
     provider_incident_count: int = 0
     coverage_collapse: bool = False
@@ -380,6 +390,46 @@ class DailyDataCertifier:
         if latest_timestamp is not None and latest_timestamp.tzinfo is None:
             latest_timestamp = latest_timestamp.replace(tzinfo=UTC)
         latest_completed = _parse_date(document.get("latest_completed_session"))
+        # The immutable snapshot has two distinct populations.  The core
+        # certification matrix is intentionally small; broad refresh outcomes
+        # must use the complete requested-symbol denominator and must never be
+        # inferred from the core matrix.
+        refresh_statuses = (
+            manifest.missingness_summary if manifest is not None else {}
+        )
+        broad_requested = len(manifest.symbols) if manifest is not None else 0
+        provider_returned = sum(
+            1
+            for item in refresh_statuses.values()
+            if isinstance(item, dict) and item.get("status") == "success"
+        )
+        fresh_cache_reused = sum(
+            1
+            for item in refresh_statuses.values()
+            if isinstance(item, dict) and item.get("status") == "cached"
+        )
+        latest_price_available = provider_returned + fresh_cache_reused
+        refresh_classes = tuple(
+            str(item.get("refresh_class", "UNKNOWN"))
+            for item in refresh_statuses.values()
+            if isinstance(item, dict)
+        )
+        historical_cache_reused = sum(
+            1
+            for item in refresh_classes
+            if item
+            in {
+                "CACHED_UP_TO_DATE",
+                "INCREMENTAL_ONE_SESSION",
+                "INCREMENTAL_GAP",
+            }
+        )
+        incremental_requested = sum(
+            1
+            for item in refresh_classes
+            if item in {"INCREMENTAL_ONE_SESSION", "INCREMENTAL_GAP"}
+        )
+        full_backfill_requested = sum(1 for item in refresh_classes if item == "FULL_BACKFILL")
         return DailyDataCertification(
             status=status,
             snapshot_id=manifest.snapshot_id if manifest else None,
@@ -465,11 +515,25 @@ class DailyDataCertifier:
                 ),
                 coverage_collapse=bool(blockers),
             ),
-            requested_security_count=len(manifest.symbols) if manifest is not None else 0,
-            actual_refresh_count=_status_count(manifest, "success"),
-            cache_reuse_count=_status_count(manifest, "cached"),
-            provider_returned_count=len(received),
+            requested_security_count=broad_requested,
+            actual_refresh_count=provider_returned,
+            cache_reuse_count=fresh_cache_reused,
+            historical_cache_reused_count=historical_cache_reused,
+            incremental_refresh_requested_count=incremental_requested,
+            full_backfill_requested_count=full_backfill_requested,
+            no_cache_count=full_backfill_requested,
+            provider_returned_count=provider_returned,
+            provider_response_coverage=(
+                provider_returned / broad_requested if broad_requested else None
+            ),
+            provider_response_denominator=broad_requested,
+            latest_price_coverage=(
+                latest_price_available / broad_requested if broad_requested else None
+            ),
+            latest_price_denominator=broad_requested,
             certified_coverage=matched / expected if expected else 0.0,
+            certified_coverage_denominator=expected,
+            certified_coverage_scope="CORE_REQUIRED_SYMBOLS",
             quarantine_count=quarantined_bars,
             provider_incident_count=_provider_incident_count(manifest),
             coverage_collapse=bool(blockers),

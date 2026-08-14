@@ -1,9 +1,9 @@
-"""Bounded, ranked candidate compression feeding the portfolio optimizer.
+"""PIT-valid candidate selection feeding the portfolio optimizer.
 
 The full current operational cross-section is factor-ranked and normalized
-first.  This module then reduces that pool to a bounded set of candidates so
-the portfolio optimizer never receives thousands of names.  Every step records
-how many names were rejected and why.
+first. This module applies only existing economic and data-validity filters;
+it deliberately has no arbitrary cardinality or Top-N cut. Every rejection is
+recorded so the optimizer input remains explainable.
 """
 from __future__ import annotations
 
@@ -47,19 +47,16 @@ class CandidateCompression:
 def compress_candidates(
     signals: tuple[AlphaSignal, ...],
     *,
-    candidate_max: int,
     candidate_min_alpha: float,
     adv_by_symbol: Mapping[str, float] | None = None,
     minimum_adv: float | None = None,
 ) -> CandidateCompression:
-    """Compress the ranked cross-section into a bounded candidate pool.
+    """Select the complete eligible ranked cross-section.
 
     Deterministic ordering: expected alpha descending, then symbol.  Nothing
     here reads future information; it only reorders the already-computed PIT
     cross-section.
     """
-    if candidate_max < 1:
-        raise ValueError("candidate_max must be positive")
     steps: list[CandidateStep] = []
     total = len(signals)
     steps.append(CandidateStep("factor_ranked", total, 0, {}))
@@ -121,18 +118,12 @@ def compress_candidates(
     ranked = tuple(
         sorted(risk_screened, key=lambda item: (-item.expected_excess_return, item.symbol))
     )
-    bounded = ranked[:candidate_max]
     steps.append(
-        CandidateStep(
-            "candidate_bound",
-            len(bounded),
-            len(ranked) - len(bounded),
-            {"over_candidate_bound": len(ranked) - len(bounded)},
-        )
+        CandidateStep("optimizer_eligible", len(ranked), 0, {})
     )
 
     return CandidateCompression(
         tuple(steps),
-        tuple(item.symbol for item in bounded),
+        tuple(item.symbol for item in ranked),
         minimum_adv=minimum_adv,
     )
