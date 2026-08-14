@@ -10,7 +10,7 @@ so the correlation fallback remains the only honest overlap signal.
 
 from __future__ import annotations
 
-from typing import Any
+from datetime import datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -18,7 +18,9 @@ from sqlalchemy.orm import Session
 from personal_alpha_terminal.models import Price, SecurityMaster
 
 
-def build_exposure_closure(session: Session, *, as_of) -> dict[str, object]:
+def build_exposure_closure(
+    session: Session, *, as_of: datetime
+) -> dict[str, object]:
     """Read-only evidence report; nothing is neutralized or assumed safe."""
 
     total = int(

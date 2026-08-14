@@ -17,9 +17,6 @@ from personal_alpha_terminal import __version__
 from personal_alpha_terminal.agents.llm.providers import DeepSeekProvider
 from personal_alpha_terminal.ai_advisory import (
     PRODUCTION_INFLUENCE,
-    PROMPT_VERSION,
-    AiBriefService,
-    BriefCacheKey,
     build_quant_facts,
 )
 from personal_alpha_terminal.application.daily_result import (
@@ -79,8 +76,8 @@ from personal_alpha_terminal.intelligence.llm_runtime import (
     DEFAULT_LLM_RUNTIME_STATUS_PATH,
     llm_runtime_status,
 )
-from personal_alpha_terminal.intelligence.storage import IntelligenceRepository
 from personal_alpha_terminal.intelligence.market_news import NewsIntelligenceService
+from personal_alpha_terminal.intelligence.storage import IntelligenceRepository
 from personal_alpha_terminal.models import Portfolio, Price, SecurityMaster
 from personal_alpha_terminal.models.intelligence import (
     IntelligenceEvent,
@@ -313,7 +310,11 @@ class DailyQuantOrchestrator:
                     "refresh": refresh,
                     **certification.metadata(),
                     "output_row_count": certification.valid_bars,
-                    "data_stage_profile": data_service.profile_document(),
+                    "data_stage_profile": (
+                        data_service.profile_document()
+                        if hasattr(data_service, "profile_document")
+                        else {}
+                    ),
                     "data_stage_segments": dict(_data_segment_log),
                 },
             )
@@ -713,25 +714,6 @@ class DailyQuantOrchestrator:
                     max_retries=self._settings.llm_max_retries,
                     base_url=self._settings.deepseek_base_url,
                 )
-            data_hash = str(
-                stages.get(
-                    "DATA", StageResult("DATA", StageStatus.NOT_RUN, 0.0, "", {})
-                ).metadata.get("data_hash", "UNAVAILABLE")
-            )
-            identity_hashes = workflow_result.identity_hashes or {}
-            import hashlib as _hashlib
-            import json as _json
-
-            intelligence_hash = _hashlib.sha256(
-                _json.dumps(
-                    stages.get(
-                        "LLM_INTELLIGENCE",
-                        StageResult("LLM_INTELLIGENCE", StageStatus.NOT_RUN, 0.0, "", {}),
-                    ).metadata,
-                    sort_keys=True,
-                    default=str,
-                ).encode("utf-8")
-            ).hexdigest()[:16]
             market_state_doc: dict[str, object] | None = None
             try:
                 from personal_alpha_terminal.application.market_state import (
@@ -1926,7 +1908,10 @@ class DailyQuantOrchestrator:
             if decision_as_of.tzinfo is None:
                 decision_as_of = decision_as_of.replace(tzinfo=UTC)
             decision_as_of = decision_as_of.astimezone(UTC)
-            recommendations = previous.get("decision_recommendations") or []
+            raw_recommendations = previous.get("decision_recommendations")
+            recommendations = (
+                raw_recommendations if isinstance(raw_recommendations, list) else []
+            )
             formal_symbols = frozenset(
                 str(item.get("symbol"))
                 for item in recommendations
@@ -2009,8 +1994,8 @@ class DailyQuantOrchestrator:
                 payload = _json.loads(path.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 continue
-            if payload.get("decision_recommendations"):
-                return payload
+            if isinstance(payload, dict) and payload.get("decision_recommendations"):
+                return cast("dict[str, object]", payload)
         return None
 
     def _pre_execution_price_checks(

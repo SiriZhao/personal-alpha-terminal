@@ -331,7 +331,7 @@ def build_market_state_snapshot(
         "breadth_pct_positive_20d": None,
     }
     breadth_symbols = len(breadth_frame)
-    universe_size = int(
+    universe_size = int(  # noqa: F841 - reported via breadth_universe_size
         session.scalar(
             select(func.count()).select_from(SecurityMaster)
         )

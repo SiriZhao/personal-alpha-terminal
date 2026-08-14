@@ -13,13 +13,13 @@ import math
 
 from personal_alpha_terminal.quant_engine.factors.etf_factors import (
     ETF_METRIC_SEMANTIC_CONTRACT,
+    METRIC_KIND_ANNUALIZED_RETURN,
     METRIC_KIND_DECIMAL_RETURN,
     METRIC_KIND_PERCENT,
     METRIC_KIND_RANK,
     METRIC_KIND_RATIO,
     METRIC_KIND_RAW_PRICE_RETURN,
     METRIC_KIND_ZSCORE,
-    METRIC_KIND_ANNUALIZED_RETURN,
     describe_metric_issue,
     metric_kind,
 )
@@ -35,7 +35,7 @@ def test_contract_declares_all_units() -> None:
         METRIC_KIND_ANNUALIZED_RETURN,
         METRIC_KIND_RATIO,
     }
-    for name, entry in ETF_METRIC_SEMANTIC_CONTRACT.items():
+    for _name, entry in ETF_METRIC_SEMANTIC_CONTRACT.items():
         assert entry["kind"] in expected_kinds
         assert entry["definition"]
         assert entry["display_name"]

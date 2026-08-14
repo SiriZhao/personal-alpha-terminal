@@ -15,11 +15,10 @@ from __future__ import annotations
 
 import json
 import math
-from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from dataclasses import dataclass
+from datetime import datetime
 from hashlib import sha256
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -179,7 +178,11 @@ def _metrics(
     years = len(returns) / annualization
     cagr = float((1.0 + net) ** (1.0 / years) - 1.0) if years > 0 and 1 + net > 0 else None
     downside = returns[returns < 0]
-    downside_vol = float(downside.std(ddof=1) * math.sqrt(annualization)) if len(downside) > 1 else None
+    downside_vol = (
+        float(downside.std(ddof=1) * math.sqrt(annualization))
+        if len(downside) > 1
+        else None
+    )
     sharpe = float((returns.mean() * annualization) / total_vol) if total_vol > 0 else None
     sortino = (
         float((returns.mean() * annualization) / downside_vol)
@@ -209,7 +212,11 @@ def _metrics(
             active = common.iloc[:, 0] - common.iloc[:, 1]
             tracking_error = float(active.std(ddof=1) * math.sqrt(annualization))
             information_ratio = (
-                float(active.mean() * annualization / (active.std(ddof=1) * math.sqrt(annualization)))
+                float(
+                    active.mean()
+                    * annualization
+                    / (active.std(ddof=1) * math.sqrt(annualization))
+                )
                 if active.std(ddof=1) > 0
                 else None
             )

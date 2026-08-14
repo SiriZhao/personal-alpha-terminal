@@ -4,6 +4,7 @@ import unicodedata
 from contextvars import ContextVar
 from dataclasses import asdict
 from io import StringIO
+from typing import cast
 
 from rich.console import Console, Group
 from rich.panel import Panel
@@ -179,7 +180,8 @@ def _ai_brief_section(result: DailyQuantResult, console: Console) -> None:
     brief = result.ai_brief
     if not isinstance(brief, dict):
         return
-    payload = brief.get("brief") or {}
+    raw_payload = brief.get("brief")
+    payload = raw_payload if isinstance(raw_payload, dict) else {}
     is_v2 = str(payload.get("schema_version", "")) == "ai-brief-zh-v2"
     grounding_status = str(brief.get("semantic_grounding_status", ""))
     try:
@@ -194,11 +196,13 @@ def _ai_brief_section(result: DailyQuantResult, console: Console) -> None:
     except (ImportError, KeyError, ValueError):
         text = "AI \u4e2d\u6587\u7814\u5224\u4e0d\u53ef\u7528\uff08AI_BRIEF_QUARANTINED\uff09\u3002"
     if grounding_status == "AI_BRIEF_QUARANTINED_SEMANTIC_MISMATCH" and is_v2:
-        issues = brief.get("semantic_grounding_issues") or []
+        raw_issues = brief.get("semantic_grounding_issues")
+        issues = raw_issues if isinstance(raw_issues, list) else []
         issue_text = "; ".join(str(item) for item in issues) or "semantic mismatch"
         text = (
             _t(
-                "\u26a0 \u8be5 AI \u7814\u5224\u56e0\u8bed\u4e49\u63a5\u5730\u6821\u9a8c\u5931\u8d25\u5df2\u88ab\u9694\u79bb\uff1a"
+                "\u26a0 \u8be5 AI \u7814\u5224\u56e0\u8bed\u4e49\u63a5\u5730\u6821\u9a8c\u5931\u8d25"  # noqa: E501
+                "\u5df2\u88ab\u9694\u79bb\uff1a"
                 f"{issue_text}\u3002\u4ee5\u4e0b\u4e3a\u5b89\u5168\u56de\u9000\u7b80\u62a5\u3002\n\n",
                 "\u26a0 This AI brief was quarantined by the semantic grounding "
                 f"validator: {issue_text}. Safe fallback brief follows.\n\n",
@@ -307,10 +311,13 @@ def _etf_research_candidates(result: DailyQuantResult, console: Console) -> None
     for item in (*rows_with_weight, *rows_without_weight):
         momentum = item.get("momentum_252_21")
         ratio = item.get("momentum_vol_ratio")
-        momentum_text = (
-            _signed_percent(momentum) if is_finite_metric(momentum) else "--"
+        momentum_number = (
+            float(cast("float", momentum)) if is_finite_metric(momentum) else None
         )
-        ratio_text = f"{float(ratio):.3f}" if is_finite_metric(ratio) else "--"
+        momentum_text = (
+            _signed_percent(momentum_number) if momentum_number is not None else "--"
+        )
+        ratio_text = f"{float(cast('float', ratio)):.3f}" if is_finite_metric(ratio) else "--"
         table.add_row(
             str(item.get("symbol", "--")),
             str(item.get("instrument_type", "ETF")),
@@ -324,8 +331,10 @@ def _etf_research_candidates(result: DailyQuantResult, console: Console) -> None
         )
     notice = _t(
         "\u7814\u7a76\u5019\u9009\uff1a\u4ec5\u5c55\u793a\u5019\u9009\u914d\u7f6e\u65b9\u5411\uff0c"
-        "\u4e0d\u5c5e\u4e8e\u4eca\u65e5\u6267\u884c\u8ba1\u5212\uff0c\u4ea4\u6613\u6743\u9650 NONE\u3002"
-        "\u8fd9\u4e9b\u8bc1\u5238\u672a\u7ecf\u8fc7 SIGNAL\u2192PORTFOLIO\u2192RISK\u2192DECISION\u2192EXECUTION "
+        "\u4e0d\u5c5e\u4e8e\u4eca\u65e5\u6267\u884c\u8ba1\u5212\uff0c"  # noqa: E501
+        "\u4ea4\u6613\u6743\u9650 NONE\u3002"
+        "\u8fd9\u4e9b\u8bc1\u5238\u672a\u7ecf\u8fc7 "  # noqa: E501
+        "SIGNAL\u2192PORTFOLIO\u2192RISK\u2192DECISION\u2192EXECUTION "
         "\u6b63\u5f0f\u94fe\uff0c\u7981\u6b62\u88ab\u89e3\u8bfb\u4e3a\u4e70\u5165/\u5356\u51fa\u6307\u4ee4\u3002",
         "RESEARCH CANDIDATES: research direction only. NOT part of today's "
         "execution plan. Trading permission NONE. These securities have not "
@@ -336,7 +345,10 @@ def _etf_research_candidates(result: DailyQuantResult, console: Console) -> None
         Panel(
             Group(
                 Text(
-                    _t("\u3010\u7814\u7a76\u5019\u9009 \u00b7 \u4e0d\u6267\u884c\u3011", "RESEARCH CANDIDATES \u00b7 NOT EXECUTED"),
+                    _t(  # noqa: E501
+                        "\u3010\u7814\u7a76\u5019\u9009 \u00b7 \u4e0d\u6267\u884c\u3011",
+                        "RESEARCH CANDIDATES \u00b7 NOT EXECUTED",
+                    ),
                     style="bold yellow",
                 ),
                 Text(notice, style="yellow"),
@@ -513,7 +525,8 @@ def _pre_execution_section(result: DailyQuantResult, console: Console) -> None:
             f"PRE-EXECUTION {status}",
         )
     lines: list[str] = []
-    checks = assessment.get("checks") or []
+    raw_checks = assessment.get("checks")
+    checks = raw_checks if isinstance(raw_checks, list) else []
     for check in checks:
         if not isinstance(check, dict):
             continue

@@ -415,7 +415,10 @@ def build_deterministic_v2(
                 "evidence_ref": f"N{index}",
                 "headline": str(cluster.get("canonical_headline", "")),
                 "why_matters": "由已持久化新闻聚类生成;具体影响由用户结合量化事实判断。",
-                "affected": ", ".join(str(item) for item in (cluster.get("symbols") or [])) or "未知",
+                "affected": (
+                    ", ".join(str(item) for item in (cluster.get("symbols") or []))
+                    or "未知"
+                ),
                 "portfolio_link": "与当前正式组合的关系见正式操作清单。",
                 "strength": (
                     f"source_count={cluster.get('source_count')} "

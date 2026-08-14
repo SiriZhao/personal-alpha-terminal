@@ -1753,10 +1753,12 @@ def _stress_exam_command() -> int:
 def _pre_execution_command(args: argparse.Namespace) -> int:
     """Compute the overnight / pre-execution assessment for the latest plan."""
 
-    from datetime import UTC as _UTC, datetime as _datetime
+    from datetime import UTC as _UTC
+    from datetime import datetime as _datetime
+
+    from sqlalchemy import func, select
 
     from personal_alpha_terminal.application.pre_execution import (
-        PreExecutionCheck,
         build_assessment,
         check_halts_and_corporate_events,
         check_market_gap,
@@ -1766,7 +1768,6 @@ def _pre_execution_command(args: argparse.Namespace) -> int:
     from personal_alpha_terminal.data.database import get_session_factory
     from personal_alpha_terminal.intelligence.market_news import NewsIntelligenceService
     from personal_alpha_terminal.models import Price, SecurityMaster
-    from sqlalchemy import func, select
 
     config = load_config(args.config)
     root = config.report_dir / "daily-runs"
@@ -1860,7 +1861,8 @@ def _pre_execution_command(args: argparse.Namespace) -> int:
 def _market_state_command(args: argparse.Namespace) -> int:
     """Print the deterministic MARKET_STATE_SNAPSHOT."""
 
-    from datetime import UTC as _UTC, datetime as _datetime
+    from datetime import UTC as _UTC
+    from datetime import datetime as _datetime
 
     from personal_alpha_terminal.application.market_state import (
         build_market_state_snapshot,
@@ -1882,28 +1884,40 @@ def _market_state_command(args: argparse.Namespace) -> int:
         json.dumps(document, ensure_ascii=False, indent=2, default=str),
         encoding="utf-8",
     )
-    console.print(f"MARKET_STATE {document['status']} | breadth symbols {document['breadth_symbols']}")
+    console.print(
+        f"MARKET_STATE {document['status']} | breadth symbols "
+        f"{document['breadth_symbols']}"
+    )
     console.print(f"breadth: {document['breadth']}")
-    for item in document["basket"]:
-        if not item["available"]:
-            console.print(f"- {item['symbol']} ({item['role']}) UNAVAILABLE")
-            continue
-        returns = {key: value for key, value in item["returns"].items() if value is not None}
-        console.print(f"- {item['symbol']} ({item['role']}): {returns}")
+    basket = document.get("basket")
+    if isinstance(basket, list):
+        for raw_item in basket:
+            if not isinstance(raw_item, dict):
+                continue
+            item = cast("dict[str, object]", raw_item)
+            if not item["available"]:
+                console.print(f"- {item['symbol']} ({item['role']}) UNAVAILABLE")
+                continue
+            returns = {
+                key: value
+                for key, value in cast("dict[str, object]", item["returns"]).items()
+                if value is not None
+            }
+            console.print(f"- {item['symbol']} ({item['role']}): {returns}")
     return 0
 
 
 def _news_command(args: argparse.Namespace) -> int:
     """Market news intelligence CLI (status / acquire / show)."""
 
-    from datetime import UTC as _UTC, datetime as _datetime
+    from datetime import UTC as _UTC
+    from datetime import datetime as _datetime
 
     from personal_alpha_terminal.intelligence.market_news import (
         NewsIntelligenceService,
         NewsLedger,
     )
 
-    config = load_config(args.config)
     ledger = NewsLedger()
     service = NewsIntelligenceService(ledger)
     now = _datetime.now(_UTC)
@@ -1999,7 +2013,8 @@ def _stress_exam_v21_command(args: argparse.Namespace) -> int:
 def _exposure_audit_command(args: argparse.Namespace) -> int:
     """ROUND25 PHASE 12: honest size/sector/ETF look-through closure."""
 
-    from datetime import UTC as _UTC, datetime as _datetime
+    from datetime import UTC as _UTC
+    from datetime import datetime as _datetime
 
     from personal_alpha_terminal.application.exposure_closure import (
         build_exposure_closure,
@@ -2022,7 +2037,8 @@ def _exposure_audit_command(args: argparse.Namespace) -> int:
 def _research_labs_command(args: argparse.Namespace) -> int:
     """ROUND25 PHASE 8-11: research promotion labs with honest evidence labels."""
 
-    from datetime import UTC as _UTC, datetime as _datetime
+    from datetime import UTC as _UTC
+    from datetime import datetime as _datetime
 
     from personal_alpha_terminal.data.database import get_session_factory
     from personal_alpha_terminal.research.round25_labs import (
@@ -2061,30 +2077,42 @@ def _research_labs_command(args: argparse.Namespace) -> int:
                 "vs equity-only baseline on identical windows and cost model"
             ),
             registered_at=now.isoformat(),
-            factor_definition={"engine": "etf-price-factors-v1", "champion": "USAdaptiveAlphaCoreV1:1.0.0:427671e52a53"},
+            factor_definition={
+                "engine": "etf-price-factors-v1",
+                "champion": "USAdaptiveAlphaCoreV1:1.0.0:427671e52a53",
+            },
             parameters={
                 "core_weight": 0.25,
                 "tactical_weight": 0.10,
                 "cost_bps": 5.0,
                 "benchmark": "SPY",
             },
-            train=("NOT_APPLICABLE_INSUFFICIENT_HISTORY", "NOT_APPLICABLE_INSUFFICIENT_HISTORY"),
-            validation=("NOT_APPLICABLE_INSUFFICIENT_HISTORY", "NOT_APPLICABLE_INSUFFICIENT_HISTORY"),
+            train=("NOT_APPLICABLE_INSUFFICIENT_HISTORY",) * 2,
+            validation=("NOT_APPLICABLE_INSUFFICIENT_HISTORY",) * 2,
             embargo_sessions=0,
-            locked_test=("NOT_APPLICABLE_INSUFFICIENT_HISTORY", "NOT_APPLICABLE_INSUFFICIENT_HISTORY"),
+            locked_test=("NOT_APPLICABLE_INSUFFICIENT_HISTORY",) * 2,
             benchmark="SPY",
             cost_model="fixed-entry-bps-v1",
             result=etf_result,
-            status=etf_result["evidence"]["certification"],
+            status=str(
+                cast("dict[str, object]", etf_result.get("evidence") or {}).get(
+                    "certification"
+                )
+            ),
         )
     )
     console.print(f"status: {etf_result['status']}")
     console.print(f"evidence: {etf_result['evidence']}")
-    for name, experiment in etf_result.get("experiments", {}).items():
-        metrics = experiment.get("metrics", {})
+    experiments = etf_result.get("experiments")
+    experiment_map = (
+        cast("dict[str, object]", experiments) if isinstance(experiments, dict) else {}
+    )
+    for name, experiment in experiment_map.items():
+        metrics = cast("dict[str, object]", experiment).get("metrics") or {}
         console.print(
-            f"- {name}: net {metrics.get('net_return')}, sharpe {metrics.get('sharpe')}, "
-            f"maxDD {metrics.get('max_drawdown')}"
+            f"- {name}: net {cast('dict[str, object]', metrics).get('net_return')}, "
+            f"sharpe {cast('dict[str, object]', metrics).get('sharpe')}, "
+            f"maxDD {cast('dict[str, object]', metrics).get('max_drawdown')}"
         )
     console.print(
         "No candidate is promoted automatically; promotion requires explicit user authorization."
@@ -2109,7 +2137,7 @@ def _execution_costs_command(args: argparse.Namespace) -> int:
         json.dumps(evidence, ensure_ascii=False, indent=2, default=str),
         encoding="utf-8",
     )
-    summary = evidence["summary"]
+    summary = cast("dict[str, object]", evidence.get("summary") or {})
     console.print(f"status: {summary.get('status')}")
     console.print(f"sample_size: {summary.get('sample_size')}")
     console.print(f"mean_slippage_bps: {summary.get('mean_slippage_bps')}")
@@ -2132,7 +2160,8 @@ def _execution_wizard_command(args: argparse.Namespace) -> int:
     submitted to a broker (Broker API DISABLED).
     """
 
-    from datetime import UTC as _UTC, datetime as _datetime
+    from datetime import UTC as _UTC
+    from datetime import datetime as _datetime
 
     service = _service_for_args(args)
     orders = service.list_open_execution_orders()
@@ -2187,7 +2216,8 @@ def _execution_wizard_command(args: argparse.Namespace) -> int:
     if quantity <= 0 or price <= 0 or fees < 0:
         console.print("Quantity/price must be positive and fee non-negative.")
         return 1
-    if quantity > float(selected["remaining_quantity"]) + 1e-8:
+    remaining = float(cast("float", selected.get("remaining_quantity", 0.0)) or 0.0)
+    if quantity > remaining + 1e-8:
         console.print(
             "Fill exceeds the approved remaining quantity; explicit override is "
             "required via mark-executed --override-provenance."
@@ -2217,7 +2247,8 @@ def _portfolio_reconcile_command(args: argparse.Namespace) -> int:
     record.
     """
 
-    from datetime import UTC as _UTC, datetime as _datetime
+    from datetime import UTC as _UTC
+    from datetime import datetime as _datetime
 
     from personal_alpha_terminal.application.portfolio_reconciliation import (
         BrokerPosition,
@@ -2245,7 +2276,7 @@ def _portfolio_reconcile_command(args: argparse.Namespace) -> int:
     with get_session_factory()() as session:
         service = PortfolioReconciliationService(session)
         result = service.reconcile(
-            portfolio_id=portfolio_id,
+            portfolio_id=int(portfolio_id),
             broker="CHARLES_SCHWAB_MANUAL",
             positions=positions,
             reconciled_at=_datetime.now(_UTC),
@@ -2266,7 +2297,7 @@ def _portfolio_reconcile_command(args: argparse.Namespace) -> int:
         from personal_alpha_terminal.portfolio.position_import import PositionImportService
 
         imported = PositionImportService(session).import_snapshot(
-            portfolio_id=portfolio_id,
+            portfolio_id=int(portfolio_id),
             as_of_date=_datetime.now(_UTC).date(),
             parsed=parsed,
         )
@@ -2783,15 +2814,29 @@ def build_parser() -> argparse.ArgumentParser:
         section.add_argument("--run-id", default=None)
     subparsers.add_parser("doctor")
     subparsers.add_parser("stress-exam", help="Run deterministic synthetic stress exam")
-    subparsers.add_parser("pre-execution", help="Overnight / pre-execution risk check (advisory only)")
-    subparsers.add_parser("market-state", help="Deterministic MARKET_STATE_SNAPSHOT from verified price bars")
+    subparsers.add_parser(  # noqa: E501
+        "pre-execution", help="Overnight / pre-execution risk check (advisory only)"
+    )
+    subparsers.add_parser(  # noqa: E501
+        "market-state", help="Deterministic MARKET_STATE_SNAPSHOT from verified price bars"
+    )
     subparsers.add_parser("execution", help="Interactive manual execution wizard (real ledger)")
-    subparsers.add_parser("execution-costs", help="Realized execution cost observations (research only)")
-    subparsers.add_parser("exposure-audit", help="Size/sector/ETF look-through honest closure report")
-    subparsers.add_parser("stress-exam-v21", help="Stress Exam 2.1 overlay comparison (scenario params unchanged)")
-    labs = subparsers.add_parser("research-labs", help="ROUND25 research promotion labs (never auto-promote)")
-    labs_actions = labs.add_subparsers(dest='labs_action', required=True)
-    labs_actions.add_parser("evaluate", help="Run ETF/overlay research A/B and write evidence artifacts")
+    subparsers.add_parser(  # noqa: E501
+        "execution-costs", help="Realized execution cost observations (research only)"
+    )
+    subparsers.add_parser(  # noqa: E501
+        "exposure-audit", help="Size/sector/ETF look-through honest closure report"
+    )
+    subparsers.add_parser(  # noqa: E501
+        "stress-exam-v21", help="Stress Exam 2.1 overlay comparison (scenario params unchanged)"
+    )
+    labs = subparsers.add_parser(  # noqa: E501
+        "research-labs", help="ROUND25 research promotion labs (never auto-promote)"
+    )
+    labs_actions = labs.add_subparsers(dest="labs_action", required=True)
+    labs_actions.add_parser(  # noqa: E501
+        "evaluate", help="Run ETF/overlay research A/B and write evidence artifacts"
+    )
     labs_actions.add_parser("list", help="List frozen experiment registry entries")
     reconcile = subparsers.add_parser(
         "portfolio-reconcile", help="Compare ledger vs broker CSV snapshot (PREVIEW default)"

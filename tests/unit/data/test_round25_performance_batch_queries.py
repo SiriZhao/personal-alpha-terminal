@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
-
-from personal_alpha_terminal.core.data_timestamps import daily_bar_timestamps
+from datetime import UTC, date, datetime, timedelta
 
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 
+from personal_alpha_terminal.core.data_timestamps import daily_bar_timestamps
 from personal_alpha_terminal.data.market_data.repository import PriceRepository
 from personal_alpha_terminal.models import Base, Price, Stock
 
@@ -30,7 +29,7 @@ def _seed(engine) -> None:
                 currency="USD",
                 timezone="America/New_York",
                 canonical_code=symbol,
-                available_time=datetime(2026, 8, 1, tzinfo=timezone.utc),
+                available_time=datetime(2026, 8, 1, tzinfo=UTC),
             )
             for symbol in ("AAA", "BBB", "CCC")
         ]

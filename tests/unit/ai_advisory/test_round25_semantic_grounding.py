@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from personal_alpha_terminal.ai_advisory.grounding import (
-    GROUNDING_QUARANTINED,
     validate_semantic_grounding,
 )
 

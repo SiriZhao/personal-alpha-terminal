@@ -15,13 +15,11 @@ import pandas as pd
 
 from personal_alpha_terminal.instruments.sleeves import ETF_LOOK_THROUGH_STATUS
 from personal_alpha_terminal.quant_engine.factors.etf_factors import (
+    ETF_METRIC_SEMANTIC_CONTRACT,
+    METRIC_KIND_PERCENT,
     EtfFactorSnapshot,
     core_sleeve_eligible,
     tactical_sleeve_eligible,
-    ETF_METRIC_SEMANTIC_CONTRACT,
-    METRIC_KIND_DECIMAL_RETURN,
-    METRIC_KIND_PERCENT,
-    METRIC_KIND_RATIO,
 )
 
 
