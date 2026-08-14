@@ -15,6 +15,11 @@ from typing import Any, cast
 
 from personal_alpha_terminal.ai_advisory.cache import BriefCache, BriefCacheKey
 from personal_alpha_terminal.ai_advisory.deterministic import build_deterministic_brief
+from personal_alpha_terminal.ai_advisory.grounding import (
+    GROUNDING_OK,
+    GROUNDING_QUARANTINED,
+    validate_semantic_grounding,
+)
 from personal_alpha_terminal.ai_advisory.llm import (
     BRIEF_STATUS_OK,
     BriefCallOutcome,
@@ -69,6 +74,8 @@ class AiBriefResult:
     llm_call_outcome: BriefCallOutcome | None
     generated_at: datetime
     production_influence: str = PRODUCTION_INFLUENCE
+    semantic_grounding_status: str = GROUNDING_OK
+    semantic_grounding_issues: tuple[str, ...] = ()
 
     def document(self) -> dict[str, Any]:
         return {
@@ -93,6 +100,8 @@ class AiBriefResult:
             ),
             "generated_at": self.generated_at.isoformat(),
             "production_influence": self.production_influence,
+            "semantic_grounding_status": self.semantic_grounding_status,
+            "semantic_grounding_issues": list(self.semantic_grounding_issues),
         }
 
 
@@ -119,7 +128,10 @@ class AiBriefService:
         if cached is not None:
             payload = cached.get("brief")
             ok, error = validate_brief(payload, allowed_symbols=allowed_symbols)
-            if ok:
+            grounding_ok, grounding_issues = validate_semantic_grounding(
+                cast(dict[str, Any], payload), facts
+            )
+            if ok and grounding_ok:
                 return AiBriefResult(
                     run_id=cache_key.run_id,
                     model=model,
@@ -130,10 +142,14 @@ class AiBriefService:
                     cache_hit=True,
                     llm_call_outcome=None,
                     generated_at=generated_at,
+                    semantic_grounding_status=GROUNDING_OK,
                 )
             self.cache.quarantine(
                 cache_key,
-                reason=f"cached brief failed re-validation: {error}",
+                reason=(
+                    f"cached brief failed re-validation: {error}; "
+                    f"semantic grounding: {grounding_issues}"
+                ),
                 raw=None,
             )
         outcome: BriefCallOutcome | None = None
@@ -176,6 +192,22 @@ class AiBriefService:
                 )
         if brief is None:
             brief = build_deterministic_brief(facts)
+        grounding_ok, grounding_issues = validate_semantic_grounding(brief, facts)
+        if source == "DEEPSEEK_JSON" and not grounding_ok:
+            # ROUND25 P0: a semantically polluted LLM brief is quarantined and
+            # replaced by the deterministic fallback; it is never displayed
+            # unmarked.
+            self.cache.quarantine(
+                cache_key,
+                reason=(
+                    f"{GROUNDING_QUARANTINED}: "
+                    + "; ".join(grounding_issues)
+                ),
+                raw=json.dumps(brief, ensure_ascii=False, default=str),
+            )
+            brief = build_deterministic_brief(facts)
+            llm_status = "PASS_DEGRADED"
+            source = GROUNDING_QUARANTINED
         ok, error = validate_brief(brief, allowed_symbols=allowed_symbols)
         if not ok:
             self.cache.quarantine(cache_key, reason=f"fallback schema violation: {error}", raw=None)
@@ -203,4 +235,8 @@ class AiBriefService:
             cache_hit=False,
             llm_call_outcome=outcome,
             generated_at=generated_at,
+            semantic_grounding_status=(
+                GROUNDING_OK if grounding_ok else GROUNDING_QUARANTINED
+            ),
+            semantic_grounding_issues=tuple(grounding_issues),
         )

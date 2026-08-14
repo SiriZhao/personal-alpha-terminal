@@ -55,7 +55,9 @@ def render_brief_compact(brief: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def render_brief_full(brief: dict[str, Any], facts: dict[str, Any] | None) -> str:
+def render_brief_full(
+    brief: dict[str, Any], facts: dict[str, Any] | None = None
+) -> str:
     payload = brief.get("brief") or {}
     lines = [render_brief_header(brief), ""]
     facts_section = facts or {}

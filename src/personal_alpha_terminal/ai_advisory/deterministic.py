@@ -42,7 +42,7 @@ def _action_line(item: dict[str, Any]) -> str:
 def build_deterministic_brief(facts: dict[str, Any]) -> dict[str, Any]:
     """Assemble a schema-valid deterministic Chinese brief from facts alone."""
 
-    actions = facts.get("actions") or []
+    actions = facts.get("formal_actions") or facts.get("actions") or []
     buy_count = sum(1 for item in actions if item.get("action") == "BUY")
     sell_count = sum(1 for item in actions if item.get("action") == "SELL")
     hold_count = len(actions) - buy_count - sell_count
@@ -61,6 +61,21 @@ def build_deterministic_brief(facts: dict[str, Any]) -> dict[str, Any]:
     )
     universe = facts.get("universe") or {}
     etf_universe = (facts.get("etf") or {}).get("universe") or {}
+    research_candidates = facts.get("research_candidates") or []
+    research_names = sorted(
+        {str(item.get("symbol")) for item in research_candidates if item.get("symbol")}
+    )
+    research_text = (
+        (
+            f"ETF 研究候选共 {len(research_names)} 个"
+            f"({', '.join(research_names)}),当前均为 RESEARCH_CANDIDATE 状态,"
+            "交易权限 NONE,不属于今日执行计划;它们的研究目标权重只是候选配置"
+            "方向,尚未进入 SIGNAL→PORTFOLIO→RISK→DECISION→EXECUTION 正式链,"
+            "不能被理解为持仓或买卖指令。"
+        )
+        if research_names
+        else "当前没有可展示的 ETF 研究候选。"
+    )
     portfolio_interpretation = (
         f"股票池证书成员 {universe.get('members', '不适用')} 个;ETF 池中核心"
         f"候选 {etf_universe.get('core_eligible', '不适用')} 个,战术候选 "
@@ -68,6 +83,7 @@ def build_deterministic_brief(facts: dict[str, Any]) -> dict[str, Any]:
         f"默认拦截 {etf_universe.get('blocked_complex', '不适用')} 个。"
         "组合解释只基于优化器输出的目标权重与风险贡献,ETF 成分穿透信息"
         "当前不可用(ETF look-through: UNAVAILABLE)。"
+        f"{research_text}"
     )
     action_explanations = []
     for item in actions:

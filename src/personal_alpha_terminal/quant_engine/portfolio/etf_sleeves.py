@@ -18,6 +18,10 @@ from personal_alpha_terminal.quant_engine.factors.etf_factors import (
     EtfFactorSnapshot,
     core_sleeve_eligible,
     tactical_sleeve_eligible,
+    ETF_METRIC_SEMANTIC_CONTRACT,
+    METRIC_KIND_DECIMAL_RETURN,
+    METRIC_KIND_PERCENT,
+    METRIC_KIND_RATIO,
 )
 
 
@@ -63,10 +67,19 @@ class EtfSleeveTarget:
     delta_weight: float
     eligibility: tuple[str, ...]
     eligible: bool
-    expected_value: float | None
+    # ROUND25 PHASE 2: the former ``expected_value`` was the factor ratio
+    # risk_adjusted_momentum = momentum(252,21) / annualized_vol(63).  It is a
+    # dimensionless momentum-to-volatility ratio, NOT an expected alpha and
+    # NOT a percentage.  It is now stored under its true name and unit.
+    momentum_vol_ratio: float | None
     rationale: str
     model_version: str
+    momentum_252_21: float | None = None
+    annualized_volatility: float | None = None
     model_status: str = "RESEARCH_CANDIDATE"
+    # Explicit semantic-domain and trading-permission annotations (ROUND25 P0).
+    domain: str = "RESEARCH_CANDIDATE"
+    trading_permission: str = "NONE"
 
     def document(self) -> dict[str, object]:
         return {
@@ -77,10 +90,28 @@ class EtfSleeveTarget:
             "delta_weight": self.delta_weight,
             "eligibility": list(self.eligibility),
             "eligible": self.eligible,
-            "expected_value": self.expected_value,
+            "momentum_vol_ratio": self.momentum_vol_ratio,
+            "momentum_252_21": self.momentum_252_21,
+            "annualized_volatility": self.annualized_volatility,
+            "metric_semantics": {
+                "momentum_252_21": ETF_METRIC_SEMANTIC_CONTRACT["momentum_252_21"],
+                "momentum_vol_ratio": ETF_METRIC_SEMANTIC_CONTRACT[
+                    "risk_adjusted_momentum"
+                ],
+                "annualized_volatility": ETF_METRIC_SEMANTIC_CONTRACT[
+                    "volatility_63"
+                ],
+                "target_weight": {
+                    "kind": METRIC_KIND_PERCENT,
+                    "definition": "portfolio weight expressed as a decimal (0.07 == 7%)",
+                },
+            },
             "rationale": self.rationale,
             "model_version": self.model_version,
             "model_status": self.model_status,
+            "domain": self.domain,
+            "trading_permission": self.trading_permission,
+            "not_part_of_execution_plan": True,
         }
 
 
@@ -217,6 +248,19 @@ def build_etf_targets(
             capped = current
         delta = capped - current
         snapshot = next(item for item in factors if item.symbol == symbol)
+        momentum_252_21 = (
+            float(snapshot.momentum_252_21)
+            if snapshot.momentum_252_21 is not None
+            else None
+        )
+        annualized_volatility = (
+            float(snapshot.volatility_63) if snapshot.volatility_63 is not None else None
+        )
+        momentum_vol_ratio = (
+            float(snapshot.risk_adjusted_momentum)
+            if snapshot.risk_adjusted_momentum is not None
+            else None
+        )
         targets.append(
             EtfSleeveTarget(
                 symbol=symbol,
@@ -226,9 +270,17 @@ def build_etf_targets(
                 delta_weight=round(delta, 8),
                 eligibility=(),
                 eligible=True,
-                expected_value=(
-                    round(float(snapshot.risk_adjusted_momentum), 6)
-                    if snapshot.risk_adjusted_momentum is not None
+                momentum_vol_ratio=(
+                    round(momentum_vol_ratio, 6)
+                    if momentum_vol_ratio is not None
+                    else None
+                ),
+                momentum_252_21=(
+                    round(momentum_252_21, 6) if momentum_252_21 is not None else None
+                ),
+                annualized_volatility=(
+                    round(annualized_volatility, 6)
+                    if annualized_volatility is not None
                     else None
                 ),
                 rationale=(
@@ -243,6 +295,19 @@ def build_etf_targets(
     for snapshot in eligible:
         if snapshot.symbol in selected:
             continue
+        momentum_vol_ratio = (
+            float(snapshot.risk_adjusted_momentum)
+            if snapshot.risk_adjusted_momentum is not None
+            else None
+        )
+        momentum_252_21 = (
+            float(snapshot.momentum_252_21)
+            if snapshot.momentum_252_21 is not None
+            else None
+        )
+        annualized_volatility = (
+            float(snapshot.volatility_63) if snapshot.volatility_63 is not None else None
+        )
         targets.append(
             EtfSleeveTarget(
                 symbol=snapshot.symbol,
@@ -252,9 +317,17 @@ def build_etf_targets(
                 delta_weight=-current_weights.get(snapshot.symbol, 0.0),
                 eligibility=(),
                 eligible=True,
-                expected_value=(
-                    round(float(snapshot.risk_adjusted_momentum), 6)
-                    if snapshot.risk_adjusted_momentum is not None
+                momentum_vol_ratio=(
+                    round(momentum_vol_ratio, 6)
+                    if momentum_vol_ratio is not None
+                    else None
+                ),
+                momentum_252_21=(
+                    round(momentum_252_21, 6) if momentum_252_21 is not None else None
+                ),
+                annualized_volatility=(
+                    round(annualized_volatility, 6)
+                    if annualized_volatility is not None
                     else None
                 ),
                 rationale="eligible but excluded by rank within sleeve budget",
@@ -271,7 +344,9 @@ def build_etf_targets(
                 delta_weight=-current_weights.get(symbol, 0.0),
                 eligibility=reasons,
                 eligible=False,
-                expected_value=None,
+                momentum_vol_ratio=None,
+                momentum_252_21=None,
+                annualized_volatility=None,
                 rationale="excluded by ETF sleeve eligibility",
                 model_version=configured.model_version,
             )

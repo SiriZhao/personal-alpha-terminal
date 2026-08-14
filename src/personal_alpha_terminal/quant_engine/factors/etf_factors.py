@@ -19,6 +19,107 @@ from personal_alpha_terminal.instruments.sleeves import ETF_SLEEVE_MODEL_STATUS
 MODEL_VERSION = "etf-price-factors-v1"
 MODEL_STATUS = ETF_SLEEVE_MODEL_STATUS
 
+# ROUND25 PHASE 2 -- ETF_METRIC_SEMANTIC_CONTRACT.
+#
+# Every numeric metric emitted by this engine is declared with an explicit
+# unit so no renderer may implicitly multiply by 100, label a ratio as
+# "Alpha", or mix annualized and cumulative returns.  Values are NEVER
+# clamped to look reasonable; NaN/Inf/extreme values are surfaced as-is and
+# flagged by ``describe_metric_issue``.
+METRIC_KIND_PERCENT = "PERCENT"
+METRIC_KIND_DECIMAL_RETURN = "DECIMAL_RETURN"
+METRIC_KIND_ZSCORE = "ZSCORE"
+METRIC_KIND_RANK = "RANK"
+METRIC_KIND_RAW_PRICE_RETURN = "RAW_PRICE_RETURN"
+METRIC_KIND_ANNUALIZED_RETURN = "ANNUALIZED_RETURN"
+METRIC_KIND_RATIO = "RATIO"
+
+ETF_METRIC_SEMANTIC_CONTRACT: dict[str, dict[str, str]] = {
+    # (close[t-21] / close[t-252]) - 1 over the lookback, expressed as a
+    # decimal return (0.12 == +12%).  Cumulative, not annualized.
+    "momentum_252_21": {
+        "kind": METRIC_KIND_DECIMAL_RETURN,
+        "definition": "cumulative price return from t-252 to t-21 (21-day skip)",
+        "display_name": "12M_MOMENTUM",
+        "never_label": "ALPHA",
+    },
+    "trend_slope_126": {
+        "kind": METRIC_KIND_RAW_PRICE_RETURN,
+        "definition": "OLS slope of log price over 126 days (per-day log return)",
+        "display_name": "TREND_SLOPE_126D",
+    },
+    "trend_consistency_126": {
+        "kind": METRIC_KIND_PERCENT,
+        "definition": "fraction of positive 5-day forward slices over 126 days (0..1 decimal)",
+        "display_name": "TREND_CONSISTENCY_126D",
+    },
+    "volatility_63": {
+        "kind": METRIC_KIND_PERCENT,
+        "definition": "annualized standard deviation of daily returns over 63 days (0.12 == 12%)",
+        "display_name": "ANNUALIZED_VOL_63D",
+    },
+    "max_drawdown_252": {
+        "kind": METRIC_KIND_DECIMAL_RETURN,
+        "definition": "worst close/rolling-max - 1 over 252 days (negative decimal)",
+        "display_name": "MAX_DRAWDOWN_252D",
+    },
+    "risk_adjusted_momentum": {
+        "kind": METRIC_KIND_RATIO,
+        "definition": "momentum_252_21 (decimal return) / volatility_63 (annualized vol)",
+        "display_name": "MOMENTUM_TO_VOL_RATIO",
+        "never_label": "ALPHA",
+    },
+    "relative_strength_252": {
+        "kind": METRIC_KIND_RATIO,
+        "definition": "fund return over 252 days divided by benchmark return over the same window",
+        "display_name": "RELATIVE_STRENGTH_252D",
+    },
+    "correlation_63_benchmark": {
+        "kind": METRIC_KIND_RATIO,
+        "definition": "pearson correlation of daily returns vs benchmark over 63 days (-1..1)",
+        "display_name": "CORRELATION_63D",
+    },
+    "average_dollar_volume_20": {
+        "kind": METRIC_KIND_RAW_PRICE_RETURN,
+        "definition": "mean close*volume in USD over 20 days",
+        "display_name": "ADV_20D_USD",
+    },
+    "volume_ratio_20_63": {
+        "kind": METRIC_KIND_RATIO,
+        "definition": "20-day average volume divided by 63-day average volume",
+        "display_name": "VOLUME_RATIO_20_63",
+    },
+}
+
+
+def metric_kind(name: str) -> str:
+    """Return the declared unit kind for a metric, or 'UNKNOWN'."""
+
+    entry = ETF_METRIC_SEMANTIC_CONTRACT.get(name)
+    return str(entry["kind"]) if entry else "UNKNOWN"
+
+
+def describe_metric_issue(name: str, value: float | None) -> str | None:
+    """Describe NaN/Inf/extreme values honestly; never clamp them."""
+
+    if value is None:
+        return None
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return f"{name}: NON_NUMERIC metric value ({type(value).__name__})"
+    import math
+
+    if math.isnan(value):
+        return f"{name}: NaN metric value surfaced without clamping"
+    if math.isinf(value):
+        return f"{name}: infinite metric value surfaced without clamping"
+    kind = metric_kind(name)
+    if kind in {METRIC_KIND_PERCENT, METRIC_KIND_DECIMAL_RETURN} and abs(value) > 10.0:
+        return (
+            f"{name}: extreme {kind} value {value!r} kept as-is "
+            "(no clamp per ETF_METRIC_SEMANTIC_CONTRACT)"
+        )
+    return None
+
 
 @dataclass(frozen=True, slots=True)
 class EtfFactorSnapshot:

@@ -10,6 +10,12 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from personal_alpha_terminal.application.semantic_domains import (
+    CONTEXT_ONLY,
+    RESEARCH_CANDIDATE,
+    annotate_domain,
+)
+
 EVIDENCE_PREFIX = "evidence"
 
 
@@ -165,6 +171,7 @@ def build_quant_facts(
         *event_refs,
     ]
     etf_section: dict[str, Any] = {}
+    research_candidates: list[dict[str, Any]] = []
     if isinstance(etf_evidence, dict):
         etf_section = {
             "universe": {
@@ -174,12 +181,35 @@ def build_quant_facts(
                 "blocked_complex": (etf_evidence.get("counts") or {}).get("blocked_complex"),
                 "research_only": (etf_evidence.get("counts") or {}).get("research_only"),
             },
-            "targets": etf_evidence.get("targets") or [],
             "composition": etf_evidence.get("composition") or {},
         }
-        for target in etf_section["targets"]:
-            if target.get("eligible") and target.get("symbol"):
-                action_symbols = frozenset({*action_symbols, str(target["symbol"])})
+        raw_targets = etf_evidence.get("targets") or []
+        if isinstance(raw_targets, (list, tuple)):
+            for target in raw_targets:
+                if not isinstance(target, dict) or not target.get("symbol"):
+                    continue
+                # ROUND25 P0: ETF sleeve targets are RESEARCH_CANDIDATE rows.
+                # Only metric-semantic fields are passed on; the AI must never
+                # see them inside the formal action list.
+                research_candidates.append(
+                    {
+                        "symbol": str(target.get("symbol")),
+                        "instrument_type": "ETF",
+                        "sleeve": str(target.get("sleeve", "ETF")),
+                        "research_target_weight": target.get("target_weight"),
+                        "current_weight": target.get("current_weight"),
+                        "model_status": str(
+                            target.get("model_status", "RESEARCH_CANDIDATE")
+                        ),
+                        "trading_permission": "NONE",
+                        "not_part_of_execution_plan": True,
+                        "domain": RESEARCH_CANDIDATE,
+                        "momentum_252_21": target.get("momentum_252_21"),
+                        "momentum_vol_ratio": target.get("momentum_vol_ratio"),
+                        "rationale": str(target.get("rationale", "")),
+                    }
+                )
+    context_only = annotate_domain(benchmark_facts, CONTEXT_ONLY)
 
     facts = {
         "analysis_date": analysis_date,
@@ -190,7 +220,10 @@ def build_quant_facts(
         "factor_count": factor_count,
         "candidate_count": candidate_count,
         "factor_statistics": factor_statistics,
-        "actions": actions,
+        "formal_actions": actions,
+        "actions": actions,  # legacy alias kept for v1 prompt consumers
+        "research_candidates": research_candidates,
+        "context_only": context_only,
         "portfolio": portfolio,
         "risk": risk,
         "benchmarks": benchmark_facts,
@@ -208,5 +241,8 @@ def build_quant_facts(
         "manual_execution_only": bounded_cert.get("manual_execution_only"),
         "evidence_refs": evidence_refs,
         "allowed_action_symbols": sorted(action_symbols),
+        "allowed_research_symbols": sorted(
+            {item["symbol"] for item in research_candidates}
+        ),
     }
     return facts, data_gaps

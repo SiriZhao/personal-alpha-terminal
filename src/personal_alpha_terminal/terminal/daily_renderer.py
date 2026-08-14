@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unicodedata
 from contextvars import ContextVar
+from dataclasses import asdict
 from io import StringIO
 
 from rich.console import Console, Group
@@ -11,7 +12,13 @@ from rich.text import Text
 
 from personal_alpha_terminal.application.daily_result import (
     DailyQuantResult,
+    DecisionRow,
     StageStatus,
+)
+from personal_alpha_terminal.application.semantic_domains import (
+    FORMAL_ACTIONABLE,
+    classify_item,
+    is_finite_metric,
 )
 
 _ACTIVE_LOCALE: ContextVar[str] = ContextVar("daily_renderer_locale", default="zh-CN")
@@ -48,6 +55,7 @@ def render_daily_quant_result(
         _data_certification(result, console)
         _pit_universe(result, console)
         _etf_universe(result, console)
+        _etf_research_candidates(result, console)
         _provider_accounting(result, console)
         _data_health(result, console)
         _factors(result, console)
@@ -165,32 +173,52 @@ def _ai_intelligence(result: DailyQuantResult, console: Console) -> None:
 
 
 def _ai_brief_section(result: DailyQuantResult, console: Console) -> None:
-    """ROUND24 PHASE H1: the Chinese advisory brief is directly visible."""
+    """ROUND25: the Chinese advisory brief is directly visible (full by default)."""
 
     brief = result.ai_brief
     if not isinstance(brief, dict):
         return
+    grounding_status = str(brief.get("semantic_grounding_status", ""))
     try:
-        from personal_alpha_terminal.ai_advisory.renderer import render_brief_compact
+        from personal_alpha_terminal.ai_advisory.renderer import render_brief_full
 
-        text = render_brief_compact(brief)
+        text = render_brief_full(brief)
     except (ImportError, KeyError, ValueError):
-        text = "AI 中文研判不可用(AI_BRIEF_QUARANTINED)。"
+        text = "AI \u4e2d\u6587\u7814\u5224\u4e0d\u53ef\u7528\uff08AI_BRIEF_QUARANTINED\uff09\u3002"
+    if grounding_status == "AI_BRIEF_QUARANTINED_SEMANTIC_MISMATCH":
+        issues = brief.get("semantic_grounding_issues") or []
+        issue_text = "; ".join(str(item) for item in issues) or "semantic mismatch"
+        text = (
+            _t(
+                "\u26a0 \u8be5 AI \u7814\u5224\u56e0\u8bed\u4e49\u63a5\u5730\u6821\u9a8c\u5931\u8d25\u5df2\u88ab\u9694\u79bb\uff1a"
+                f"{issue_text}\u3002\u4ee5\u4e0b\u4e3a\u5b89\u5168\u56de\u9000\u7b80\u62a5\u3002\n\n",
+                "\u26a0 This AI brief was quarantined by the semantic grounding "
+                f"validator: {issue_text}. Safe fallback brief follows.\n\n",
+            )
+            + text
+        )
     console.print(
         Panel(
             text,
-            title=_t("\u3010AI \u4e2d\u6587\u7814\u5224\u3011", "AI CHINESE BRIEF"),
+            title=_t(
+                "\u3010AI \u6bcf\u65e5\u5e02\u573a\u4e0e\u91cf\u5316\u7814\u5224\u3011",
+                "AI DAILY MARKET & QUANT INTELLIGENCE",
+            ),
             border_style="magenta",
         )
     )
 
 
 def _etf_universe(result: DailyQuantResult, console: Console) -> None:
-    """ROUND24 PHASE H: ETF universe, candidates and holdings."""
+    """ROUND25: ETF universe counts only.
+
+    ETF sleeve targets are RESEARCH_CANDIDATE rows and are rendered in their
+    own isolated section (``_etf_research_candidates``).  They are never
+    rendered inside the formal action list.
+    """
 
     universe = result.etf_universe
-    targets = tuple(result.etf_targets)
-    if not isinstance(universe, dict) or not universe and not targets:
+    if not isinstance(universe, dict) or not universe:
         return
     counts = universe if universe else {}
     rows = (
@@ -221,43 +249,93 @@ def _etf_universe(result: DailyQuantResult, console: Console) -> None:
     table.add_column()
     for label, value in rows:
         table.add_row(label, value)
-    if targets:
-        target_table = Table()
-        target_table.add_column("Ticker")
-        target_table.add_column("Type")
-        target_table.add_column("Sleeve")
-        target_table.add_column(_t("目标权重", "Target"))
-        target_table.add_column(_t("当前", "Current"))
-        target_table.add_column(_t("状态", "Eligible"))
-        for item in targets:
-            target_table.add_row(
-                str(item.get("symbol", "--")),
-                str(item.get("instrument_type", "ETF")),
-                str(item.get("sleeve", "--")),
-                _percent(_as_float(item.get("target_weight"))),
-                _percent(_as_float(item.get("current_weight"))),
-                _t("通过", "YES") if item.get("eligible") else _t("未通过", "NO"),
-            )
-        console.print(
-            Panel(
-                Group(
-                    table,
-                    Text(  # noqa: E501
-                        _t("ETF ??(????)", "ETF targets (research candidate)"),
-                        style="bold",
-                    ),
-                    target_table,
-                ),
-                title=_t("\u3010ETF \u591a Sleeve \u5b87\u5b99\u3011", "ETF MULTI-SLEEVE UNIVERSE"),
-                border_style="blue",
-            )
-        )
-        return
     console.print(
         Panel(
             table,
             title=_t("\u3010ETF \u591a Sleeve \u5b87\u5b99\u3011", "ETF MULTI-SLEEVE UNIVERSE"),
             border_style="blue",
+        )
+    )
+
+
+def _etf_research_candidates(result: DailyQuantResult, console: Console) -> None:
+    """ROUND25 PHASE 1: isolated research-candidate section.
+
+    ETF sleeve targets are RESEARCH_CANDIDATE rows with trading permission
+    NONE.  They render a research direction (research target weight), never
+    an order, and every metric uses its declared unit from the
+    ETF_METRIC_SEMANTIC_CONTRACT.
+    """
+
+    targets = tuple(result.etf_targets)
+    if not targets:
+        return
+    research_rows = [
+        item for item in targets if classify_item(item) == "RESEARCH_CANDIDATE"
+    ]
+    if not research_rows:
+        return
+    rows_with_weight = sorted(
+        [
+            item
+            for item in research_rows
+            if (_as_float(item.get("target_weight")) or 0) > 0
+        ],
+        key=lambda item: -(_as_float(item.get("target_weight")) or 0.0),
+    )
+    rows_without_weight = [
+        item for item in research_rows if item not in rows_with_weight
+    ]
+    table = Table()
+    table.add_column("Ticker")
+    table.add_column("Type")
+    table.add_column("Sleeve")
+    table.add_column(_t("\u7814\u7a76\u65b9\u5411", "Research target"))
+    table.add_column(_t("\u5f53\u524d", "Current"))
+    table.add_column(_t("12M \u52a8\u91cf", "12M momentum"))
+    table.add_column(_t("\u52a8\u91cf/\u6ce2\u52a8\u6bd4", "Momentum/Vol"))
+    table.add_column(_t("\u72b6\u6001", "Status"))
+    table.add_column(_t("\u4ea4\u6613\u6743\u9650", "Trading"))
+    for item in (*rows_with_weight, *rows_without_weight):
+        momentum = item.get("momentum_252_21")
+        ratio = item.get("momentum_vol_ratio")
+        momentum_text = (
+            _signed_percent(momentum) if is_finite_metric(momentum) else "--"
+        )
+        ratio_text = f"{float(ratio):.3f}" if is_finite_metric(ratio) else "--"
+        table.add_row(
+            str(item.get("symbol", "--")),
+            str(item.get("instrument_type", "ETF")),
+            str(item.get("sleeve", "--")),
+            _percent(_as_float(item.get("target_weight"))),
+            _percent(_as_float(item.get("current_weight"))),
+            momentum_text,
+            ratio_text,
+            str(item.get("model_status", "RESEARCH_CANDIDATE")),
+            str(item.get("trading_permission", "NONE")),
+        )
+    notice = _t(
+        "\u7814\u7a76\u5019\u9009\uff1a\u4ec5\u5c55\u793a\u5019\u9009\u914d\u7f6e\u65b9\u5411\uff0c"
+        "\u4e0d\u5c5e\u4e8e\u4eca\u65e5\u6267\u884c\u8ba1\u5212\uff0c\u4ea4\u6613\u6743\u9650 NONE\u3002"
+        "\u8fd9\u4e9b\u8bc1\u5238\u672a\u7ecf\u8fc7 SIGNAL\u2192PORTFOLIO\u2192RISK\u2192DECISION\u2192EXECUTION "
+        "\u6b63\u5f0f\u94fe\uff0c\u7981\u6b62\u88ab\u89e3\u8bfb\u4e3a\u4e70\u5165/\u5356\u51fa\u6307\u4ee4\u3002",
+        "RESEARCH CANDIDATES: research direction only. NOT part of today's "
+        "execution plan. Trading permission NONE. These securities have not "
+        "passed the formal SIGNAL->PORTFOLIO->RISK->DECISION->EXECUTION chain "
+        "and must never be read as BUY/SELL orders.",
+    )
+    console.print(
+        Panel(
+            Group(
+                Text(
+                    _t("\u3010\u7814\u7a76\u5019\u9009 \u00b7 \u4e0d\u6267\u884c\u3011", "RESEARCH CANDIDATES \u00b7 NOT EXECUTED"),
+                    style="bold yellow",
+                ),
+                Text(notice, style="yellow"),
+                table,
+            ),
+            title=_t("ETF RESEARCH SLEEVE", "ETF RESEARCH SLEEVE"),
+            border_style="yellow",
         )
     )
 
@@ -467,7 +545,15 @@ def _today_actions(result: DailyQuantResult, console: Console) -> None:
     )
     for column in columns:
         table.add_column(column, overflow="fold")
+    formal_rows: list[DecisionRow] = []
+    blocked_rows = 0
     for item in result.final_decisions:
+        row = asdict(item)
+        if classify_item(row) != FORMAL_ACTIONABLE:
+            blocked_rows += 1
+            continue
+        formal_rows.append(item)
+    for item in formal_rows:
         table.add_row(
             item.symbol,
             "STOCK",
@@ -482,28 +568,18 @@ def _today_actions(result: DailyQuantResult, console: Console) -> None:
             _t("通过", "PASS"),
             item.earliest_execution_time.isoformat(),
         )
-    for etf_item in result.etf_targets:
-        symbol = str(etf_item.get("symbol", ""))
-        if not symbol or not etf_item.get("eligible"):
-            continue
-        target = _as_float(etf_item.get("target_weight")) or 0.0
-        current = _as_float(etf_item.get("current_weight")) or 0.0
-        if target <= 0:
-            continue
-        action = "BUY" if target > current else ("SELL" if target < current else "HOLD")
-        table.add_row(
-            symbol,
-            "ETF",
-            str(etf_item.get("sleeve", "ETF")),
-            _action(action),
-            _percent(current),
-            _percent(target),
-            _signed_percent(target - current),
-            _money(None),
-            "--",
-            _signed_percent(_as_float(etf_item.get("expected_value"))),
-            "--",
-            "--",
+    if blocked_rows:
+        console.print(
+            Text(
+                _t(
+                    f"注意: {blocked_rows} 条决策因缺少正式字段被移出正式清单 "
+                    "(缺失必要字段的证券禁止显示为正式 BUY/SELL)。",
+                    f"NOTE: {blocked_rows} decision(s) excluded from the formal "
+                    "list because required formal fields are missing; a security "
+                    "missing mandatory fields must never render as BUY/SELL.",
+                ),
+                style="yellow",
+            )
         )
     console.print(table)
 

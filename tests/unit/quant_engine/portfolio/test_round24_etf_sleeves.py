@@ -107,7 +107,10 @@ def test_tactical_targets_rank_by_risk_adjusted_momentum() -> None:
     positive = [item for item in targets if item.target_weight > 0]
     assert {item.symbol for item in positive} == {"XLK", "XLF"}
     by_symbol = {item.symbol: item for item in positive}
-    assert by_symbol["XLK"].expected_value > by_symbol["XLF"].expected_value
+    assert (
+        by_symbol["XLK"].momentum_vol_ratio
+        > by_symbol["XLF"].momentum_vol_ratio
+    )
     xlv = next(item for item in targets if item.symbol == "XLV")
     assert xlv.target_weight == 0.0
     assert "excluded by rank" in xlv.rationale

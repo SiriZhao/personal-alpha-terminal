@@ -31,7 +31,18 @@ SYSTEM_PROMPT = (
     "企业事件证据。”ETF 必须写明“ETF:不适用公司级 SEC 事件分析。”\n"
     "5. 只输出一个 JSON 对象,严格匹配给定 schema,不要输出任何其它文本、"
     "代码块标记或解释。\n"
-    "6. 全部内容使用简体中文。"
+    "6. 全部内容使用简体中文。\n"
+    "7. 语义域硬性隔离:facts.formal_actions 是正式量化结论(可解释为正式"
+    "操作);facts.research_candidates 是研究候选(交易权限 NONE,不属于今日"
+    "执行计划);facts.context_only 只是上下文(benchmark/市场代理)。你绝不能"
+    "把 research_candidates 描述为“当前组合配置/持仓/已买入”,绝不能给它们"
+    "任何 BUY/SELL 表述,只能写“研究候选,尚未进入正式交易链”。绝不能把"
+    "context_only 描述为目标仓位。\n"
+    "8. 组合现金、正式动作数量、正式总敞口只能引用 facts.formal_actions、"
+    "facts.portfolio 与 facts.risk 中的数字,禁止自行加减或发明。\n"
+    "9. 所有数字单位必须与 facts 中声明的语义一致:research_candidates 的"
+    "momentum_252_21 是 12 个月累计收益(decimal),momentum_vol_ratio 是动量/"
+    "年化波动率无量纲比值,禁止把它们称作 Alpha 或乘以 100 后冒充百分比。\n"
 )
 
 
