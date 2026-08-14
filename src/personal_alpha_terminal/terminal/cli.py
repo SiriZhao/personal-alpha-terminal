@@ -1939,6 +1939,86 @@ def _news_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _stress_exam_v21_command(args: argparse.Namespace) -> int:
+    """ROUND25 PHASE 19: Stress Exam 2.1 with unchanged ROUND24 scenarios."""
+
+    from personal_alpha_terminal.data.database import get_session_factory, session_scope
+    from personal_alpha_terminal.scenario_simulator.stress_exam_v2_run import (
+        DEFAULT_SEED,
+        load_baseline_from_run_dir,
+    )
+    from personal_alpha_terminal.scenario_simulator.stress_exam_v21 import (
+        run_stress_exam_v21,
+    )
+
+    config = load_config(args.config)
+    root = config.report_dir / "daily-runs"
+    baseline = None
+    baseline_status = "NO_RUN_CERTIFICATE"
+    with session_scope(get_session_factory()) as session:
+        for certificate_path in sorted(
+            root.glob("*/run_certificate.json"),
+            key=lambda item: item.stat().st_mtime,
+            reverse=True,
+        ):
+            baseline, baseline_status = load_baseline_from_run_dir(
+                run_dir=certificate_path.parent,
+                session=session,
+            )
+            if baseline is not None:
+                break
+        result = run_stress_exam_v21(baseline, seed=DEFAULT_SEED)
+    out_dir = config.report_dir / "stress-exam-v2"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "stress_exam_v2_1_summary.json").write_text(
+        json.dumps(result["summary"], ensure_ascii=False, indent=2, default=str),
+        encoding="utf-8",
+    )
+    (out_dir / "stress_exam_v2_1_comparison.json").write_text(
+        json.dumps(result["comparison"], ensure_ascii=False, indent=2, default=str),
+        encoding="utf-8",
+    )
+    console.print(f"status: {result['summary'].get('status')} baseline={baseline_status}")
+    for name, rows in result["comparison"].items():
+        worst = max(
+            (
+                (scenario, rows["scenarios"][scenario]["max_drawdown"])
+                for scenario in rows["scenarios"]
+            ),
+            key=lambda pair: abs(pair[1]),
+        )
+        console.print(
+            f"- {name}: worst {worst[0]} maxDD {worst[1]:.2%} | {rows['description']}"
+        )
+    console.print(
+        "scenario_definitions_unchanged=True; research only; no auto promotion."
+    )
+    return 0
+
+
+def _exposure_audit_command(args: argparse.Namespace) -> int:
+    """ROUND25 PHASE 12: honest size/sector/ETF look-through closure."""
+
+    from datetime import UTC as _UTC, datetime as _datetime
+
+    from personal_alpha_terminal.application.exposure_closure import (
+        build_exposure_closure,
+    )
+    from personal_alpha_terminal.data.database import get_session_factory
+
+    config = load_config(args.config)
+    with get_session_factory()() as session:
+        report = build_exposure_closure(session, as_of=_datetime.now(_UTC))
+    artifacts = config.report_dir / "validation-artifacts"
+    artifacts.mkdir(parents=True, exist_ok=True)
+    (artifacts / "round25_exposure_closure.json").write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, default=str),
+        encoding="utf-8",
+    )
+    console.print(json.dumps(report, ensure_ascii=False, indent=2, default=str))
+    return 0
+
+
 def _research_labs_command(args: argparse.Namespace) -> int:
     """ROUND25 PHASE 8-11: research promotion labs with honest evidence labels."""
 
@@ -2707,6 +2787,8 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("market-state", help="Deterministic MARKET_STATE_SNAPSHOT from verified price bars")
     subparsers.add_parser("execution", help="Interactive manual execution wizard (real ledger)")
     subparsers.add_parser("execution-costs", help="Realized execution cost observations (research only)")
+    subparsers.add_parser("exposure-audit", help="Size/sector/ETF look-through honest closure report")
+    subparsers.add_parser("stress-exam-v21", help="Stress Exam 2.1 overlay comparison (scenario params unchanged)")
     labs = subparsers.add_parser("research-labs", help="ROUND25 research promotion labs (never auto-promote)")
     labs_actions = labs.add_subparsers(dest='labs_action', required=True)
     labs_actions.add_parser("evaluate", help="Run ETF/overlay research A/B and write evidence artifacts")
@@ -3207,6 +3289,10 @@ def main(argv: list[str] | None = None) -> int:
             return _execution_wizard_command(args)
         if command == "execution-costs":
             return _execution_costs_command(args)
+        if command == "stress-exam-v21":
+            return _stress_exam_v21_command(args)
+        if command == "exposure-audit":
+            return _exposure_audit_command(args)
         if command == "research-labs":
             return _research_labs_command(args)
         if command == "portfolio-reconcile":
