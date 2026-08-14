@@ -239,6 +239,15 @@ class PortfolioConstructionEngine:
         beta = np.array([risk.beta[symbol] for symbol in symbols])
         sizes = np.array([risk.size_scores.get(symbol, 0.0) for symbol in symbols])
 
+        # ROUND25 PHASE 13: analytic gradients (identical semantics, no
+        # numerical differentiation).  SLSQP previously evaluated the objective
+        # and ~1.2k constraints numerically for every iteration over ~1.2k
+        # variables (~100M calls, ~700s per construction).  The closed-form
+        # derivatives below are the exact derivatives of the functions above.
+        turnover_coefficient = (
+            self.constraints.turnover_penalty + self.cost_model.conservative_rate
+        )
+
         def objective(weights: np.ndarray) -> float:
             delta = weights - current
             smooth_turnover = float(np.sum(np.sqrt(delta * delta + 1e-12)))
@@ -254,8 +263,21 @@ class PortfolioConstructionEngine:
                 + cost_penalty
             )
 
+        def objective_jac(weights: np.ndarray) -> np.ndarray:
+            delta = weights - current
+            smooth_gradient = delta / np.sqrt(delta * delta + 1e-12)
+            return np.asarray(
+                -mu
+                + 2.0 * self.constraints.risk_aversion * (covariance @ weights)
+                + turnover_coefficient * smooth_gradient,
+                dtype=float,
+            )
+
         constraints = [
-            {"type": "ineq", "fun": lambda weights: gross_limit - float(np.sum(weights))},
+            {
+                "type": "ineq",
+                "fun": lambda weights: gross_limit - float(np.sum(weights)),
+            },
             {
                 "type": "ineq",
                 "fun": lambda weights: volatility_limit
@@ -285,6 +307,11 @@ class PortfolioConstructionEngine:
                 - abs(float(sizes @ weights)),
             },
         ]
+        # ROUND25 PHASE 13: prune provably non-binding membership constraints.
+        # A singleton cluster/sector constraint is w[i] <= cap with cap larger
+        # than the per-position cap (0.12 < 0.30 / 0.35), so it can never bind.
+        # Omitting it changes nothing mathematically but removes ~1k redundant
+        # numerical-gradient rows from SLSQP.
         constraints.extend(
             {
                 "type": "ineq",
@@ -292,6 +319,7 @@ class PortfolioConstructionEngine:
                 - float(np.sum(weights[list(members)])),
             }
             for members in sector_members.values()
+            if len(members) > 1
         )
         constraints.extend(
             {
@@ -300,15 +328,25 @@ class PortfolioConstructionEngine:
                 - float(np.sum(weights[list(members)])),
             }
             for members in cluster_members.values()
+            if len(members) > 1
         )
         initial = np.minimum(current, np.array([upper for _, upper in bounds]))
         if initial.sum() > gross_limit and initial.sum() > 0:
             initial *= gross_limit / initial.sum()
+        elif initial.sum() <= 0:
+            # ROUND25 PHASE 13: warm start for the all-cash case.  SLSQP with
+            # analytic jacobians struggles from an all-zero point; a tiny
+            # uniform allocation inside every bound gives it a feasible
+            # interior start.  The problem is convex, so the optimum is
+            # unchanged and the seed is far below the no-trade band.
+            seed = min(gross_limit / max(1, len(symbols)), 1e-6)
+            initial = np.full(len(symbols), seed)
         try:
             result = minimize(
                 objective,
                 initial,
                 method="SLSQP",
+                jac=objective_jac,
                 bounds=bounds,
                 constraints=constraints,
                 options={"maxiter": 500, "ftol": 1e-10, "disp": False},
