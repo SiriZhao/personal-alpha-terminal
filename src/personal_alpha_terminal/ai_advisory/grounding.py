@@ -37,21 +37,51 @@ _PCT_TOLERANCE = 0.05
 
 def _brief_text(brief: dict[str, Any]) -> str:
     parts: list[str] = []
-    for key in (
+    narrative_keys = (
         "summary",
         "market_interpretation",
         "portfolio_interpretation",
         "contrarian_view",
-    ):
+        # DailyAIBriefV2 narrative fields
+        "executive_summary",
+        "formal_conclusions",
+        "market_state",
+        "index_analysis",
+        "breadth_analysis",
+        "factor_rotation",
+        "macro_context",
+        "portfolio_risk_analysis",
+        "overnight_risk",
+        "bear_case",
+        "bull_case",
+    )
+    for key in narrative_keys:
         value = brief.get(key)
         if isinstance(value, str):
             parts.append(value)
-    for item in brief.get("action_explanations", []) or []:
+    explanation_rows = brief.get("action_explanations") or brief.get(
+        "formal_action_explanations"
+    ) or []
+    for item in explanation_rows:
         if isinstance(item, dict):
             symbol = item.get("symbol")
             if isinstance(symbol, str):
                 parts.append(symbol)
-            for key in ("ai_interpretation", "portfolio_role", "pit_events"):
+            for key in (
+                "ai_interpretation",
+                "ai_explanation",
+                "portfolio_role",
+                "pit_events",
+            ):
+                value = item.get(key)
+                if isinstance(value, str):
+                    parts.append(value)
+    for item in brief.get("etf_research_analysis", []) or []:
+        if isinstance(item, dict):
+            symbol = item.get("symbol")
+            if isinstance(symbol, str):
+                parts.append(symbol)
+            for key in ("ai_interpretation", "metric_note"):
                 value = item.get(key)
                 if isinstance(value, str):
                     parts.append(value)
@@ -59,15 +89,16 @@ def _brief_text(brief: dict[str, Any]) -> str:
 
 
 def _symbol_near_keyword(text: str, symbol: str, keywords: tuple[str, ...]) -> bool:
-    symbol_index = text.find(symbol)
-    if symbol_index < 0:
+    symbol_positions = [match.start() for match in re.finditer(re.escape(symbol), text)]
+    if not symbol_positions:
         return False
     for keyword in keywords:
         positions = [match.start() for match in re.finditer(re.escape(keyword), text)]
-        for position in positions:
-            distance = abs(position - symbol_index)
-            if distance <= _WINDOW + max(len(symbol), len(keyword)):
-                return True
+        for symbol_index in symbol_positions:
+            for position in positions:
+                distance = abs(position - symbol_index)
+                if distance <= _WINDOW + max(len(symbol), len(keyword)):
+                    return True
     return False
 
 
@@ -118,7 +149,11 @@ def validate_semantic_grounding(
         if symbol and symbol not in text:
             issues.append(f"formal target {symbol} omitted from brief")
 
-    explanations = brief.get("action_explanations") or []
+    explanations = (
+        brief.get("action_explanations")
+        or brief.get("formal_action_explanations")
+        or []
+    )
     if len(explanations) != len(formal_actions):
         issues.append(
             "action explanation count "

@@ -265,6 +265,9 @@ class DailyQuantResult:
     etf_targets: tuple[dict[str, object], ...] = field(default_factory=tuple)
     etf_composition: dict[str, object] | None = None
     ai_brief: dict[str, object] | None = None
+    # ROUND25 PHASE 7: pre-execution overnight risk assessment (advisory only;
+    # never cancels, never recomputes alpha).
+    pre_execution: dict[str, object] | None = None
 
     @property
     def duration_seconds(self) -> float:

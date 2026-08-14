@@ -49,6 +49,14 @@ from personal_alpha_terminal.application.etf_sleeve_service import (
 from personal_alpha_terminal.application.intelligence_service import (
     IntelligenceApplicationService,
 )
+from personal_alpha_terminal.application.pre_execution import (
+    PreExecutionCheck,
+    build_assessment,
+    check_halts_and_corporate_events,
+    check_market_gap,
+    check_overnight_news,
+    check_stale_market_data,
+)
 from personal_alpha_terminal.application.quant_daily_service import (
     ProductionDailyWorkflow,
     TodayResult,
@@ -72,7 +80,8 @@ from personal_alpha_terminal.intelligence.llm_runtime import (
     llm_runtime_status,
 )
 from personal_alpha_terminal.intelligence.storage import IntelligenceRepository
-from personal_alpha_terminal.models import Portfolio
+from personal_alpha_terminal.intelligence.market_news import NewsIntelligenceService
+from personal_alpha_terminal.models import Portfolio, Price, SecurityMaster
 from personal_alpha_terminal.models.intelligence import (
     IntelligenceEvent,
     IntelligenceExtractionCache,
@@ -371,6 +380,12 @@ class DailyQuantOrchestrator:
                 "composition": etf_composition,
             },
         )
+        stage_started = perf_counter()
+        pre_execution = self._add_pre_execution_stage(
+            stages,
+            as_of=effective_decision_time,
+            duration_started=stage_started,
+        )
         blockers.extend(workflow_result.blockers)
         warnings.extend(workflow_result.warnings)
         for name in _STAGE_ORDER:
@@ -399,6 +414,7 @@ class DailyQuantOrchestrator:
             etf_targets=etf_targets,
             etf_composition=etf_composition,
             ai_brief=ai_brief,
+            pre_execution=pre_execution,
         )
         return self._persist_result(result)
 
@@ -697,23 +713,37 @@ class DailyQuantOrchestrator:
                     default=str,
                 ).encode("utf-8")
             ).hexdigest()[:16]
-            service = AiBriefService()
-            brief_result = service.generate(
-                cache_key=BriefCacheKey(
-                    run_id=run_id,
-                    data_hash=data_hash,
-                    factor_hash=str(identity_hashes.get("strategy_parameter_hash", "UNAVAILABLE")),
-                    portfolio_hash=str(
-                        identity_hashes.get("portfolio_constraint_hash", "UNAVAILABLE")
-                    ),
-                    risk_hash=str(identity_hashes.get("risk_model_hash", "UNAVAILABLE")),
-                    intelligence_hash=intelligence_hash,
-                    model=model,
-                    prompt_version=PROMPT_VERSION,
-                ),
+            market_state_doc: dict[str, object] | None = None
+            try:
+                from personal_alpha_terminal.application.market_state import (
+                    build_market_state_snapshot,
+                )
+
+                with self._factory.begin() as session:
+                    snapshot = build_market_state_snapshot(session, as_of=as_of)
+                if snapshot is not None:
+                    market_state_doc = snapshot.document()
+            except (OSError, SQLAlchemyError, ValueError):
+                market_state_doc = None
+            news_doc: dict[str, object] | None = None
+            try:
+                news_result = NewsIntelligenceService().acquire(
+                    decision_as_of=as_of,
+                    providers={},
+                )
+                news_doc = news_result.document()
+            except (OSError, ValueError):
+                news_doc = None
+            from personal_alpha_terminal.ai_advisory.brief_v2 import AiBriefV2Service
+
+            v2_service = AiBriefV2Service()
+            brief_result = v2_service.generate(
+                run_id=run_id,
                 facts=facts,
                 model=model,
                 provider_factory=provider_factory,
+                market_state=market_state_doc,
+                news=news_doc,
             )
             stages["AI_BRIEF"] = StageResult(
                 "AI_BRIEF",
@@ -723,21 +753,28 @@ class DailyQuantOrchestrator:
                     else StageStatus.PASS_DEGRADED
                 ),
                 perf_counter() - duration_started,
-                f"AI Chinese brief {brief_result.source}",
+                f"AI Chinese brief v2 {brief_result.source}",
                 {
                     "enabled": True,
                     "provider": provider,
                     "model": model,
                     "connectivity": connectivity,
+                    "schema_version": "ai-brief-zh-v2",
                     "llm_status": brief_result.llm_status,
                     "source": brief_result.source,
-                    "cache_hit": brief_result.cache_hit,
+                    "cache_hit": False,
+                    "llm_calls": brief_result.usage.get("total_calls", 0),
+                    "prompt_tokens": brief_result.usage.get("prompt_tokens", 0),
+                    "completion_tokens": brief_result.usage.get("completion_tokens", 0),
+                    "semantic_grounding_status": (
+                        brief_result.semantic_grounding_status
+                    ),
                     "production_influence": PRODUCTION_INFLUENCE,
                     "trade_authority": "NONE",
                     "target_weight_authority": "NONE",
                     "buy_sell_authority": "NONE",
                     "output_row_count": (
-                        len(brief_result.brief.get("action_explanations", []))
+                        len(brief_result.brief.get("formal_action_explanations", []))
                     ),
                 },
             )
@@ -1181,6 +1218,7 @@ class DailyQuantOrchestrator:
         etf_targets: tuple[dict[str, object], ...] = (),
         etf_composition: dict[str, object] | None = None,
         ai_brief: dict[str, object] | None = None,
+        pre_execution: dict[str, object] | None = None,
     ) -> DailyQuantResult:
         actionable = workflow.status in {"GENERATED", "NO_DECISION"} and not blockers
         data_cutoff = self._resolved_data_cutoff(stages, workflow.data_cutoff)
@@ -1618,6 +1656,7 @@ class DailyQuantOrchestrator:
             etf_targets=etf_targets,
             etf_composition=etf_composition,
             ai_brief=ai_brief,
+            pre_execution=pre_execution,
         )
 
     @staticmethod
@@ -1835,6 +1874,209 @@ class DailyQuantOrchestrator:
             execution_mode="MANUAL_ONLY",
         )
 
+    def _add_pre_execution_stage(
+        self,
+        stages: dict[str, StageResult],
+        *,
+        as_of: datetime,
+        duration_started: float,
+    ) -> dict[str, object] | None:
+        """ROUND25 PHASE 7: overnight / pre-execution risk assessment.
+
+        Compares the previous actionable run against what happened between its
+        close and now (news, gaps, price freshness).  Advisory only: the worst
+        status is PRE_EXECUTION_REVIEW_REQUIRED (HUMAN REVIEW).  This layer
+        never retrains models, never recomputes yesterday's alpha and never
+        cancels an order by itself.
+        """
+
+        now = datetime.now(UTC)
+        try:
+            previous = self._latest_previous_run_certificate()
+            if previous is None:
+                stages["PRE_EXECUTION"] = StageResult(
+                    "PRE_EXECUTION",
+                    StageStatus.OPTIONAL_UNAVAILABLE,
+                    perf_counter() - duration_started,
+                    "no previous actionable run to guard",
+                    {"enabled": True, "status": "PRE_EXECUTION_DATA_UNAVAILABLE"},
+                )
+                return None
+            decision_as_of_raw = previous.get("data_cutoff") or previous.get("finished_at")
+            decision_as_of = datetime.fromisoformat(str(decision_as_of_raw))
+            if decision_as_of.tzinfo is None:
+                decision_as_of = decision_as_of.replace(tzinfo=UTC)
+            decision_as_of = decision_as_of.astimezone(UTC)
+            recommendations = previous.get("decision_recommendations") or []
+            formal_symbols = frozenset(
+                str(item.get("symbol"))
+                for item in recommendations
+                if isinstance(item, dict) and item.get("symbol")
+            )
+            news_service = NewsIntelligenceService()
+            checks: list[PreExecutionCheck] = []
+            try:
+                checks.append(
+                    check_overnight_news(
+                        news_service,
+                        decision_as_of=decision_as_of,
+                        now=now,
+                        material_symbols=formal_symbols or None,
+                    )
+                )
+            except (OSError, ValueError):
+                checks.append(
+                    PreExecutionCheck(
+                        "overnight_news", "UNAVAILABLE", "news ledger unreadable"
+                    )
+                )
+            checks.append(self._pre_execution_price_checks(previous, formal_symbols, now))
+            checks.append(
+                check_halts_and_corporate_events(
+                    halted_symbols=frozenset(
+                        str(item.get("symbol"))
+                        for item in recommendations
+                        if isinstance(item, dict)
+                        and str(item.get("data_quality", "")).upper() in {"HALTED", "DELISTED"}
+                    ),
+                )
+            )
+            assessment = build_assessment(
+                decision_as_of=decision_as_of,
+                now=now,
+                checks=tuple(checks),
+            )
+            stages["PRE_EXECUTION"] = StageResult(
+                "PRE_EXECUTION",
+                StageStatus.PASS,
+                perf_counter() - duration_started,
+                f"pre-execution assessment: {assessment.status}",
+                {
+                    "enabled": True,
+                    "status": assessment.status,
+                    "manual_review_required": assessment.manual_review_required,
+                    "llm_authority": "NONE",
+                },
+            )
+            return assessment.document()
+        except (OSError, ValueError, SQLAlchemyError) as error:
+            stages["PRE_EXECUTION"] = StageResult(
+                "PRE_EXECUTION",
+                StageStatus.PASS_DEGRADED,
+                perf_counter() - duration_started,
+                f"pre-execution assessment degraded: {type(error).__name__}",
+                {"enabled": True, "status": "PRE_EXECUTION_DATA_UNAVAILABLE"},
+            )
+            return {
+                "status": "PRE_EXECUTION_DATA_UNAVAILABLE",
+                "detail": str(error),
+                "manual_review_required": True,
+                "llm_authority": "NONE",
+                "auto_cancel": False,
+                "alpha_recomputation": False,
+            }
+
+    def _latest_previous_run_certificate(self) -> dict[str, object] | None:
+        """Latest persisted run certificate with formal recommendations."""
+
+        root = self._snapshot_root
+        candidates = sorted(
+            root.glob("*/run_certificate.json"),
+            key=lambda item: item.stat().st_mtime,
+            reverse=True,
+        )
+        for path in candidates:
+            try:
+                payload = _json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if payload.get("decision_recommendations"):
+                return payload
+        return None
+
+    def _pre_execution_price_checks(
+        self,
+        previous: dict[str, object],
+        formal_symbols: frozenset[str],
+        now: datetime,
+    ) -> PreExecutionCheck:
+        """Gap + freshness evidence from verified local price bars."""
+
+        decision_as_of_raw = previous.get("data_cutoff") or previous.get("finished_at")
+        try:
+            decision_as_of = datetime.fromisoformat(str(decision_as_of_raw))
+        except ValueError:
+            decision_as_of = None
+        if decision_as_of is not None and decision_as_of.tzinfo is None:
+            decision_as_of = decision_as_of.replace(tzinfo=UTC)
+        with self._factory.begin() as session:
+            spy_prices = session.execute(
+                select(Price.trade_date, Price.close, Price.available_time)
+                .join(SecurityMaster, Price.stock_id == SecurityMaster.id)
+                .where(
+                    SecurityMaster.symbol == "SPY",
+                    Price.price_type == "unadjusted_ohlcv",
+                )
+                .order_by(Price.trade_date.desc())
+                .limit(2)
+            ).all()
+            freshness_rows = session.execute(
+                select(func.max(Price.available_time))
+                .join(SecurityMaster, Price.stock_id == SecurityMaster.id)
+                .where(
+                    SecurityMaster.symbol.in_(sorted(formal_symbols)),
+                    Price.price_type == "unadjusted_ohlcv",
+                )
+            ).scalar()
+        decision_close: float | None = None
+        latest_close: float | None = None
+        if len(spy_prices) >= 2 and decision_as_of is not None:
+            before = [
+                row for row in spy_prices
+                if row[0] <= decision_as_of.date()
+            ]
+            if before:
+                decision_close = float(before[0][1])
+                latest_close = (
+                    float(spy_prices[0][1])
+                    if spy_prices[0][0] > decision_as_of.date()
+                    else decision_close
+                )
+        gap_check = check_market_gap(
+            decision_close=decision_close,
+            latest_close=latest_close,
+        )
+        freshness = check_stale_market_data(
+            latest_available_at=freshness_rows,
+            decision_as_of=decision_as_of or now,
+            now=now,
+        )
+        if gap_check.status == "UNAVAILABLE" and freshness.status == "PASS":
+            return PreExecutionCheck(
+                "market_gap_and_freshness",
+                freshness.status,
+                freshness.detail + "; gap: " + gap_check.detail,
+            )
+        if gap_check.status in {"PASS", "WARN"} and freshness.status == "PASS":
+            return PreExecutionCheck(
+                "market_gap_and_freshness",
+                "PASS",
+                freshness.detail + "; " + gap_check.detail,
+                gap_check.evidence,
+            )
+        if gap_check.status == "REVIEW_REQUIRED" or freshness.status == "REVIEW_REQUIRED":
+            return PreExecutionCheck(
+                "market_gap_and_freshness",
+                "REVIEW_REQUIRED",
+                freshness.detail + "; " + gap_check.detail,
+                gap_check.evidence,
+            )
+        return PreExecutionCheck(
+            "market_gap_and_freshness",
+            "UNAVAILABLE",
+            freshness.detail + "; " + gap_check.detail,
+        )
+
     def _persist_result(self, result: DailyQuantResult) -> DailyQuantResult:
         started = perf_counter()
         try:
@@ -1889,6 +2131,20 @@ class DailyQuantOrchestrator:
                     encoding="utf-8",
                 )
                 temporary.replace(etf_path)
+            if updated.pre_execution is not None:
+                run_directory = self._snapshot_root / updated.run_id
+                pre_path = run_directory / "pre_execution.json"
+                temporary = pre_path.with_suffix(".json.tmp")
+                temporary.write_text(
+                    _json.dumps(
+                        updated.pre_execution,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        default=str,
+                    ),
+                    encoding="utf-8",
+                )
+                temporary.replace(pre_path)
             return updated
         except OSError as error:
             blocker = f"decision snapshot persistence failed: {error}"

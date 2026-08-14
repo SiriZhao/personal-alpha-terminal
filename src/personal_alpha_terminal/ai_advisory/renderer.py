@@ -13,6 +13,122 @@ from typing import Any
 BRIEF_TITLE = "【AI 中文研判 · DeepSeek】"
 
 
+def render_brief_v2(brief: dict[str, Any]) -> str:
+    """ROUND25 PHASE 3: full 19-section DailyAIBriefV2 (default terminal view)."""
+
+    payload = brief.get("brief") or {}
+    model = str(brief.get("model", "deepseek-v4-flash"))
+    status = str(brief.get("llm_status", "PASS_DEGRADED"))
+    source = str(brief.get("source", "RULE_BASED_DETERMINISTIC_V2"))
+    grounding = str(brief.get("semantic_grounding_status", ""))
+    lines = [
+        "【AI 每日市场与量化研判】",
+        f"模型:{model} | LLM 状态:{status} | 来源:{source}",
+        "角色:ADVISORY / EXPLANATION | 生产决策影响:NONE | 交易/目标权重/买卖权限:NONE",
+    ]
+    if grounding == "AI_BRIEF_QUARANTINED_SEMANTIC_MISMATCH":
+        issues = "; ".join(
+            str(item) for item in (brief.get("semantic_grounding_issues") or [])
+        )
+        lines.append(
+            f"⚠ 语义接地校验失败,已隔离(AI_BRIEF_QUARANTINED_SEMANTIC_MISMATCH):{issues}"
+        )
+    lines.append("")
+    sections = (
+        ("一、执行摘要", "executive_summary"),
+        ("二、今日正式量化结论", "formal_conclusions"),
+        ("三、美股市场整体状态", "market_state"),
+        ("四、主要指数与风格变化", "index_analysis"),
+        ("五、市场宽度与内部结构", "breadth_analysis"),
+        ("六、行业 / 风格 / 因子轮动", "factor_rotation"),
+        ("七、宏观环境", "macro_context"),
+        ("八、今日重要市场新闻", None),
+        ("九、企业 / SEC 重点事件", None),
+        ("十、当前组合分析", "portfolio_risk_analysis"),
+        ("十一、今日每个正式操作的逐项解释", None),
+        ("十二、ETF 研究候选解读", None),
+        ("十三、风险集中度分析", "portfolio_risk_analysis"),
+        ("十四、反方观点 / 风险质疑", "bear_case"),
+        ("十五、隔夜与开盘风险", "overnight_risk"),
+        ("十六、SPY / QQQ benchmark 对照", "index_analysis"),
+        ("十七、未来 1-5 个交易日需要重点观察的事项", None),
+        ("十八、数据 / 模型局限", None),
+        ("十九、最终人工执行提示", None),
+    )
+    news_rows = payload.get("important_news") or []
+    sec_events = payload.get("sec_events") or []
+    action_rows = payload.get("formal_action_explanations") or []
+    etf_rows = payload.get("etf_research_analysis") or []
+    uncertainties = payload.get("uncertainties") or []
+    watchlist = payload.get("watchlist_next_sessions") or []
+    limitations = payload.get("data_limitations") or []
+    manual_notes = payload.get("manual_execution_notes") or []
+    for title, key in sections:
+        lines.append(title)
+        if key is None:
+            if title == "八、今日重要市场新闻":
+                for row in news_rows:
+                    lines.append(
+                        f"[{row.get('evidence_ref')}] {row.get('headline')}"
+                    )
+                    lines.append(f"  为什么重要:{row.get('why_matters')}")
+                    lines.append(
+                        f"  影响:{row.get('affected')} | 组合关系:{row.get('portfolio_link')} "
+                        f"| 证据强度:{row.get('strength')}"
+                    )
+                if not news_rows:
+                    lines.append("当前没有已持久化的市场新闻。")
+            elif title == "九、企业 / SEC 重点事件":
+                for row in sec_events:
+                    lines.append(f"- {row}")
+                if not sec_events:
+                    lines.append("当前没有企业 / SEC 重点事件。")
+            elif title == "十一、今日每个正式操作的逐项解释":
+                for row in action_rows:
+                    lines.append(f"—— {row.get('symbol')} ({row.get('action')})")
+                    lines.append(f"量化 Alpha:{row.get('quant_alpha', '不适用')}")
+                    lines.append(f"目标权重:{row.get('target_weight', '不适用')}")
+                    lines.append(f"风险贡献:{row.get('risk_contribution', '不适用')}")
+                    lines.append(f"预计成本:{row.get('cost', '不适用')}")
+                    lines.append(f"AI 解读:{row.get('ai_explanation', '')}")
+                    lines.append(f"证据引用:{row.get('evidence_refs', [])}")
+                if not action_rows:
+                    lines.append("本轮没有正式操作建议。")
+            elif title == "十二、ETF 研究候选解读":
+                for row in etf_rows:
+                    lines.append(
+                        f"- {row.get('symbol')} [{row.get('sleeve')}] "
+                        f"研究目标权重 {row.get('research_target_weight', '不适用')}"
+                    )
+                    lines.append(f"  指标:{row.get('metric_note', '不适用')}")
+                    lines.append(f"  AI 解读:{row.get('ai_interpretation', '')}")
+                if not etf_rows:
+                    lines.append("当前没有 ETF 研究候选。")
+            elif title == "十七、未来 1-5 个交易日需要重点观察的事项":
+                for row in watchlist:
+                    lines.append(f"- {row}")
+            elif title == "十八、数据 / 模型局限":
+                for row in limitations:
+                    lines.append(f"- {row}")
+                for row in uncertainties:
+                    lines.append(f"- 不确定性:{row}")
+            elif title == "十九、最终人工执行提示":
+                for row in manual_notes:
+                    lines.append(f"- {row}")
+                lines.append("- 请勿把研究候选当作正式持仓或订单。")
+            continue
+        value = payload.get(key)
+        if isinstance(value, str) and value:
+            lines.append(value)
+        else:
+            lines.append("不适用。")
+        lines.append("")
+    lines.append("")
+    lines.append("正向视角【AI 解读】")
+    lines.append(payload.get("bull_case", "暂无。"))
+    return "\n".join(lines)
+
+
 def render_brief_header(brief: dict[str, Any]) -> str:
     model = str(brief.get("model", "deepseek-v4-flash"))
     status = str(brief.get("llm_status", "PASS_DEGRADED"))

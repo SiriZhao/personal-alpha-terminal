@@ -1750,6 +1750,195 @@ def _stress_exam_command() -> int:
     return 0
 
 
+def _pre_execution_command(args: argparse.Namespace) -> int:
+    """Compute the overnight / pre-execution assessment for the latest plan."""
+
+    from datetime import UTC as _UTC, datetime as _datetime
+
+    from personal_alpha_terminal.application.pre_execution import (
+        PreExecutionCheck,
+        build_assessment,
+        check_halts_and_corporate_events,
+        check_market_gap,
+        check_overnight_news,
+        check_stale_market_data,
+    )
+    from personal_alpha_terminal.data.database import get_session_factory
+    from personal_alpha_terminal.intelligence.market_news import NewsIntelligenceService
+    from personal_alpha_terminal.models import Price, SecurityMaster
+    from sqlalchemy import func, select
+
+    config = load_config(args.config)
+    root = config.report_dir / "daily-runs"
+    candidates = sorted(
+        root.glob("*/run_certificate.json"),
+        key=lambda item: item.stat().st_mtime,
+        reverse=True,
+    )
+    previous = None
+    for path in candidates:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if payload.get("decision_recommendations"):
+            previous = payload
+            break
+    if previous is None:
+        console.print("PRE_EXECUTION_DATA_UNAVAILABLE: no previous actionable run.")
+        return 1
+    now = _datetime.now(_UTC)
+    raw_cutoff = previous.get("data_cutoff") or previous.get("finished_at")
+    decision_as_of = _datetime.fromisoformat(str(raw_cutoff))
+    if decision_as_of.tzinfo is None:
+        decision_as_of = decision_as_of.replace(tzinfo=_UTC)
+    recommendations = previous.get("decision_recommendations") or []
+    formal_symbols = frozenset(
+        str(item.get("symbol"))
+        for item in recommendations
+        if isinstance(item, dict) and item.get("symbol")
+    )
+    news_service = NewsIntelligenceService()
+    checks = [
+        check_overnight_news(
+            news_service,
+            decision_as_of=decision_as_of,
+            now=now,
+            material_symbols=formal_symbols or None,
+        )
+    ]
+    with get_session_factory()() as session:
+        spy_rows = session.execute(
+            select(Price.trade_date, Price.close)
+            .join(SecurityMaster, Price.stock_id == SecurityMaster.id)
+            .where(SecurityMaster.symbol == "SPY", Price.price_type == "unadjusted_ohlcv")
+            .order_by(Price.trade_date.desc())
+            .limit(3)
+        ).all()
+        freshness = session.scalar(
+            select(func.max(Price.available_time))
+            .join(SecurityMaster, Price.stock_id == SecurityMaster.id)
+            .where(
+                SecurityMaster.symbol.in_(sorted(formal_symbols)),
+                Price.price_type == "unadjusted_ohlcv",
+            )
+        )
+    decision_close = None
+    latest_close = None
+    if spy_rows:
+        before = [row for row in spy_rows if row[0] <= decision_as_of.date()]
+        if before:
+            decision_close = float(before[0][1])
+            latest_close = (
+                float(spy_rows[0][1]) if spy_rows[0][0] > decision_as_of.date() else decision_close
+            )
+    checks.append(
+        check_market_gap(decision_close=decision_close, latest_close=latest_close)
+    )
+    checks.append(
+        check_stale_market_data(
+            latest_available_at=freshness,
+            decision_as_of=decision_as_of,
+            now=now,
+        )
+    )
+    checks.append(check_halts_and_corporate_events())
+    assessment = build_assessment(decision_as_of=decision_as_of, now=now, checks=tuple(checks))
+    document = assessment.document()
+    artifacts = config.report_dir / "validation-artifacts"
+    artifacts.mkdir(parents=True, exist_ok=True)
+    (artifacts / "round25_pre_execution.json").write_text(
+        json.dumps(document, ensure_ascii=False, indent=2, default=str),
+        encoding="utf-8",
+    )
+    console.print(
+        f"{assessment.status} | review_required={assessment.manual_review_required}"
+    )
+    for check in checks:
+        console.print(f"- [{check.status}] {check.name}: {check.detail}")
+    console.print("NOTE: never auto-cancels; never recomputes alpha; LLM authority NONE.")
+    return 0
+
+
+def _market_state_command(args: argparse.Namespace) -> int:
+    """Print the deterministic MARKET_STATE_SNAPSHOT."""
+
+    from datetime import UTC as _UTC, datetime as _datetime
+
+    from personal_alpha_terminal.application.market_state import (
+        build_market_state_snapshot,
+    )
+    from personal_alpha_terminal.data.database import get_session_factory
+
+    config = load_config(args.config)
+    with get_session_factory()() as session:
+        snapshot = build_market_state_snapshot(
+            session, as_of=_datetime.now(_UTC)
+        )
+    if snapshot is None:
+        console.print("MARKET_STATE_DATA_UNAVAILABLE")
+        return 1
+    document = snapshot.document()
+    artifacts = config.report_dir / "validation-artifacts"
+    artifacts.mkdir(parents=True, exist_ok=True)
+    (artifacts / "round25_market_state.json").write_text(
+        json.dumps(document, ensure_ascii=False, indent=2, default=str),
+        encoding="utf-8",
+    )
+    console.print(f"MARKET_STATE {document['status']} | breadth symbols {document['breadth_symbols']}")
+    console.print(f"breadth: {document['breadth']}")
+    for item in document["basket"]:
+        if not item["available"]:
+            console.print(f"- {item['symbol']} ({item['role']}) UNAVAILABLE")
+            continue
+        returns = {key: value for key, value in item["returns"].items() if value is not None}
+        console.print(f"- {item['symbol']} ({item['role']}): {returns}")
+    return 0
+
+
+def _news_command(args: argparse.Namespace) -> int:
+    """Market news intelligence CLI (status / acquire / show)."""
+
+    from datetime import UTC as _UTC, datetime as _datetime
+
+    from personal_alpha_terminal.intelligence.market_news import (
+        NewsIntelligenceService,
+        NewsLedger,
+    )
+
+    config = load_config(args.config)
+    ledger = NewsLedger()
+    service = NewsIntelligenceService(ledger)
+    now = _datetime.now(_UTC)
+    rows = ledger.load_items()
+    clusters = ledger.load_clusters()
+    if getattr(args, "news_action", "status") == "status":
+        console.print(f"news rows: {len(rows)}")
+        console.print(f"news clusters: {len(clusters)}")
+        console.print(
+            "providers: official-macro / general-market / company-disclosures "
+            "(no API configured -> GENERAL_MARKET_NEWS_UNAVAILABLE; no news is fabricated)"
+        )
+        return 0
+    if getattr(args, "news_action", None) == "acquire":
+        result = service.acquire(
+            decision_as_of=now,
+            providers={
+                "official-macro": __import__(
+                    "personal_alpha_terminal.intelligence.market_news",
+                    fromlist=["OfficialMacroNewsProvider"],
+                ).OfficialMacroNewsProvider(enabled=False),
+            },
+        )
+        console.print(result.status)
+        return 0
+    for row in rows[: (None if getattr(args, "full", False) else 20)]:
+        console.print(
+            f"[{row.get('source_tier')}] {row.get('headline')} "
+            f"@ {row.get('available_at')} ({row.get('evidence_state')})"
+        )
+    if len(rows) > 20 and not getattr(args, "full", False):
+        console.print(f"... {len(rows) - 20} more rows (use --full)")
+    return 0
+
+
 def _ai_brief_command(args: argparse.Namespace) -> int:
     """Render the ROUND24 AI Chinese advisory brief (never modifies weights)."""
 
@@ -2251,6 +2440,18 @@ def build_parser() -> argparse.ArgumentParser:
         section.add_argument("--run-id", default=None)
     subparsers.add_parser("doctor")
     subparsers.add_parser("stress-exam", help="Run deterministic synthetic stress exam")
+    subparsers.add_parser("pre-execution", help="Overnight / pre-execution risk check (advisory only)")
+    subparsers.add_parser("market-state", help="Deterministic MARKET_STATE_SNAPSHOT from verified price bars")
+    news = subparsers.add_parser(
+        "news", help="Market news intelligence (providers, PIT classes, clusters)"
+    )
+    news_actions = news.add_subparsers(dest="news_action", required=True)
+    news_actions.add_parser("status", help="Show news ledger and provider availability")
+    news_acquire = news_actions.add_parser("acquire", help="Acquire news from configured providers")
+    news_acquire.add_argument("--full", action="store_true", help="Show full source metadata")
+    news_show = news_actions.add_parser("show", help="Show persisted news rows and clusters")
+    news_show.add_argument("--full", action="store_true", help="Show full source metadata")
+
     subparsers.add_parser("diagnostics", help="Alias for doctor")
     subparsers.add_parser("settings", help="Show the active terminal configuration path")
     probability_assessment = subparsers.add_parser(
@@ -2719,6 +2920,12 @@ def main(argv: list[str] | None = None) -> int:
             return _research(args.config)
         if command == "research-data":
             return _research_data_command(args)
+        if command == "pre-execution":
+            return _pre_execution_command(args)
+        if command == "market-state":
+            return _market_state_command(args)
+        if command == "news":
+            return _news_command(args)
         if command == "intelligence":
             if getattr(args, "intelligence_action", None) == "brief":
                 return _ai_brief_command(args)

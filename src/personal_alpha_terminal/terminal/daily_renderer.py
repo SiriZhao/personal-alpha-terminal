@@ -44,6 +44,7 @@ def render_daily_quant_result(
             )
         )
         _overview(result, console)
+        _pre_execution_section(result, console)
         _today_actions(result, console)
         _operational_status(result, console)
         _portfolio(result, console)
@@ -178,14 +179,21 @@ def _ai_brief_section(result: DailyQuantResult, console: Console) -> None:
     brief = result.ai_brief
     if not isinstance(brief, dict):
         return
+    payload = brief.get("brief") or {}
+    is_v2 = str(payload.get("schema_version", "")) == "ai-brief-zh-v2"
     grounding_status = str(brief.get("semantic_grounding_status", ""))
     try:
-        from personal_alpha_terminal.ai_advisory.renderer import render_brief_full
+        if is_v2:
+            from personal_alpha_terminal.ai_advisory.renderer import render_brief_v2
 
-        text = render_brief_full(brief)
+            text = render_brief_v2(brief)
+        else:
+            from personal_alpha_terminal.ai_advisory.renderer import render_brief_full
+
+            text = render_brief_full(brief)
     except (ImportError, KeyError, ValueError):
         text = "AI \u4e2d\u6587\u7814\u5224\u4e0d\u53ef\u7528\uff08AI_BRIEF_QUARANTINED\uff09\u3002"
-    if grounding_status == "AI_BRIEF_QUARANTINED_SEMANTIC_MISMATCH":
+    if grounding_status == "AI_BRIEF_QUARANTINED_SEMANTIC_MISMATCH" and is_v2:
         issues = brief.get("semantic_grounding_issues") or []
         issue_text = "; ".join(str(item) for item in issues) or "semantic mismatch"
         text = (
@@ -477,6 +485,51 @@ def _overview(result: DailyQuantResult, console: Console) -> None:
             border_style="cyan",
         )
     )
+
+def _pre_execution_section(result: DailyQuantResult, console: Console) -> None:
+    """ROUND25 PHASE 7: overnight / pre-execution risk banner.
+
+    The assessment is advisory: PRE_EXECUTION_REVIEW_REQUIRED means HUMAN
+    REVIEW REQUIRED -- it never auto-cancels and never recomputes alpha.
+    """
+
+    assessment = result.pre_execution
+    if not isinstance(assessment, dict):
+        return
+    status = str(assessment.get("status", "PRE_EXECUTION_DATA_UNAVAILABLE"))
+    if status == "PRE_EXECUTION_CLEAR":
+        style, label = "green", _t(
+            "\u3010\u9694\u591c / \u76d8\u524d\u98ce\u9669\u68c0\u67e5\u3011 PRE-EXECUTION CLEAR",
+            "PRE-EXECUTION CLEAR",
+        )
+    elif status == "PRE_EXECUTION_REVIEW_REQUIRED":
+        style, label = "red", _t(
+            "\u3010\u9694\u591c / \u76d8\u524d\u98ce\u9669\u68c0\u67e5\u3011 HUMAN REVIEW REQUIRED",
+            "PRE-EXECUTION REVIEW REQUIRED (HUMAN REVIEW)",
+        )
+    else:
+        style, label = "yellow", _t(
+            "\u3010\u9694\u591c / \u76d8\u524d\u98ce\u9669\u68c0\u67e5\u3011 DATA LIMITED",
+            f"PRE-EXECUTION {status}",
+        )
+    lines: list[str] = []
+    checks = assessment.get("checks") or []
+    for check in checks:
+        if not isinstance(check, dict):
+            continue
+        lines.append(
+            f"- [{check.get('status', '?')}] {check.get('name')}: {check.get('detail', '')}"
+        )
+    lines.append(
+        _t(
+            "\u63d0\u793a\uff1a\u8be5\u5c42\u4e0d\u81ea\u52a8\u53d6\u6d88\u8ba2\u5355\u3001"
+            "\u4e0d\u91cd\u7b97\u6628\u65e5 Alpha\u3001LLM \u6ca1\u6709\u53d6\u6d88\u6743\u3002",
+            "NOTE: this layer never auto-cancels, never recomputes yesterday's "
+            "alpha, and the LLM has no cancellation authority.",
+        )
+    )
+    console.print(Panel("\n".join(lines), title=label, border_style=style))
+
 
 def _today_actions(result: DailyQuantResult, console: Console) -> None:
     title = _t("【今日操作清单】", "TODAY ACTION LIST")
