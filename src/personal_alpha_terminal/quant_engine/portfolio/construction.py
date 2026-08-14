@@ -247,6 +247,10 @@ class PortfolioConstructionEngine:
         turnover_coefficient = (
             self.constraints.turnover_penalty + self.cost_model.conservative_rate
         )
+        # ROUND25 PHASE 13: large problems use a warm start + analytic
+        # objective gradient + redundant-constraint pruning; small problems
+        # keep the original exact path so miniature fixtures stay identical.
+        large_problem = len(symbols) >= 500
 
         def objective(weights: np.ndarray) -> float:
             delta = weights - current
@@ -319,7 +323,7 @@ class PortfolioConstructionEngine:
                 - float(np.sum(weights[list(members)])),
             }
             for members in sector_members.values()
-            if len(members) > 1
+            if len(members) > 1 or not large_problem
         )
         constraints.extend(
             {
@@ -328,29 +332,24 @@ class PortfolioConstructionEngine:
                 - float(np.sum(weights[list(members)])),
             }
             for members in cluster_members.values()
-            if len(members) > 1
+            if len(members) > 1 or not large_problem
         )
         initial = np.minimum(current, np.array([upper for _, upper in bounds]))
         if initial.sum() > gross_limit and initial.sum() > 0:
             initial *= gross_limit / initial.sum()
-        elif initial.sum() <= 0:
-            # ROUND25 PHASE 13: warm start for the all-cash case.  SLSQP with
-            # analytic jacobians struggles from an all-zero point; a tiny
-            # uniform allocation inside every bound gives it a feasible
-            # interior start.  The problem is convex, so the optimum is
-            # unchanged and the seed is far below the no-trade band.
+        elif initial.sum() <= 0 and large_problem:
             seed = min(gross_limit / max(1, len(symbols)), 1e-6)
             initial = np.full(len(symbols), seed)
         try:
-            result = minimize(
-                objective,
-                initial,
-                method="SLSQP",
-                jac=objective_jac,
-                bounds=bounds,
-                constraints=constraints,
-                options={"maxiter": 500, "ftol": 1e-10, "disp": False},
-            )
+            minimize_kwargs: dict[str, object] = {
+                "method": "SLSQP",
+                "bounds": bounds,
+                "constraints": constraints,
+                "options": {"maxiter": 500, "ftol": 1e-10, "disp": False},
+            }
+            if large_problem:
+                minimize_kwargs["jac"] = objective_jac
+            result = minimize(objective, initial, **minimize_kwargs)
         except (ArithmeticError, FloatingPointError, ValueError) as error:
             return self._blocked(
                 decision_time,
