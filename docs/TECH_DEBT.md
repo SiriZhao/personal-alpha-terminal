@@ -15,6 +15,72 @@
 
 ## P1
 
+### TECH-ROUND24-001 ? ROUND24 ETF sleeve models are research candidates
+
+- Severity: OPEN (2026-08-14)
+- Area: `instruments/`, `quant_engine/factors/etf_factors.py`,
+  `quant_engine/portfolio/etf_sleeves.py`, `application/etf_sleeve_service.py`
+- Description: ETF core/tactical sleeve models are labeled RESEARCH_CANDIDATE.
+  They have no purged walk-forward / locked-OOS evidence and must not be
+  claimed as certified alpha.  Promotion requires the ROUND24 E2 gate chain
+  (PIT, purged walk-forward, embargo, locked OOS, cost, SPY/QQQ benchmark,
+  stress).
+- Remaining risk: None for the production path (Classical Champion
+  unchanged); the risk is mislabeling these outputs as certified in future
+  rounds.
+
+### TECH-ROUND24-002 ? ETF look-through unavailable
+
+- Severity: OPEN (2026-08-14)
+- Area: `quant_engine/portfolio/etf_sleeves.py` (OverlapReport)
+- Description: ETF-stock overlap risk is computed via correlation clusters
+  only.  Constituent holdings look-through data is not available, and the
+  terminal reports `ETF look-through: UNAVAILABLE` rather than pretending
+  to have constituent exposure.
+- Remaining risk: A broad-market ETF plus concentrated stock sleeve can
+  carry hidden single-name overlap; current mitigation is the correlation
+  warning plus explicit UNAVAILABLE labeling.
+
+### TECH-ROUND24-003 ? Size neutralization degraded (no PIT market-cap source)
+
+- Severity: OPEN (2026-08-14)
+- Area: `quant_engine/input_assembler.py`, `quant_engine/risk/model.py`,
+  `application/size_diagnostics.py`
+- Description: Root-caused in ROUND24: the deterministic security master has
+  no PIT market-cap provider, so size scores are empty and the risk model
+  correctly reports SIZE_EXPOSURE_DEGRADED.  The warning is intentionally
+  preserved (D11).  A PIT market-cap source (and backfilled cap history)
+  would complete the neutralization diagnostics.
+- Remaining risk: Size tilt is unmeasured for the operational path; the
+  fail-closed label prevents pretending otherwise.
+
+### TECH-ROUND24-004 ? Regime v1 / drawdown governor research-only
+
+- Severity: OPEN (2026-08-14)
+- Area: `scenario_simulator/regime_engine_v1.py`,
+  `quant_engine/risk/drawdown_governor.py`
+- Description: Market Regime Engine V1 and the drawdown governor are
+  RESEARCH_ONLY / RISK_OVERLAY_PROMOTION_CANDIDATE.  They never feed the
+  production risk budget; production still shows REGIME_OPTIONAL_UNAVAILABLE.
+  Promotion requires walk-forward/counterfactual evidence.
+- Remaining risk: None for production today; future rounds must not
+  hard-wire regime outputs into risk limits without evidence.
+
+### TECH-ROUND24-005 ? REAUTHORIZATION_REQUIRED after ROUND24
+
+- Severity: OPEN (2026-08-14)
+- Area: `var/operational/strategy_approval.json`,
+  `var/operational/operational_policy.json`
+- Description: ROUND24 changed the config/universe/code fingerprints, so the
+  existing StrategyApproval (ALLOW_PROVISIONAL_FORWARD) and OperationalPolicy
+  are identity-mismatched.  The operator must explicitly re-run
+  `strategy-approval create` and `operational-policy create` after reviewing
+  this round.  Nothing was auto-renewed.
+- Remaining risk: Daily SIGNAL stays FAIL_BLOCKING until re-authorization.
+
+## P1
+
+
 ### TECH-002 — Untracked root-level reports are not governed
 
 - Severity: RESOLVED (2026-08-12)

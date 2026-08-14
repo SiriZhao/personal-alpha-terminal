@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json as _json
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 from time import perf_counter
+from typing import cast
 from uuid import uuid4
 
 from sqlalchemy import func, select
@@ -12,6 +14,14 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from personal_alpha_terminal import __version__
+from personal_alpha_terminal.agents.llm.providers import DeepSeekProvider
+from personal_alpha_terminal.ai_advisory import (
+    PRODUCTION_INFLUENCE,
+    PROMPT_VERSION,
+    AiBriefService,
+    BriefCacheKey,
+    build_quant_facts,
+)
 from personal_alpha_terminal.application.daily_result import (
     BenchmarkSummary,
     DailyQuantResult,
@@ -33,6 +43,9 @@ from personal_alpha_terminal.application.data_certification import (
     DailyDataCertification,
 )
 from personal_alpha_terminal.application.data_service import DataService, SyncRunner
+from personal_alpha_terminal.application.etf_sleeve_service import (
+    EtfSleeveApplicationService,
+)
 from personal_alpha_terminal.application.intelligence_service import (
     IntelligenceApplicationService,
 )
@@ -61,6 +74,7 @@ from personal_alpha_terminal.intelligence.llm_runtime import (
 from personal_alpha_terminal.intelligence.storage import IntelligenceRepository
 from personal_alpha_terminal.models import Portfolio
 from personal_alpha_terminal.models.intelligence import (
+    IntelligenceEvent,
     IntelligenceExtractionCache,
     IntelligenceFeature,
     IntelligenceRawInformation,
@@ -76,6 +90,8 @@ _STAGE_ORDER = (
     "DATA",
     "PIT",
     "LLM_INTELLIGENCE",
+    "ETF_SLEEVE",
+    "AI_BRIEF",
     "FEATURE",
     "FACTOR",
     "SIGNAL",
@@ -334,6 +350,27 @@ class DailyQuantOrchestrator:
             run_id=run_id,
             eligible_symbols=tuple(item.symbol for item in workflow_result.factors),
         )
+        stage_started = perf_counter()
+        etf_universe, etf_targets, etf_composition = self._add_etf_sleeve_stage(
+            stages,
+            as_of=effective_decision_time,
+            duration_started=stage_started,
+            analysis_date=analysis_date,
+            workflow_result=workflow_result,
+        )
+        stage_started = perf_counter()
+        ai_brief = self._add_ai_brief_stage(
+            stages,
+            as_of=effective_decision_time,
+            duration_started=stage_started,
+            run_id=run_id,
+            workflow_result=workflow_result,
+            etf_evidence={
+                "counts": etf_universe,
+                "targets": list(etf_targets),
+                "composition": etf_composition,
+            },
+        )
         blockers.extend(workflow_result.blockers)
         warnings.extend(workflow_result.warnings)
         for name in _STAGE_ORDER:
@@ -358,8 +395,370 @@ class DailyQuantOrchestrator:
             workflow=workflow_result,
             blockers=tuple(dict.fromkeys(blockers)),
             warnings=tuple(dict.fromkeys(warnings)),
+            etf_universe=etf_universe,
+            etf_targets=etf_targets,
+            etf_composition=etf_composition,
+            ai_brief=ai_brief,
         )
         return self._persist_result(result)
+
+    def _add_etf_sleeve_stage(
+        self,
+        stages: dict[str, StageResult],
+        *,
+        as_of: datetime,
+        duration_started: float,
+        analysis_date: date,
+        workflow_result: TodayResult,
+    ) -> tuple[dict[str, object], tuple[dict[str, object], ...], dict[str, object] | None]:
+        """ROUND24 ETF multi-sleeve stage; additive, never blocks equity path."""
+
+        enabled = bool(
+            getattr(self._effective_config, "etf_sleeves_enabled", False)
+            or self._settings.etf_sleeves_enabled
+        )
+        if not enabled:
+            stages["ETF_SLEEVE"] = StageResult(
+                "ETF_SLEEVE",
+                StageStatus.OPTIONAL_UNAVAILABLE,
+                perf_counter() - duration_started,
+                "ETF sleeves disabled by configuration",
+                {
+                    "enabled": False,
+                    "output_row_count": 0,
+                    "model_status": "RESEARCH_CANDIDATE",
+                },
+            )
+            return {}, (), None
+        try:
+            with self._factory.begin() as session:
+                service = EtfSleeveApplicationService(
+                    session, self._effective_config
+                )
+                if workflow_result.target is not None:
+                    equity_weights = {
+                        symbol: weight
+                        for symbol, weight in (
+                            workflow_result.target.target_weights.items()
+                        )
+                        if weight > 0
+                    }
+                else:
+                    equity_weights = {
+                        item.symbol: item.target_weight
+                        for item in workflow_result.recommendations
+                        if item.target_weight > 0
+                    }
+                current_weights = {
+                    item.symbol: item.current_weight
+                    for item in workflow_result.recommendations
+                }
+                portfolio_value = (
+                    workflow_result.portfolio_value
+                    if workflow_result.portfolio_value is not None
+                    and workflow_result.portfolio_value > 0
+                    else 100_000.0
+                )
+                outcome = service.run(
+                    universe_date=analysis_date,
+                    decision_time=as_of,
+                    equity_weights=equity_weights,
+                    current_weights=current_weights,
+                    portfolio_value=portfolio_value,
+                )
+            evidence = outcome.evidence()
+            counts = cast(dict[str, object], evidence.get("counts", {}))
+            core_docs = cast(
+                tuple[dict[str, object], ...], evidence.get("core_targets", ())
+            )
+            tactical_docs = cast(
+                tuple[dict[str, object], ...], evidence.get("tactical_targets", ())
+            )
+            targets = tuple(
+                {**item, "instrument_type": "ETF"}
+                for item in (*core_docs, *tactical_docs)
+            )
+            tradable = counts.get("tradable_eligible")
+            status = (
+                StageStatus.PASS if tradable else StageStatus.PASS_DEGRADED
+            )
+            stages["ETF_SLEEVE"] = StageResult(
+                "ETF_SLEEVE",
+                status,
+                perf_counter() - duration_started,
+                (
+                    f"ETF sleeves evaluated: core {counts.get('core_eligible', 0)}, "
+                    f"tactical {counts.get('tactical_eligible', 0)}, "
+                    f"blocked complex {counts.get('blocked_complex', 0)}"
+                ),
+                {
+                    "enabled": True,
+                    "model_status": "RESEARCH_CANDIDATE",
+                    "look_through": "UNAVAILABLE",
+                    "counts": counts,
+                    "warnings": list(
+                        cast(tuple[str, ...], evidence.get("warnings", ()))
+                    ),
+                    "output_row_count": len(targets),
+                },
+            )
+            return (
+                dict(counts),
+                targets,
+                (
+                    cast(dict[str, object], evidence.get("composition"))
+                    if isinstance(evidence.get("composition"), dict)
+                    else None
+                ),
+            )
+        except (OSError, RuntimeError, SQLAlchemyError, ValueError) as error:
+            stages["ETF_SLEEVE"] = StageResult(
+                "ETF_SLEEVE",
+                StageStatus.OPTIONAL_UNAVAILABLE,
+                perf_counter() - duration_started,
+                (
+                    f"ETF sleeve evaluation unavailable ({type(error).__name__}); "
+                    "equity path unchanged"
+                ),
+                {
+                    "enabled": True,
+                    "model_status": "RESEARCH_CANDIDATE",
+                    "output_row_count": 0,
+                    "error": str(error),
+                },
+            )
+            return {}, (), None
+
+    def _add_ai_brief_stage(
+        self,
+        stages: dict[str, StageResult],
+        *,
+        as_of: datetime,
+        duration_started: float,
+        run_id: str,
+        workflow_result: TodayResult,
+        etf_evidence: dict[str, object],
+    ) -> dict[str, object] | None:
+        """ROUND24 AI Chinese advisory brief stage (B1-B9)."""
+
+        enabled = bool(
+            getattr(self._effective_config, "ai_brief_enabled", False)
+            or self._settings.ai_brief_enabled
+        )
+        if not enabled:
+            stages["AI_BRIEF"] = StageResult(
+                "AI_BRIEF",
+                StageStatus.OPTIONAL_UNAVAILABLE,
+                perf_counter() - duration_started,
+                "AI Chinese brief disabled by configuration",
+                {
+                    "enabled": False,
+                    "production_influence": "NONE",
+                    "output_row_count": 0,
+                },
+            )
+            return None
+        provider, model, configured, connectivity = self._configured_llm_identity()
+        try:
+            with self._factory.begin() as session:
+                events = tuple(
+                    {
+                        "event_id": str(item.event_id),
+                        "symbol": item.symbol,
+                        "event_type": item.event_type,
+                        "effective_at": (
+                            item.effective_at.isoformat()
+                            if item.effective_at is not None
+                            else None
+                        ),
+                        "observed_at": (
+                            item.observed_at.isoformat()
+                            if item.observed_at is not None
+                            else None
+                        ),
+                        "payload": item.payload,
+                    }
+                    for item in session.scalars(
+                        select(IntelligenceEvent)
+                        .where(
+                            IntelligenceEvent.observed_at <= as_of,
+                            IntelligenceEvent.data_cutoff <= as_of,
+                            IntelligenceEvent.symbol.is_not(None),
+                        )
+                        .order_by(IntelligenceEvent.effective_at.desc())
+                        .limit(50)
+                    )
+                )
+            certificate_view = {
+                "run_id": run_id,
+                "analysis_date": workflow_result.decision_time.date().isoformat(),
+                "trade_date": workflow_result.decision_time.date().isoformat(),
+                "market_session": workflow_result.market_session,
+                "warnings": list(workflow_result.warnings),
+                "llm_mode": "SHADOW",
+                "probability_mode": "PROBABILITY_FALLBACK_CLASSICAL",
+                "probability_influence": 0.0,
+                "operational_authorization": (
+                    workflow_result.operational_policy_decision
+                ),
+                "signal_authorization_class": workflow_result.signal_authorization_class,
+                "research_certification_state": workflow_result.research_certification_state,
+                "auto_execution": False,
+                "broker_api": "DISABLED",
+                "manual_execution_only": True,
+                "data": [
+                    {
+                        "dataset": "CERTIFIED_US_UNIVERSE",
+                        "member_count": workflow_result.universe_count,
+                    }
+                ],
+                "decision_recommendations": [
+                    {
+                        "symbol": item.symbol,
+                        "instrument_type": "COMMON_STOCK",
+                        "sleeve": "EQUITY_ALPHA",
+                        "action": item.action,
+                        "current_weight": item.current_weight,
+                        "target_weight": item.target_weight,
+                        "expected_alpha": item.expected_alpha,
+                        "risk_contribution": item.risk_contribution,
+                        "estimated_cost": item.expected_cost,
+                        "estimated_value": item.estimated_value,
+                        "data_quality": item.data_quality,
+                        "reason": item.reason,
+                    }
+                    for item in workflow_result.recommendations
+                ],
+                "factor_count": len(workflow_result.factors),
+                "candidate_count": len(workflow_result.recommendations),
+                "benchmarks": [
+                    {
+                        "symbol": item.symbol,
+                        "period_return": item.period_return,
+                        "annualized_volatility": item.annualized_volatility,
+                        "observations": item.observation_count,
+                    }
+                    for item in workflow_result.benchmark_evidences
+                ],
+                "portfolio": {
+                    "total_value": workflow_result.portfolio_value,
+                    "cash_balance": workflow_result.cash_balance,
+                },
+                "risk": (
+                    {
+                        "current_drawdown": (
+                            workflow_result.risk_state.current_drawdown
+                        ),
+                        "rolling_volatility": (
+                            workflow_result.risk_state.rolling_volatility
+                        ),
+                        "portfolio_beta": workflow_result.risk_state.portfolio_beta,
+                        "concentration_hhi": (
+                            workflow_result.risk_state.concentration_hhi
+                        ),
+                    }
+                    if workflow_result.risk_state is not None
+                    else {}
+                ),
+                "etf_evidence": etf_evidence,
+            }
+            facts, data_gaps = build_quant_facts(
+                run_certificate=certificate_view,
+                pit_events=events,
+                etf_evidence=etf_evidence,
+                decision_as_of=as_of,
+            )
+            facts["data_gaps"] = data_gaps
+            provider_factory = None
+            if configured:
+                provider_factory = lambda: DeepSeekProvider(  # noqa: E731
+                    api_key=cast(str, self._settings.deepseek_api_key),
+                    model=model,
+                    timeout_seconds=self._settings.llm_timeout_seconds,
+                    max_retries=self._settings.llm_max_retries,
+                    base_url=self._settings.deepseek_base_url,
+                )
+            data_hash = str(
+                stages.get(
+                    "DATA", StageResult("DATA", StageStatus.NOT_RUN, 0.0, "", {})
+                ).metadata.get("data_hash", "UNAVAILABLE")
+            )
+            identity_hashes = workflow_result.identity_hashes or {}
+            import hashlib as _hashlib
+            import json as _json
+
+            intelligence_hash = _hashlib.sha256(
+                _json.dumps(
+                    stages.get(
+                        "LLM_INTELLIGENCE",
+                        StageResult("LLM_INTELLIGENCE", StageStatus.NOT_RUN, 0.0, "", {}),
+                    ).metadata,
+                    sort_keys=True,
+                    default=str,
+                ).encode("utf-8")
+            ).hexdigest()[:16]
+            service = AiBriefService()
+            brief_result = service.generate(
+                cache_key=BriefCacheKey(
+                    run_id=run_id,
+                    data_hash=data_hash,
+                    factor_hash=str(identity_hashes.get("strategy_parameter_hash", "UNAVAILABLE")),
+                    portfolio_hash=str(
+                        identity_hashes.get("portfolio_constraint_hash", "UNAVAILABLE")
+                    ),
+                    risk_hash=str(identity_hashes.get("risk_model_hash", "UNAVAILABLE")),
+                    intelligence_hash=intelligence_hash,
+                    model=model,
+                    prompt_version=PROMPT_VERSION,
+                ),
+                facts=facts,
+                model=model,
+                provider_factory=provider_factory,
+            )
+            stages["AI_BRIEF"] = StageResult(
+                "AI_BRIEF",
+                (
+                    StageStatus.PASS
+                    if brief_result.llm_status == "PASS"
+                    else StageStatus.PASS_DEGRADED
+                ),
+                perf_counter() - duration_started,
+                f"AI Chinese brief {brief_result.source}",
+                {
+                    "enabled": True,
+                    "provider": provider,
+                    "model": model,
+                    "connectivity": connectivity,
+                    "llm_status": brief_result.llm_status,
+                    "source": brief_result.source,
+                    "cache_hit": brief_result.cache_hit,
+                    "production_influence": PRODUCTION_INFLUENCE,
+                    "trade_authority": "NONE",
+                    "target_weight_authority": "NONE",
+                    "buy_sell_authority": "NONE",
+                    "output_row_count": (
+                        len(brief_result.brief.get("action_explanations", []))
+                    ),
+                },
+            )
+            return brief_result.document()
+        except (OSError, RuntimeError, SQLAlchemyError, ValueError) as error:
+            stages["AI_BRIEF"] = StageResult(
+                "AI_BRIEF",
+                StageStatus.PASS_DEGRADED,
+                perf_counter() - duration_started,
+                f"AI Chinese brief degraded ({type(error).__name__}); Classical pipeline unchanged",
+                {
+                    "enabled": True,
+                    "provider": provider,
+                    "model": model,
+                    "llm_status": "PASS_DEGRADED",
+                    "production_influence": PRODUCTION_INFLUENCE,
+                    "error": str(error),
+                    "output_row_count": 0,
+                },
+            )
+            return None
 
     def _add_llm_intelligence_stage(
         self,
@@ -778,6 +1177,10 @@ class DailyQuantOrchestrator:
         workflow: TodayResult,
         blockers: tuple[str, ...],
         warnings: tuple[str, ...],
+        etf_universe: dict[str, object] | None = None,
+        etf_targets: tuple[dict[str, object], ...] = (),
+        etf_composition: dict[str, object] | None = None,
+        ai_brief: dict[str, object] | None = None,
     ) -> DailyQuantResult:
         actionable = workflow.status in {"GENERATED", "NO_DECISION"} and not blockers
         data_cutoff = self._resolved_data_cutoff(stages, workflow.data_cutoff)
@@ -1211,6 +1614,10 @@ class DailyQuantOrchestrator:
             workflow.operational_policy_reason,
             workflow.operationally_allowed,
             workflow.operational_degraded_reason,
+            etf_universe=etf_universe or {},
+            etf_targets=etf_targets,
+            etf_composition=etf_composition,
+            ai_brief=ai_brief,
         )
 
     @staticmethod
@@ -1448,6 +1855,40 @@ class DailyQuantOrchestrator:
             certificate = updated.persist_evidence(self._snapshot_root)
             updated = replace(updated, certificate_path=str(certificate.resolve()))
             updated.persist(self._snapshot_root)
+            if updated.ai_brief is not None:
+                run_directory = self._snapshot_root / updated.run_id
+                brief_path = run_directory / "ai_brief.json"
+                temporary = brief_path.with_suffix(".json.tmp")
+                temporary.write_text(
+                    _json.dumps(
+                        updated.ai_brief,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        default=str,
+                    ),
+                    encoding="utf-8",
+                )
+                temporary.replace(brief_path)
+            if updated.etf_targets:
+                run_directory = self._snapshot_root / updated.run_id
+                etf_path = run_directory / "etf_sleeve_evidence.json"
+                temporary = etf_path.with_suffix(".json.tmp")
+                temporary.write_text(
+                    _json.dumps(
+                        {
+                            "run_id": updated.run_id,
+                            "analysis_date": updated.analysis_date.isoformat(),
+                            "universe": updated.etf_universe,
+                            "targets": list(updated.etf_targets),
+                            "composition": updated.etf_composition,
+                        },
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        default=str,
+                    ),
+                    encoding="utf-8",
+                )
+                temporary.replace(etf_path)
             return updated
         except OSError as error:
             blocker = f"decision snapshot persistence failed: {error}"

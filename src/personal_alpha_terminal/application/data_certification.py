@@ -71,6 +71,13 @@ class DailyDataCertification:
     historical_cache_reused_count: int = 0
     incremental_refresh_requested_count: int = 0
     full_backfill_requested_count: int = 0
+    backfill_deferred_count: int = 0
+    structurally_insufficient_count: int = 0
+    new_listing_waiting_count: int = 0
+    permanent_no_history_count: int = 0
+    retry_after_count: int = 0
+    provider_requested_count: int = 0
+    provider_success_rate: float | None = None
     no_cache_count: int = 0
     provider_returned_count: int = 0
     provider_response_coverage: float | None = None
@@ -422,6 +429,10 @@ class DailyDataCertifier:
                 "CACHED_UP_TO_DATE",
                 "INCREMENTAL_ONE_SESSION",
                 "INCREMENTAL_GAP",
+                "STRUCTURALLY_INSUFFICIENT_HISTORY",
+                "NEW_LISTING_WAITING_FOR_HISTORY",
+                "PERMANENT_PROVIDER_NO_HISTORY",
+                "RETRY_AFTER",
             }
         )
         incremental_requested = sum(
@@ -429,7 +440,32 @@ class DailyDataCertifier:
             for item in refresh_classes
             if item in {"INCREMENTAL_ONE_SESSION", "INCREMENTAL_GAP"}
         )
-        full_backfill_requested = sum(1 for item in refresh_classes if item == "FULL_BACKFILL")
+        full_backfill_requested = sum(
+            1 for item in refresh_classes if item in {"FULL_BACKFILL", "FULL_BACKFILL_REQUIRED"}
+        )
+        # Provider accounting must reconcile: a request is any symbol whose
+        # outcome was success/failed/no_data (per-symbol provider work),
+        # while cached and deferred symbols never touch the provider.
+        provider_failed = sum(
+            1
+            for item in refresh_statuses.values()
+            if isinstance(item, dict)
+            and item.get("status") in {"failed", "no_data"}
+        )
+        provider_requested = provider_returned + provider_failed
+        structurally_insufficient = sum(
+            1 for item in refresh_classes if item == "STRUCTURALLY_INSUFFICIENT_HISTORY"
+        )
+        new_listing_waiting = sum(
+            1 for item in refresh_classes if item == "NEW_LISTING_WAITING_FOR_HISTORY"
+        )
+        permanent_no_history = sum(
+            1 for item in refresh_classes if item == "PERMANENT_PROVIDER_NO_HISTORY"
+        )
+        retry_after = sum(1 for item in refresh_classes if item == "RETRY_AFTER")
+        backfill_deferred = (
+            structurally_insufficient + new_listing_waiting + permanent_no_history + retry_after
+        )
         return DailyDataCertification(
             status=status,
             snapshot_id=manifest.snapshot_id if manifest else None,
@@ -521,6 +557,15 @@ class DailyDataCertifier:
             historical_cache_reused_count=historical_cache_reused,
             incremental_refresh_requested_count=incremental_requested,
             full_backfill_requested_count=full_backfill_requested,
+            backfill_deferred_count=backfill_deferred,
+            structurally_insufficient_count=structurally_insufficient,
+            new_listing_waiting_count=new_listing_waiting,
+            permanent_no_history_count=permanent_no_history,
+            retry_after_count=retry_after,
+            provider_requested_count=provider_requested,
+            provider_success_rate=(
+                provider_returned / provider_requested if provider_requested else None
+            ),
             no_cache_count=full_backfill_requested,
             provider_returned_count=provider_returned,
             provider_response_coverage=(

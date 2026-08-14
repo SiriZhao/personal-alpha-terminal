@@ -12,6 +12,7 @@ from personal_alpha_terminal.quant_engine.costs import TransactionCostConfig
 from personal_alpha_terminal.quant_engine.portfolio.construction import (
     PortfolioConstraints,
 )
+from personal_alpha_terminal.quant_engine.portfolio.etf_sleeves import EtfSleeveConfig
 from personal_alpha_terminal.quant_engine.risk.model import RiskModelConfig
 from personal_alpha_terminal.quant_engine.risk.stress import StressRiskConfig
 from personal_alpha_terminal.quant_engine.strategies.us_adaptive_alpha_core import (
@@ -141,6 +142,11 @@ class EffectiveRuntimeConfig:
     risk_model: RiskModelConfig = field(default_factory=RiskModelConfig)
     stress_risk: StressRiskConfig = field(default_factory=StressRiskConfig)
     transaction_cost: TransactionCostConfig = field(default_factory=TransactionCostConfig)
+    # ROUND24: ETF sleeves and the AI Chinese brief are additive research-first
+    # features.  They never alter the Classical Champion equity path.
+    etf_sleeves_enabled: bool = True
+    ai_brief_enabled: bool = True
+    etf_sleeve_config: EtfSleeveConfig = field(default_factory=EtfSleeveConfig)
     settings: Settings = field(default_factory=Settings, repr=False, compare=False)
     source_path: Path | None = field(default=None, repr=False, compare=False)
 
@@ -213,6 +219,9 @@ class EffectiveRuntimeConfig:
             "market": self.market,
             "symbols": self.symbols,
             "required_symbols": self.required_symbols,
+            "etf_sleeves_enabled": self.etf_sleeves_enabled,
+            "ai_brief_enabled": self.ai_brief_enabled,
+            "etf_sleeve_config": self.etf_sleeve_config.fingerprint(),
             "benchmark": self.benchmark,
             "nasdaq_benchmark": self.nasdaq_benchmark,
             "vix_symbol": self.vix_symbol,
@@ -370,6 +379,16 @@ def resolve_effective_runtime_config(
         default_execution_session=scalar.get("default_execution_session", "REGULAR").upper(),
         allow_calendar_fallback=_boolean(scalar, "allow_calendar_fallback", False),
         portfolio_id=_portfolio_key(scalar.get("portfolio_id")),
+        etf_sleeves_enabled=_boolean(
+            scalar, "etf_sleeves_enabled", settings.etf_sleeves_enabled
+        ),
+        ai_brief_enabled=_boolean(scalar, "ai_brief_enabled", settings.ai_brief_enabled),
+        etf_sleeve_config=EtfSleeveConfig(
+            core_budget=_number(scalar, "etf_core_budget", 0.25),
+            tactical_budget=_number(scalar, "etf_tactical_budget", 0.10),
+            max_single_etf_weight=_number(scalar, "etf_max_single_weight", 0.10),
+            minimum_cash_weight=_number(scalar, "etf_minimum_cash_weight", 0.05),
+        ),
         broad_universe=BroadUniverseConfig(
             minimum_price=_number(scalar, "universe_minimum_price", 5.0),
             minimum_trading_sessions=_integer(scalar, "universe_minimum_trading_sessions", 252),

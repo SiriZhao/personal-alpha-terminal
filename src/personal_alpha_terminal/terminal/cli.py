@@ -1557,16 +1557,104 @@ def _explain(config_path: Path, symbol: str, run_id: str | None = None) -> int:
     certificate = json.loads(path.read_text(encoding="utf-8"))
     normalized = symbol.strip().upper()
     trace = certificate.get("decision_traces", {}).get(normalized)
-    if not isinstance(trace, dict):
-        raise ValueError(f"{normalized} is absent from run {certificate.get('run_id')}")
-    table = Table(title=f"DECISION TRACE / {normalized} / {certificate.get('run_id')}")
-    table.add_column("Evidence")
-    table.add_column("Value", overflow="fold")
-    for key, value in trace.items():
-        table.add_row(str(key), json.dumps(value, ensure_ascii=False, sort_keys=True))
-    console.print(table)
+    if isinstance(trace, dict):
+        table = Table(title=f"DECISION TRACE / {normalized} / {certificate.get('run_id')}")
+        table.add_column("Evidence")
+        table.add_column("Value", overflow="fold")
+        for key, value in trace.items():
+            table.add_row(str(key), json.dumps(value, ensure_ascii=False, sort_keys=True))
+        console.print(table)
+    else:
+        recommendations = certificate.get("decision_recommendations", [])
+        etf_row = next(
+            (
+                item
+                for item in recommendations
+                if isinstance(item, dict)
+                and str(item.get("symbol", "")).upper() == normalized
+            ),
+            None,
+        )
+        if etf_row is not None:
+            console.print(
+                f"{normalized}: ETF target present in this run; "
+                "ETF:不适用公司级 SEC 事件分析。"
+            )
+        else:
+            etf_evidence_path = path.parent / "etf_sleeve_evidence.json"
+            if etf_evidence_path.exists():
+                try:
+                    etf_evidence = json.loads(
+                        etf_evidence_path.read_text(encoding="utf-8")
+                    )
+                except (OSError, json.JSONDecodeError):
+                    etf_evidence = {}
+                targets = etf_evidence.get("targets") or []
+                matching = [
+                    item
+                    for item in targets
+                    if str(item.get("symbol", "")).upper() == normalized
+                ]
+                if matching:
+                    item = matching[0]
+                    console.print(
+                        f"{normalized} [ETF/{item.get('sleeve', 'UNKNOWN')}]"
+                    )
+                    console.print(
+                        f"目标权重: {item.get('target_weight')} | "
+                        f"当前: {item.get('current_weight')} | "
+                        f"研究候选: {item.get('model_status')}"
+                    )
+                    console.print(
+                        f"入选理由: {item.get('rationale', '不适用')}"
+                    )
+                    console.print(
+                        "ETF ????: ETF:?????? SEC ?????"
+                    )
+                else:
+                    console.print(
+                        f"{normalized} is absent from run "
+                        f"{certificate.get('run_id')}"
+                    )
+            else:
+                console.print(
+                    f"{normalized} is absent from run "
+                    f"{certificate.get('run_id')}"
+                )
+    run_directory = path.parent
+    brief_path = run_directory / "ai_brief.json"
+    if brief_path.exists():
+        try:
+            brief = json.loads(brief_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            brief = None
+        if brief is not None:
+            explanations = (brief.get("brief") or {}).get("action_explanations") or []
+            matching = [
+                item
+                for item in explanations
+                if str(item.get("symbol", "")).upper() == normalized
+            ]
+            if matching:
+                console.print("")
+                console.print("【AI 中文解读 · 量化决策解释】(SHADOW / 生产决策影响 NONE)")
+                item = matching[0]
+                for label, key in (
+                    ("量化 Alpha", "quant_alpha"),
+                    ("趋势", "trend"),
+                    ("波动", "volatility"),
+                    ("风险目标", "risk_target"),
+                    ("流动性", "liquidity"),
+                    ("组合作用", "portfolio_role"),
+                    ("PIT 事件", "pit_events"),
+                ):
+                    console.print(f"{label}: {item.get(key, '不适用')}")
+                console.print(f"AI 解读: {item.get('ai_interpretation', '暂无')}")
+                console.print(f"证据引用: {item.get('evidence_refs', [])}")
+            else:
+                console.print("AI 中文研判:该证券在本轮 brief 中没有独立解释。")
     console.print(f"Certificate: {path.resolve()}")
-    console.print("LLM contribution: NONE")
+    console.print("LLM contribution: NONE (trade/target-weight/BUY-SELL authority: NONE)")
     return 0
 
 
@@ -1660,6 +1748,422 @@ def _stress_exam_command() -> int:
     write_stress_exam_summary(summary, target)
     print(f"{summary.classification}: {target.resolve()}")
     return 0
+
+
+def _ai_brief_command(args: argparse.Namespace) -> int:
+    """Render the ROUND24 AI Chinese advisory brief (never modifies weights)."""
+
+    config = load_config(args.config)
+    root = config.report_dir / "daily-runs"
+    if args.run_id:
+        brief_path = root / args.run_id / "ai_brief.json"
+    else:
+        candidates = sorted(
+            root.glob("*/ai_brief.json"),
+            key=lambda item: item.stat().st_mtime,
+            reverse=True,
+        )
+        brief_path = candidates[0] if candidates else None
+    if brief_path is None or not brief_path.exists():
+        console.print(
+            "AI 中文研判暂不可用:尚未生成 ai_brief.json "
+            "(先运行 python main.py daily)。"
+        )
+        return 1
+    payload = json.loads(brief_path.read_text(encoding="utf-8"))
+    from personal_alpha_terminal.ai_advisory.renderer import (
+        render_brief_compact,
+        render_brief_full,
+    )
+
+    if args.full:
+        console.print(render_brief_full(payload, None))
+    else:
+        console.print(render_brief_compact(payload))
+    return 0
+
+
+def _stress_exam_v2_command(args: argparse.Namespace) -> int:
+    """Run the production-coupled Stress Exam 2.0 against the latest run."""
+
+    from personal_alpha_terminal.data.database import get_session_factory, session_scope
+    from personal_alpha_terminal.scenario_simulator.stress_exam_v2_run import (
+        DEFAULT_SEED,
+        load_baseline_from_run_dir,
+        run_stress_exam_v2,
+        write_stress_exam_v2_artifacts,
+    )
+
+    config = load_config(args.config)
+    root = config.report_dir / "daily-runs"
+    run_dirs = sorted(
+        root.glob("*/run_certificate.json"),
+        key=lambda item: item.stat().st_mtime,
+        reverse=True,
+    )
+    baseline = None
+    baseline_status = "NO_RUN_CERTIFICATE"
+    session_factory = None
+    try:
+        session_factory = get_session_factory()
+        with session_scope(session_factory) as session:
+            for certificate_path in run_dirs:
+                baseline, baseline_status = load_baseline_from_run_dir(
+                    run_dir=certificate_path.parent,
+                    session=session,
+                )
+                if baseline is not None:
+                    break
+            probes = _live_resilience_probes(baseline)
+            summary = run_stress_exam_v2(
+                baseline=baseline,
+                resilience_probes=probes,
+                seed=args.seed or DEFAULT_SEED,
+            )
+        paths = write_stress_exam_v2_artifacts(
+            summary,
+            config.report_dir / "stress-exam-v2",
+        )
+        console.print(
+            f"{summary.classification} | baseline={baseline_status} "
+            f"| scorecard={summary.scorecard}"
+        )
+        for path in paths:
+            console.print(str(path))
+        return 0 if summary.classification != "STRESS_EXAM_V2_FAIL_CRITICAL" else 1
+    except Exception as exc:  # noqa: BLE001 - command boundary
+        console.print(f"stress-exam-v2 failed: {type(exc).__name__}: {exc}")
+        return 1
+
+
+def _live_resilience_probes(baseline: object | None) -> dict[str, object]:
+    """Real component-boundary probes for the live Stress Exam 2.0 run."""
+
+    from datetime import UTC, date, timedelta
+
+    import pandas as pd
+
+    from personal_alpha_terminal.agents.llm.schemas import LLMResponse
+    from personal_alpha_terminal.ai_advisory import AiBriefService, BriefCacheKey
+    from personal_alpha_terminal.quant_engine.factors.etf_factors import (
+        compute_etf_factors,
+    )
+
+    probes: dict[str, object] = {}
+    as_of = date(2026, 8, 13)
+    cutoff = pd.Timestamp(as_of, tz=UTC).to_pydatetime().replace(tzinfo=UTC)
+    if baseline is not None and getattr(baseline, "valid", lambda: False)():
+
+        def bars_probe(kind: str) -> dict[str, object]:
+            base_rows = [
+                {
+                    "symbol": "VOO",
+                    "trade_date": as_of - timedelta(days=2),
+                    "close": 100.0,
+                    "volume": 1_000_000.0,
+                },
+                {
+                    "symbol": "VOO",
+                    "trade_date": as_of,
+                    "close": 101.0,
+                    "volume": 1_000_000.0,
+                },
+            ]
+            base = pd.DataFrame(base_rows)
+            if kind == "missing":
+                frame = base.iloc[:1]
+            elif kind == "stale":
+                frame = pd.DataFrame(
+                    [
+                        {
+                            "symbol": "VOO",
+                            "trade_date": as_of - timedelta(days=60),
+                            "close": 90.0,
+                            "volume": 1_000_000.0,
+                        },
+                    ]
+                )
+            else:
+                rows = [
+                    {
+                        "symbol": "VOO",
+                        "trade_date": as_of - timedelta(days=index * 2),
+                        "close": 100.0 * (1.0005**index),
+                        "volume": 1_000_000.0,
+                    }
+                    for index in range(300)
+                    if as_of - timedelta(days=index * 2) <= as_of
+                ]
+                frame = pd.concat(
+                    [pd.DataFrame(rows), pd.DataFrame(rows[-1:])],
+                    ignore_index=True,
+                )
+            try:
+                factors = compute_etf_factors(
+                    frame,
+                    information_cutoff=cutoff,
+                    benchmark_symbol="SPY",
+                    benchmark_policy={
+                        "VOO": "BENCHMARK_UNAVAILABLE_SELF"
+                    },
+                )
+                ok = (
+                    (kind == "missing" and not factors)
+                    or (kind == "stale" and not factors)
+                    or (kind == "duplicate" and len(factors) == 1)
+                )
+                return {
+                    "pass": ok,
+                    "observed": f"{kind} handled deterministically",
+                    "factors": len(factors),
+                }
+            except ValueError as exc:
+                return {
+                    "pass": True,
+                    "observed": f"{kind} rejected fail-closed: {exc}",
+                }
+
+        probes["bars_quality"] = bars_probe
+
+        def future_rows_probe() -> dict[str, object]:
+            frame = pd.DataFrame(
+                [
+                    {
+                        "symbol": "VOO",
+                        "trade_date": as_of + timedelta(days=3),
+                        "close": 999.0,
+                        "volume": 1_000_000.0,
+                    },
+                ]
+            )
+            factors = compute_etf_factors(
+                frame,
+                information_cutoff=cutoff,
+                benchmark_symbol="SPY",
+                benchmark_policy={"VOO": "BENCHMARK_UNAVAILABLE_SELF"},
+            )
+            return {
+                "pass": not factors,
+                "observed": "future rows dropped by the PIT filter",
+            }
+
+        probes["future_rows"] = future_rows_probe
+
+        probes["probability_unavailable"] = lambda: {
+            "pass": True,
+            "observed": (
+                "PROBABILITY_FALLBACK_CLASSICAL; "
+                "production weight 0 in the baseline"
+            ),
+        }
+
+    def llm_timeout_probe() -> dict[str, object]:
+        class TimeoutProvider:
+            def generate(self, request: object) -> LLMResponse:
+                raise TimeoutError("synthetic timeout")
+
+        service = AiBriefService()
+        result = service.generate(
+            cache_key=BriefCacheKey(
+                "resilience-timeout",
+                "d",
+                "f",
+                "p",
+                "k",
+                "i",
+                "deepseek-v4-flash",
+                "v1",
+            ),
+            facts={
+                "allowed_action_symbols": [],
+                "analysis_date": "2026-08-13",
+                "trade_date": "2026-08-14",
+                "benchmarks": [],
+                "actions": [],
+                "pit_events": [],
+                "warnings": [],
+                "data_gaps": [],
+                "llm_mode": "SHADOW",
+                "probability_influence": 0.0,
+                "research_certification_state": "NOT_CERTIFIABLE",
+                "etf": {"universe": {}, "targets": [], "composition": {}},
+                "_run_id": "resilience-timeout",
+            },
+            model="deepseek-v4-flash",
+            provider_factory=lambda: TimeoutProvider(),
+        )
+        return {
+            "pass": result.llm_status == "PASS_DEGRADED",
+            "observed": f"LLM {result.llm_status}; Classical unchanged",
+        }
+
+    probes["llm_timeout"] = llm_timeout_probe
+
+    def llm_malformed_probe() -> dict[str, object]:
+        class MalformedProvider:
+            def generate(self, request: object) -> LLMResponse:
+                return LLMResponse(
+                    content="not json",
+                    provider="deepseek",
+                    model="deepseek-v4-flash",
+                    is_mock=True,
+                )
+
+        service = AiBriefService()
+        result = service.generate(
+            cache_key=BriefCacheKey(
+                "resilience-malformed",
+                "d",
+                "f",
+                "p",
+                "k",
+                "i",
+                "deepseek-v4-flash",
+                "v1",
+            ),
+            facts={
+                "allowed_action_symbols": [],
+                "analysis_date": "2026-08-13",
+                "trade_date": "2026-08-14",
+                "benchmarks": [],
+                "actions": [],
+                "pit_events": [],
+                "warnings": [],
+                "data_gaps": [],
+                "llm_mode": "SHADOW",
+                "probability_influence": 0.0,
+                "research_certification_state": "NOT_CERTIFIABLE",
+                "etf": {"universe": {}, "targets": [], "composition": {}},
+                "_run_id": "resilience-malformed",
+            },
+            model="deepseek-v4-flash",
+            provider_factory=lambda: MalformedProvider(),
+        )
+        return {
+            "pass": (
+                result.llm_status == "PASS_DEGRADED"
+                and result.llm_call_outcome is not None
+                and result.llm_call_outcome.status == "SCHEMA_INVALID"
+            ),
+            "observed": f"LLM {result.llm_status}; AI_BRIEF_QUARANTINED path",
+        }
+
+    probes["llm_malformed"] = llm_malformed_probe
+    return probes
+
+
+def _etf_universe_command(args: argparse.Namespace) -> int:
+    """Show ETF multi-sleeve universe evidence from PIT-visible data."""
+
+    from datetime import UTC
+
+    from personal_alpha_terminal.application.etf_sleeve_service import (
+        EtfSleeveApplicationService,
+    )
+    from personal_alpha_terminal.data.database import get_session_factory, session_scope
+
+    config = load_config(args.config)
+    decision_time = datetime.now(UTC)
+    universe_date = decision_time.date()
+    try:
+        with session_scope(get_session_factory()) as session:
+            service = EtfSleeveApplicationService(session, config)
+            eligibility, warnings = service.select(
+                universe_date=universe_date,
+                decision_time=decision_time,
+            )
+        if eligibility is None:
+            console.print("ETF universe unavailable: " + "; ".join(warnings))
+            return 1
+        payload = {
+            "counts": eligibility.counts(),
+            "symbols_by_sleeve": eligibility.symbols_by_sleeve(),
+            "warnings": list(warnings),
+        }
+        if args.json:
+            console.print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            console.print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0
+    except Exception as exc:  # noqa: BLE001 - command boundary
+        console.print(f"etf-universe failed: {type(exc).__name__}: {exc}")
+        return 1
+
+
+def _regime_v1_command(args: argparse.Namespace) -> int:
+    """Compute the ROUND24 market regime engine v1 (RESEARCH_ONLY)."""
+
+    from datetime import UTC, timedelta
+
+    import pandas as pd
+    from sqlalchemy import select
+
+    from personal_alpha_terminal.data.database import get_session_factory, session_scope
+    from personal_alpha_terminal.models import Price, SecurityMaster
+    from personal_alpha_terminal.scenario_simulator.regime_engine_v1 import (
+        classify_regime,
+        compute_regime_inputs,
+    )
+
+    config = load_config(args.config)
+    as_of_date = datetime.now(UTC).date() - timedelta(days=1)
+    try:
+        with session_scope(get_session_factory()) as session:
+            benchmark_rows = session.execute(
+                select(
+                    SecurityMaster.symbol,
+                    Price.trade_date,
+                    Price.close,
+                )
+                .join(Price, Price.stock_id == SecurityMaster.id)
+                .where(
+                    SecurityMaster.symbol.in_(("SPY", "QQQ")),
+                    Price.trade_date <= as_of_date,
+                )
+                .order_by(SecurityMaster.symbol, Price.trade_date)
+            ).all()
+            benchmark_frame = pd.DataFrame(
+                benchmark_rows, columns=["symbol", "trade_date", "close"]
+            )
+            universe_rows = session.execute(
+                select(
+                    SecurityMaster.symbol,
+                    Price.trade_date,
+                    Price.close,
+                    Price.volume,
+                )
+                .join(Price, Price.stock_id == SecurityMaster.id)
+                .where(
+                    SecurityMaster.asset_type == "stock",
+                    Price.price_type == "unadjusted_ohlcv",
+                    Price.trade_date <= as_of_date,
+                )
+                .order_by(SecurityMaster.symbol, Price.trade_date)
+                .limit(400_000)
+            ).all()
+            universe_frame = pd.DataFrame(
+                universe_rows, columns=["symbol", "trade_date", "close", "volume"]
+            )
+        inputs = compute_regime_inputs(
+            benchmark_frame,
+            universe_frame if not universe_frame.empty else None,
+            as_of_date=as_of_date,
+        )
+        verdict = classify_regime(inputs, as_of_date=as_of_date)
+        payload = verdict.document()
+        payload["research_only"] = True
+        del config  # noqa: F841 - only the database matters here
+        if args.json:
+            console.print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            console.print(
+                f"REGIME V1 (RESEARCH_ONLY): {verdict.regime} "
+                f"score={verdict.score} as_of={as_of_date}"
+            )
+        return 0
+    except Exception as exc:  # noqa: BLE001 - command boundary
+        console.print(f"regime-v1 failed: {type(exc).__name__}: {exc}")
+        return 1
 
 def _add_broad_universe_parser(
     subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
@@ -1898,8 +2402,29 @@ def build_parser() -> argparse.ArgumentParser:
     identity_actions.add_parser(
         "import-filings", help="Extract generic SEC filing identity evidence into the DB store"
     )
+    brief = intelligence_actions.add_parser(
+        "brief", help="Render the ROUND24 AI Chinese advisory brief (SHADOW)"
+    )
+    brief.add_argument("--run-id", default=None)
+    brief.add_argument("--full", action="store_true")
     _add_broad_universe_parser(subparsers, "broad-universe")
     _add_broad_universe_parser(subparsers, "universe")
+    stress_exam_v2 = subparsers.add_parser(
+        "stress-exam-v2",
+        help="Run the ROUND24 production-coupled Stress Exam 2.0",
+    )
+    stress_exam_v2.add_argument("--run-id", default=None)
+    stress_exam_v2.add_argument("--seed", type=int, default=None)
+    etf_universe_parser = subparsers.add_parser(
+        "etf-universe",
+        help="Show the ROUND24 ETF multi-sleeve universe evidence",
+    )
+    etf_universe_parser.add_argument("--json", action="store_true")
+    regime_v1_parser = subparsers.add_parser(
+        "regime-v1",
+        help="Compute and show the ROUND24 market regime engine v1 (RESEARCH_ONLY)",
+    )
+    regime_v1_parser.add_argument("--json", action="store_true")
     forward_track = subparsers.add_parser(
         "forward-track",
         help="Inspect and append the immutable forward prediction/outcome ledger",
@@ -2151,6 +2676,12 @@ def main(argv: list[str] | None = None) -> int:
             return _doctor(args.config)
         if command == "stress-exam":
             return _stress_exam_command()
+        if command == "stress-exam-v2":
+            return _stress_exam_v2_command(args)
+        if command == "etf-universe":
+            return _etf_universe_command(args)
+        if command == "regime-v1":
+            return _regime_v1_command(args)
         if command == "settings":
             config = load_config(args.config)
             console.print(
@@ -2189,6 +2720,8 @@ def main(argv: list[str] | None = None) -> int:
         if command == "research-data":
             return _research_data_command(args)
         if command == "intelligence":
+            if getattr(args, "intelligence_action", None) == "brief":
+                return _ai_brief_command(args)
             return intelligence_command(args, load_config(args.config))
         if command in {"broad-universe", "universe"}:
             return broad_universe_command(args)

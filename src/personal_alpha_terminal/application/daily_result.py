@@ -259,6 +259,12 @@ class DailyQuantResult:
     operational_policy_reason: str = "OPERATIONAL_POLICY_NOT_CONFIGURED"
     operationally_allowed: bool = False
     operational_degraded_reason: str | None = None
+    # ROUND24: ETF multi-sleeve evidence and the AI Chinese advisory brief.
+    # Both are additive; the Classical Champion path is unchanged.
+    etf_universe: dict[str, object] = field(default_factory=dict)
+    etf_targets: tuple[dict[str, object], ...] = field(default_factory=tuple)
+    etf_composition: dict[str, object] | None = None
+    ai_brief: dict[str, object] | None = None
 
     @property
     def duration_seconds(self) -> float:
@@ -664,6 +670,21 @@ def _stage_output_payload(result: DailyQuantResult, stage_name: str) -> object:
         return [asdict(item) for item in result.final_decisions]
     if stage_name == "EXECUTION":
         return asdict(result.execution_plan)
+    if stage_name == "ETF_SLEEVE":
+        return {
+            "universe": result.etf_universe,
+            "targets": list(result.etf_targets),
+            "composition": result.etf_composition,
+        }
+    if stage_name == "AI_BRIEF":
+        return {
+            "brief_source": (
+                result.ai_brief.get("source") if result.ai_brief else None
+            ),
+            "llm_status": (
+                result.ai_brief.get("llm_status") if result.ai_brief else None
+            ),
+        }
     if stage_name == "PERSISTENCE":
         return {
             "classification": result.run_classification,

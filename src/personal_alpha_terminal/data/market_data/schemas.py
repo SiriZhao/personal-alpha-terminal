@@ -117,7 +117,7 @@ class DataQualityResult:
         return any(issue.severity == QualitySeverity.ERROR for issue in self.issues)
 
 
-type UpdateStatus = Literal["success", "cached", "no_data", "failed"]
+type UpdateStatus = Literal["success", "cached", "no_data", "failed", "deferred"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,6 +157,10 @@ class DailyUpdateReport:
     @property
     def cached_count(self) -> int:
         return sum(result.status == "cached" for result in self.results)
+
+    @property
+    def deferred_count(self) -> int:
+        return sum(result.status == "deferred" for result in self.results)
 
     @property
     def failure_count(self) -> int:

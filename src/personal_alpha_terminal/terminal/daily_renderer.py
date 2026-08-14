@@ -4,7 +4,7 @@ import unicodedata
 from contextvars import ContextVar
 from io import StringIO
 
-from rich.console import Console
+from rich.console import Console, Group
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
@@ -43,9 +43,12 @@ def render_daily_quant_result(
         _benchmark(result, console)
         _market(result, console)
         _ai_intelligence(result, console)
+        _ai_brief_section(result, console)
         _market_data(result, console)
         _data_certification(result, console)
         _pit_universe(result, console)
+        _etf_universe(result, console)
+        _provider_accounting(result, console)
         _data_health(result, console)
         _factors(result, console)
         _probability(result, console)
@@ -157,6 +160,104 @@ def _ai_intelligence(result: DailyQuantResult, console: Console) -> None:
             table,
             title=_t("\u3010AI \u60c5\u62a5\u3011", "AI INTELLIGENCE"),
             border_style="yellow",
+        )
+    )
+
+
+def _ai_brief_section(result: DailyQuantResult, console: Console) -> None:
+    """ROUND24 PHASE H1: the Chinese advisory brief is directly visible."""
+
+    brief = result.ai_brief
+    if not isinstance(brief, dict):
+        return
+    try:
+        from personal_alpha_terminal.ai_advisory.renderer import render_brief_compact
+
+        text = render_brief_compact(brief)
+    except (ImportError, KeyError, ValueError):
+        text = "AI 中文研判不可用(AI_BRIEF_QUARANTINED)。"
+    console.print(
+        Panel(
+            text,
+            title=_t("\u3010AI \u4e2d\u6587\u7814\u5224\u3011", "AI CHINESE BRIEF"),
+            border_style="magenta",
+        )
+    )
+
+
+def _etf_universe(result: DailyQuantResult, console: Console) -> None:
+    """ROUND24 PHASE H: ETF universe, candidates and holdings."""
+
+    universe = result.etf_universe
+    targets = tuple(result.etf_targets)
+    if not isinstance(universe, dict) or not universe and not targets:
+        return
+    counts = universe if universe else {}
+    rows = (
+        (
+            _t("ETF \u603b\u76ee\u5f55", "Raw listed ETFs"),
+            str(counts.get("raw_listed_etfs", "--")),
+        ),
+        (
+            _t("ETF \u6838\u5fc3\u5019\u9009", "ETF core eligible"),
+            str(counts.get("core_eligible", "--")),
+        ),
+        (
+            _t("ETF \u6218\u672f\u5019\u9009", "ETF tactical eligible"),
+            str(counts.get("tactical_eligible", "--")),
+        ),
+        (_t("ETF \u53ef\u4ea4\u6613", "ETF tradable"), str(counts.get("tradable_eligible", "--"))),
+        (  # noqa: E501
+            _t("\u590d\u6742\u4ea7\u54c1\u62e6\u622a", "Complex products blocked"),
+            str(counts.get("blocked_complex", "--")),
+        ),
+        (
+            _t("\u672a\u5206\u7c7b ETF(\u7814\u7a76)", "Unclassified ETF (research)"),
+            str(counts.get("unclassified_etfs", "--")),
+        ),
+    )
+    table = Table(show_header=False, box=None, pad_edge=False)
+    table.add_column(style="bold cyan")
+    table.add_column()
+    for label, value in rows:
+        table.add_row(label, value)
+    if targets:
+        target_table = Table()
+        target_table.add_column("Ticker")
+        target_table.add_column("Type")
+        target_table.add_column("Sleeve")
+        target_table.add_column(_t("目标权重", "Target"))
+        target_table.add_column(_t("当前", "Current"))
+        target_table.add_column(_t("状态", "Eligible"))
+        for item in targets:
+            target_table.add_row(
+                str(item.get("symbol", "--")),
+                str(item.get("instrument_type", "ETF")),
+                str(item.get("sleeve", "--")),
+                _percent(_as_float(item.get("target_weight"))),
+                _percent(_as_float(item.get("current_weight"))),
+                _t("通过", "YES") if item.get("eligible") else _t("未通过", "NO"),
+            )
+        console.print(
+            Panel(
+                Group(
+                    table,
+                    Text(  # noqa: E501
+                        _t("ETF ??(????)", "ETF targets (research candidate)"),
+                        style="bold",
+                    ),
+                    target_table,
+                ),
+                title=_t("\u3010ETF \u591a Sleeve \u5b87\u5b99\u3011", "ETF MULTI-SLEEVE UNIVERSE"),
+                border_style="blue",
+            )
+        )
+        return
+    console.print(
+        Panel(
+            table,
+            title=_t("\u3010ETF \u591a Sleeve \u5b87\u5b99\u3011", "ETF MULTI-SLEEVE UNIVERSE"),
+            border_style="blue",
         )
     )
 
@@ -336,6 +437,8 @@ def _today_actions(result: DailyQuantResult, console: Console) -> None:
     columns = (
         (
             "代码",
+            "类型",
+            "Sleeve",
             "操作",
             "当前权重",
             "目标权重",
@@ -349,6 +452,8 @@ def _today_actions(result: DailyQuantResult, console: Console) -> None:
         if _is_zh()
         else (
             "Ticker",
+            "Type",
+            "Sleeve",
             "Action",
             "Current",
             "Target",
@@ -365,6 +470,8 @@ def _today_actions(result: DailyQuantResult, console: Console) -> None:
     for item in result.final_decisions:
         table.add_row(
             item.symbol,
+            "STOCK",
+            "EQUITY_ALPHA",
             _action(item.action),
             _percent(item.current_weight),
             _percent(item.target_weight),
@@ -374,6 +481,29 @@ def _today_actions(result: DailyQuantResult, console: Console) -> None:
             _signed_percent(item.expected_alpha),
             _t("通过", "PASS"),
             item.earliest_execution_time.isoformat(),
+        )
+    for etf_item in result.etf_targets:
+        symbol = str(etf_item.get("symbol", ""))
+        if not symbol or not etf_item.get("eligible"):
+            continue
+        target = _as_float(etf_item.get("target_weight")) or 0.0
+        current = _as_float(etf_item.get("current_weight")) or 0.0
+        if target <= 0:
+            continue
+        action = "BUY" if target > current else ("SELL" if target < current else "HOLD")
+        table.add_row(
+            symbol,
+            "ETF",
+            str(etf_item.get("sleeve", "ETF")),
+            _action(action),
+            _percent(current),
+            _percent(target),
+            _signed_percent(target - current),
+            _money(None),
+            "--",
+            _signed_percent(_as_float(etf_item.get("expected_value"))),
+            "--",
+            "--",
         )
     console.print(table)
 
@@ -701,6 +831,67 @@ def _data_certification(result: DailyQuantResult, console: Console) -> None:
                 str(item.get("reason", "unavailable")),
             )
         console.print(table)
+
+
+def _provider_accounting(result: DailyQuantResult, console: Console) -> None:
+    """ROUND24 G1: honest provider accounting without misleading percentages."""
+
+    data_stage = next((item for item in result.stages if item.name == "DATA"), None)
+    metadata = data_stage.metadata if data_stage is not None else {}
+    requested = metadata.get("requested_security_count", 0)
+    reused = metadata.get("historical_cache_reused_count", 0)
+    provider_requested = metadata.get("provider_requested_count", 0)
+    provider_returned = metadata.get("provider_returned_count", 0)
+    success_rate = metadata.get("provider_success_rate")
+    latest_coverage = metadata.get("latest_price_coverage")
+    deferred = metadata.get("backfill_deferred_count", 0)
+    rows = (
+        ("Broad universe", str(requested or "--")),
+        ("Historical cache reused", str(reused or "--")),
+        (
+            "Refresh required",
+            str(
+                int(str(metadata.get("incremental_refresh_requested_count", 0)))
+                + int(str(metadata.get("full_backfill_requested_count", 0)))
+            ),
+        ),
+        ("Backfill deferred (new listing / no history)", str(deferred or "--")),
+        ("Provider requested", str(provider_requested)),
+        ("Provider returned", str(provider_returned)),
+        (
+            "Provider success rate",
+            _percent(_as_float(success_rate)) if success_rate is not None else "--",
+        ),
+        (
+            "Latest price coverage",
+            _percent(_as_float(latest_coverage)) if latest_coverage is not None else "--",
+        ),
+        (
+            "New listing waiting for history",
+            str(metadata.get("new_listing_waiting_count", 0)),
+        ),
+        (
+            "Structurally insufficient history",
+            str(metadata.get("structurally_insufficient_count", 0)),
+        ),
+        (
+            "Permanent provider no history",
+            str(metadata.get("permanent_no_history_count", 0)),
+        ),
+        ("Retry after", str(metadata.get("retry_after_count", 0))),
+    )
+    table = Table(show_header=False, box=None, pad_edge=False)
+    table.add_column(style="bold cyan")
+    table.add_column(justify="right")
+    for label, value in rows:
+        table.add_row(label, str(value))
+    console.print(
+        Panel(
+            table,
+            title=_t("【Provider 会计】", "PROVIDER ACCOUNTING"),
+            border_style="dim",
+        )
+    )
 
 
 def _pit_universe(result: DailyQuantResult, console: Console) -> None:

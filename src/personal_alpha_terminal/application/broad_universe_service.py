@@ -24,6 +24,7 @@ from personal_alpha_terminal.data.us_market.broad_universe import (
     read_directory_snapshot,
     write_directory_snapshot,
 )
+from personal_alpha_terminal.instruments.catalog import default_catalog
 from personal_alpha_terminal.models import (
     ExchangeSession,
     PITTotalReturnVersion,
@@ -152,12 +153,16 @@ class BroadUSUniverseService:
             stock_by_key[key] for key in sorted(eligible_keys) if key in stock_by_key
         )
         requested_references = set(reference_symbols)
+        complex_blocked = default_catalog().complex_product_symbols()
         references = tuple(
             item
             for item in securities
             if (
-                item.asset_type == "etf"
-                or (item.asset_type == "index" and item.symbol in requested_references)
+                (item.asset_type == "etf" and item.symbol not in complex_blocked)
+                or (
+                    item.asset_type == "index"
+                    and item.symbol in requested_references
+                )
             )
         )
         if not alpha_securities:

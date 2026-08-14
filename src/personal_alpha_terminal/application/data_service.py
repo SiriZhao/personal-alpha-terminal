@@ -206,6 +206,7 @@ class DataService:
         if self._uses_default_sync_runner:
             self._refresh_broad_current_directory()
         self._register_minimum_universe()
+        self._register_catalog_etfs()
         self._create_universe_snapshot(end_date)
         calendar_start = min(
             start_date - timedelta(days=5),
@@ -317,6 +318,50 @@ class DataService:
                     timezone="America/New_York",
                     source="console_minimum_universe",
                     provider="application_config",
+                    available_time=now,
+                    ingested_time=now,
+                )
+            )
+        self._session.flush()
+
+    def _register_catalog_etfs(self) -> None:
+        """Register ROUND24 catalog ETFs so the refresh engine fetches bars.
+
+        Deterministic and idempotent: the curated catalog is the only source.
+        Complex (leveraged/inverse/volatility) products are registered too so
+        the policy can block them with evidence, but they never become
+        tradable.
+        """
+
+        from personal_alpha_terminal.instruments.catalog import default_catalog
+
+        now = datetime.now(UTC)
+        existing = {
+            item.symbol: item
+            for item in self._session.scalars(
+                select(Stock).where(
+                    Stock.market == "US",
+                    Stock.asset_type == "etf",
+                )
+            )
+        }
+        catalog = default_catalog()
+        for entry in catalog.entries:
+            symbol = str(entry.get("symbol", ""))
+            if not symbol or symbol in existing:
+                continue
+            self._session.add(
+                Stock(
+                    canonical_code=f"US:{symbol}:ETF",
+                    symbol=symbol,
+                    name=str(entry.get("name", symbol)),
+                    market="US",
+                    exchange="XNAS",
+                    asset_type="etf",
+                    currency="USD",
+                    timezone="America/New_York",
+                    source="round24_etf_catalog",
+                    provider="etf_catalog_v1",
                     available_time=now,
                     ingested_time=now,
                 )

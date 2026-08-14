@@ -30,6 +30,7 @@ exam_workspace/
 *.egg-info/
 var/
 data/cache/
+data/broad-universe/
 data/raw/
 data/processed/
 data/research/imports/

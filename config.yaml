@@ -35,6 +35,15 @@ universe_require_pit_total_return: false
 universe_minimum_operational_universe: 50
 universe_coverage_collapse_ratio: 0.5
 universe_candidate_min_alpha: 0.0
+# ROUND24: ETF multi-sleeve universe (C4-C10).  These are risk-control
+# diversification caps, not return tuning.  ETF sleeve models remain
+# RESEARCH_CANDIDATE and never modify the Classical Champion equity path.
+etf_sleeves_enabled: true
+ai_brief_enabled: true
+etf_core_budget: 0.25
+etf_tactical_budget: 0.10
+etf_max_single_weight: 0.10
+etf_minimum_cash_weight: 0.05
 # ROUND 6: live-portfolio rebalance / no-trade thresholds.  These are
 # part of the portfolio constraint hash and therefore of the strategy
 # identity: changing them invalidates existing operational approvals.

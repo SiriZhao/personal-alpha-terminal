@@ -171,7 +171,7 @@ def test_new_listing_uses_full_backfill_window(tmp_path: Path) -> None:
     )
     assert batch.calls == 1
     assert batch.request_start == date(2026, 8, 13) - timedelta(days=550)
-    assert report.results[0].refresh_class == "FULL_BACKFILL"
+    assert report.results[0].refresh_class == "FULL_BACKFILL_REQUIRED"
     engine.dispose()
 
 

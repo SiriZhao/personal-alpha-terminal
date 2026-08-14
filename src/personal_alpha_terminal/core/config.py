@@ -89,6 +89,11 @@ class Settings(BaseSettings):
     llm_relation_graph: bool = False
     llm_embeddings: bool = False
     llm_research_agent: bool = False
+    # ROUND24: ETF multi-sleeve universe and the AI Chinese advisory brief.
+    # Both are additive research-first features; enabling them never changes
+    # the Classical Champion equity path.
+    etf_sleeves_enabled: bool = True
+    ai_brief_enabled: bool = True
     intelligence_max_requests_per_run: int = Field(default=100, ge=1, le=10_000)
     intelligence_max_tokens_per_run: int = Field(default=100_000, ge=100, le=10_000_000)
     intelligence_max_cost_per_run: float = Field(default=10.0, ge=0, le=100_000)

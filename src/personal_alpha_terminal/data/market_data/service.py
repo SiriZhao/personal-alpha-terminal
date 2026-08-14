@@ -1,3 +1,4 @@
+import json
 import logging
 import random
 import time
@@ -5,6 +6,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import date, timedelta
 from functools import partial
+from pathlib import Path
 from time import perf_counter
 from typing import Any
 
@@ -52,6 +54,98 @@ logger = logging.getLogger(__name__)
 class _ProviderQualityResult:
     provider: MarketDataProvider
     quality: DataQualityResult
+
+
+# ROUND24 PHASE G: backfill state machine.  Symbols with structurally
+# insufficient history (e.g. new listings) must not be re-requested every
+# day.  State is persisted beside the provider cache and is deterministic.
+BACKFILL_STATE_FILE = "backfill_state.json"
+FULL_BACKFILL_REQUIRED = "FULL_BACKFILL_REQUIRED"
+STRUCTURALLY_INSUFFICIENT_HISTORY = "STRUCTURALLY_INSUFFICIENT_HISTORY"
+NEW_LISTING_WAITING_FOR_HISTORY = "NEW_LISTING_WAITING_FOR_HISTORY"
+PERMANENT_PROVIDER_NO_HISTORY = "PERMANENT_PROVIDER_NO_HISTORY"
+RETRY_AFTER = "RETRY_AFTER"
+QUARANTINED = "QUARANTINED"
+NEW_LISTING_CALENDAR_DAYS = 380
+PERMANENT_NO_HISTORY_ATTEMPTS = 3
+RETRY_AFTER_DAYS = 3
+
+
+def _load_backfill_state(path: Path) -> dict[str, dict[str, object]]:
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    return {
+        str(key): value
+        for key, value in payload.items()
+        if isinstance(value, dict)
+    }
+
+
+def _save_backfill_state(path: Path, state: dict[str, dict[str, object]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(state, sort_keys=True, indent=2, default=str),
+        encoding="utf-8",
+    )
+
+
+def classify_backfill_decision(
+    symbol: str,
+    *,
+    earliest: date | None,
+    latest: date | None,
+    required_history_start: date,
+    end_date: date,
+    listing_date: date | None,
+    state: dict[str, dict[str, object]],
+) -> tuple[str, date | None]:
+    """Classify one symbol's refresh need with the ROUND24 state machine."""
+
+    entry = state.get(symbol, {})
+    current_state = str(entry.get("state", ""))
+    retry_after_raw = entry.get("retry_after")
+    retry_after: date | None = None
+    if isinstance(retry_after_raw, str):
+        try:
+            retry_after = date.fromisoformat(retry_after_raw[:10])
+        except ValueError:
+            retry_after = None
+    eligible_after_raw = entry.get("history_eligible_after")
+    eligible_after: date | None = None
+    if isinstance(eligible_after_raw, str):
+        try:
+            eligible_after = date.fromisoformat(eligible_after_raw[:10])
+        except ValueError:
+            eligible_after = None
+    if current_state == PERMANENT_PROVIDER_NO_HISTORY:
+        return PERMANENT_PROVIDER_NO_HISTORY, None
+    if current_state == RETRY_AFTER and retry_after is not None and end_date < retry_after:
+        return RETRY_AFTER, retry_after
+    if listing_date is not None:
+        listing_eligible_after = listing_date + timedelta(days=NEW_LISTING_CALENDAR_DAYS)
+        if end_date < listing_eligible_after and (
+            earliest is None or earliest > required_history_start
+        ):
+            return NEW_LISTING_WAITING_FOR_HISTORY, listing_eligible_after
+    if current_state in {
+        STRUCTURALLY_INSUFFICIENT_HISTORY,
+        NEW_LISTING_WAITING_FOR_HISTORY,
+    }:
+        if eligible_after is not None and end_date < eligible_after:
+            return current_state, eligible_after
+    if earliest is None or latest is None or earliest > required_history_start:
+        return FULL_BACKFILL_REQUIRED, None
+    if latest >= end_date:
+        return "CACHED_UP_TO_DATE", None
+    gap_days = (end_date - latest).days
+    refresh_class = "INCREMENTAL_ONE_SESSION" if gap_days <= 5 else "INCREMENTAL_GAP"
+    return refresh_class, None
 
 
 class MarketDataEngine:
@@ -239,7 +333,15 @@ class MarketDataEngine:
         required_history_start = end_date - timedelta(
             days=self._settings.console_initial_history_days
         )
+        backfill_state_path = (
+            self._settings.market_data_provider_cache_dir.parent
+            / "broad-universe"
+            / BACKFILL_STATE_FILE
+        )
+        backfill_state = _load_backfill_state(backfill_state_path)
+        state_changed = False
         decisions: dict[str, tuple[str, date, date]] = {}
+        deferred_until: dict[str, tuple[str, date | None]] = {}
         for symbol in target:
             stock = stock_by_symbol.get(symbol)
             if stock is None:
@@ -247,18 +349,64 @@ class MarketDataEngine:
             earliest, latest = self._repository.price_date_bounds(
                 stock.id, batch_provider.source
             )
-            if earliest is None or latest is None or earliest > required_history_start:
-                decisions[symbol] = ("FULL_BACKFILL", required_history_start, end_date)
-            elif latest >= end_date:
+            listing_date = getattr(stock, "list_date", None)
+            refresh_class, eligible_after = classify_backfill_decision(
+                symbol,
+                earliest=earliest,
+                latest=latest,
+                required_history_start=required_history_start,
+                end_date=end_date,
+                listing_date=listing_date,
+                state=backfill_state,
+            )
+            if refresh_class in {
+                STRUCTURALLY_INSUFFICIENT_HISTORY,
+                NEW_LISTING_WAITING_FOR_HISTORY,
+                PERMANENT_PROVIDER_NO_HISTORY,
+                RETRY_AFTER,
+            }:
+                deferred_until[symbol] = (refresh_class, eligible_after)
+                decisions[symbol] = (refresh_class, required_history_start, end_date)
+                entry = backfill_state.get(symbol, {})
+                if eligible_after is not None:
+                    new_entry = {
+                        **entry,
+                        "state": refresh_class,
+                        "history_eligible_after": eligible_after.isoformat(),
+                    }
+                    if new_entry != entry:
+                        backfill_state[symbol] = new_entry
+                        state_changed = True
+                continue
+            if refresh_class == "CACHED_UP_TO_DATE":
                 decisions[symbol] = ("CACHED_UP_TO_DATE", required_history_start, end_date)
             else:
-                gap_days = (end_date - latest).days
-                refresh_class = (
-                    "INCREMENTAL_ONE_SESSION" if gap_days <= 5 else "INCREMENTAL_GAP"
+                decisions[symbol] = (
+                    refresh_class,
+                    (latest + timedelta(days=1)) if latest is not None else required_history_start,
+                    end_date,
                 )
-                decisions[symbol] = (refresh_class, latest + timedelta(days=1), end_date)
+                if refresh_class == FULL_BACKFILL_REQUIRED:
+                    backfill_state.pop(symbol, None)
+                    state_changed = True
 
         results: list[InstrumentUpdateResult] = []
+        for symbol, (refresh_class, _eligible_after) in sorted(
+            deferred_until.items()
+        ):
+            results.append(
+                InstrumentUpdateResult(
+                    symbol=symbol,
+                    market="US",
+                    source=batch_provider.source,
+                    provider=batch_provider.provider_id,
+                    status="deferred",
+                    start_date=required_history_start,
+                    end_date=end_date,
+                    error=refresh_class,
+                    refresh_class=refresh_class,
+                )
+            )
         for symbol in sorted(target):
             refresh_class, request_start, request_end = decisions[symbol]
             if refresh_class == "CACHED_UP_TO_DATE":
@@ -278,7 +426,13 @@ class MarketDataEngine:
         pending_by_window: dict[tuple[date, date], list[str]] = {}
         for symbol in sorted(target):
             refresh_class, request_start, request_end = decisions[symbol]
-            if refresh_class != "CACHED_UP_TO_DATE":
+            if refresh_class not in {
+                "CACHED_UP_TO_DATE",
+                STRUCTURALLY_INSUFFICIENT_HISTORY,
+                NEW_LISTING_WAITING_FOR_HISTORY,
+                PERMANENT_PROVIDER_NO_HISTORY,
+                RETRY_AFTER,
+            }:
                 pending_by_window.setdefault((request_start, request_end), []).append(symbol)
         if progress is not None:
             cached_count = sum(
@@ -327,6 +481,18 @@ class MarketDataEngine:
                         symbol=chunk[0] if chunk else "BATCH",
                     )
                     for symbol in chunk:
+                        entry = backfill_state.get(symbol, {})
+                        if decisions[symbol][0] in {FULL_BACKFILL_REQUIRED, "FULL_BACKFILL"}:
+                            classification = structured.classification.value
+                            if "RATE" in classification or "THROTTLE" in classification:
+                                backfill_state[symbol] = {
+                                    **entry,
+                                    "state": RETRY_AFTER,
+                                    "retry_after": (
+                                        end_date + timedelta(days=RETRY_AFTER_DAYS)
+                                    ).isoformat(),
+                                }
+                                state_changed = True
                         results.append(
                             InstrumentUpdateResult(
                                 symbol=symbol,
@@ -363,6 +529,17 @@ class MarketDataEngine:
                     stock = stock_by_symbol.get(symbol)
                     if stock is None or symbol not in received:
                         failure_in_batch += 1
+                        entry = backfill_state.get(symbol, {})
+                        attempts = int(str(entry.get("attempts", 0) or 0)) + 1
+                        if attempts >= PERMANENT_NO_HISTORY_ATTEMPTS:
+                            backfill_state[symbol] = {
+                                **entry,
+                                "state": PERMANENT_PROVIDER_NO_HISTORY,
+                                "attempts": attempts,
+                            }
+                        else:
+                            backfill_state[symbol] = {**entry, "attempts": attempts}
+                        state_changed = True
                         results.append(
                             InstrumentUpdateResult(
                                 symbol=symbol,
@@ -386,6 +563,17 @@ class MarketDataEngine:
                     ]
                     if not batch_bars:
                         failure_in_batch += 1
+                        entry = backfill_state.get(symbol, {})
+                        attempts = int(str(entry.get("attempts", 0) or 0)) + 1
+                        if attempts >= PERMANENT_NO_HISTORY_ATTEMPTS:
+                            backfill_state[symbol] = {
+                                **entry,
+                                "state": PERMANENT_PROVIDER_NO_HISTORY,
+                                "attempts": attempts,
+                            }
+                        else:
+                            backfill_state[symbol] = {**entry, "attempts": attempts}
+                        state_changed = True
                         results.append(
                             InstrumentUpdateResult(
                                 symbol=symbol,
@@ -408,6 +596,9 @@ class MarketDataEngine:
                             bars=batch_bars,
                         )
                     success_in_batch += 1
+                    if symbol in backfill_state:
+                        del backfill_state[symbol]
+                        state_changed = True
                     results.append(
                         InstrumentUpdateResult(
                             symbol=symbol,
@@ -435,6 +626,8 @@ class MarketDataEngine:
                         "failure": failure_in_batch,
                     }
                 )
+        if state_changed:
+            _save_backfill_state(backfill_state_path, backfill_state)
         return DailyUpdateReport(
             started_on=date.today(),
             results=tuple(results),
