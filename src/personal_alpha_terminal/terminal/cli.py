@@ -1939,6 +1939,196 @@ def _news_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _execution_costs_command(args: argparse.Namespace) -> int:
+    """ROUND25 PHASE 15: realized execution cost evidence (research only)."""
+
+    from personal_alpha_terminal.application.execution_cost_learning import (
+        execution_cost_evidence,
+    )
+    from personal_alpha_terminal.data.database import get_session_factory
+
+    config = load_config(args.config)
+    with get_session_factory()() as session:
+        evidence = execution_cost_evidence(session)
+    artifacts = config.report_dir / "validation-artifacts"
+    artifacts.mkdir(parents=True, exist_ok=True)
+    (artifacts / "round25_execution_cost_observations.json").write_text(
+        json.dumps(evidence, ensure_ascii=False, indent=2, default=str),
+        encoding="utf-8",
+    )
+    summary = evidence["summary"]
+    console.print(f"status: {summary.get('status')}")
+    console.print(f"sample_size: {summary.get('sample_size')}")
+    console.print(f"mean_slippage_bps: {summary.get('mean_slippage_bps')}")
+    console.print(f"total_fees_usd: {summary.get('total_fees_usd')}")
+    console.print(
+        "research_only=True; production cost model updated: "
+        f"{summary.get('production_cost_model_updated')}"
+    )
+    console.print(
+        "Cost-model recalibration, if ever, requires explicit human approval."
+    )
+    return 0
+
+
+def _execution_wizard_command(args: argparse.Namespace) -> int:
+    """ROUND25 PHASE 14: interactive manual execution wizard.
+
+    Lists accepted-but-unfilled orders, then records one real fill per
+    confirmation.  The ledger stays the only holdings source; nothing is
+    submitted to a broker (Broker API DISABLED).
+    """
+
+    from datetime import UTC as _UTC, datetime as _datetime
+
+    service = _service_for_args(args)
+    orders = service.list_open_execution_orders()
+    if not orders:
+        console.print("No pending manual execution orders. Accept a recommendation first.")
+        return 0
+    table = Table(title="\u5f85\u4eba\u5de5\u6267\u884c\u5efa\u8bae (PENDING MANUAL EXECUTIONS)")
+    for column in ("#", "Ticker", "Side", "Approved", "Filled", "Remaining", "Status"):
+        table.add_column(column)
+    for order in orders:
+        table.add_row(
+            str(order["order_id"]),
+            str(order["symbol"]),
+            str(order["side"]),
+            f"{order['approved_quantity']:g}",
+            f"{order['filled_quantity']:g}",
+            f"{order['remaining_quantity']:g}",
+            str(order["status"]),
+        )
+    console.print(table)
+    choice = console.input("Enter order # (or 'cancel'): ").strip()
+    if choice.lower() == "cancel":
+        return 0
+    try:
+        order_id = int(choice)
+    except ValueError:
+        console.print("Invalid order number.")
+        return 1
+    selected = next((item for item in orders if item["order_id"] == order_id), None)
+    if selected is None:
+        console.print("Unknown order id.")
+        return 1
+    console.print(
+        f"{selected['symbol']} {selected['side']}: approved {selected['approved_quantity']:g}, "
+        f"remaining {selected['remaining_quantity']:g}"
+    )
+    try:
+        quantity = float(console.input("Actual fill quantity: ").strip())
+        price = float(console.input("Actual fill price: ").strip())
+        fee_raw = console.input("Fee (USD, default 0): ").strip()
+        fees = float(fee_raw) if fee_raw else 0.0
+        executed_raw = console.input("Execution time (ISO, default now): ").strip()
+        executed_at = (
+            _datetime.fromisoformat(executed_raw).astimezone(_UTC)
+            if executed_raw
+            else _datetime.now(_UTC)
+        )
+        external_ref = console.input("External reference (optional): ").strip() or None
+    except ValueError as error:
+        console.print(f"Invalid input: {error}")
+        return 1
+    if quantity <= 0 or price <= 0 or fees < 0:
+        console.print("Quantity/price must be positive and fee non-negative.")
+        return 1
+    if quantity > float(selected["remaining_quantity"]) + 1e-8:
+        console.print(
+            "Fill exceeds the approved remaining quantity; explicit override is "
+            "required via mark-executed --override-provenance."
+        )
+        return 1
+    message = service.mark_candidate_executed(
+        str(selected["recommendation_id"]),
+        actual_price=price,
+        quantity=quantity,
+        fees=fees,
+        executed_at=executed_at,
+        notes="interactive execution wizard",
+        external_reference=external_ref,
+    )
+    console.print(message)
+    console.print(
+        "Ledger updated. Broker order remains manual at Charles Schwab (no Broker API)."
+    )
+    return 0
+
+
+def _portfolio_reconcile_command(args: argparse.Namespace) -> int:
+    """ROUND25 PHASE 14.2: ledger vs broker CSV reconciliation.
+
+    Default: PREVIEW (differences only).  ``--commit`` replaces the ledger
+    snapshot with the broker file while keeping an immutable reconciliation
+    record.
+    """
+
+    from datetime import UTC as _UTC, datetime as _datetime
+
+    from personal_alpha_terminal.application.portfolio_reconciliation import (
+        BrokerPosition,
+        PortfolioReconciliationService,
+    )
+    from personal_alpha_terminal.data.database import get_session_factory
+    from personal_alpha_terminal.portfolio.position_import import parse_position_csv
+
+    config = load_config(args.config)
+    portfolio_id = config.portfolio_id
+    if not portfolio_id:
+        console.print("No real portfolio configured; reconcile requires portfolio_id.")
+        return 1
+    csv_path: Path = args.csv
+    try:
+        content = csv_path.read_bytes()
+        parsed = parse_position_csv(content)
+    except (OSError, ValueError) as error:
+        console.print(f"CSV parse failed: {error}")
+        return 1
+    positions = tuple(
+        BrokerPosition(symbol=row.symbol, quantity=float(row.quantity))
+        for row in parsed.rows
+    )
+    with get_session_factory()() as session:
+        service = PortfolioReconciliationService(session)
+        result = service.reconcile(
+            portfolio_id=portfolio_id,
+            broker="CHARLES_SCHWAB_MANUAL",
+            positions=positions,
+            reconciled_at=_datetime.now(_UTC),
+            source_file_hash=str(parsed.file_hash) if hasattr(parsed, "file_hash") else None,
+        )
+        console.print(f"Status: {result.status}  snapshot={result.snapshot_hash}")
+        if not result.differences:
+            console.print("No differences between ledger and broker snapshot.")
+        for difference in result.differences:
+            console.print(
+                f"- {difference.get('symbol')}: ledger {difference.get('ledger_quantity'):g} "
+                f"vs broker {difference.get('broker_quantity'):g} "
+                f"(delta {difference.get('difference'):g})"
+            )
+        if not args.commit:
+            console.print("PREVIEW only; re-run with --commit to apply the broker snapshot.")
+            return 0
+        from personal_alpha_terminal.portfolio.position_import import PositionImportService
+
+        imported = PositionImportService(session).import_snapshot(
+            portfolio_id=portfolio_id,
+            as_of_date=_datetime.now(_UTC).date(),
+            parsed=parsed,
+        )
+        session.commit()
+    console.print(
+        f"COMMITTED: broker snapshot applied ({imported.imported_count} positions, "
+        f"cash_updated={imported.cash_balance_updated}); previous immutable "
+        "reconciliation snapshot retained."
+    )
+    if imported.warnings:
+        for warning in imported.warnings:
+            console.print(f"warning: {warning}")
+    return 0
+
+
 def _ai_brief_command(args: argparse.Namespace) -> int:
     """Render the ROUND24 AI Chinese advisory brief (never modifies weights)."""
 
@@ -2442,6 +2632,18 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("stress-exam", help="Run deterministic synthetic stress exam")
     subparsers.add_parser("pre-execution", help="Overnight / pre-execution risk check (advisory only)")
     subparsers.add_parser("market-state", help="Deterministic MARKET_STATE_SNAPSHOT from verified price bars")
+    subparsers.add_parser("execution", help="Interactive manual execution wizard (real ledger)")
+    subparsers.add_parser("execution-costs", help="Realized execution cost observations (research only)")
+    reconcile = subparsers.add_parser(
+        "portfolio-reconcile", help="Compare ledger vs broker CSV snapshot (PREVIEW default)"
+    )
+    reconcile.add_argument("csv", type=Path, help="Broker export CSV path")
+    reconcile.add_argument(
+        "--commit",
+        action="store_true",
+        help="Apply the broker snapshot to the real ledger (immutable snapshot kept)",
+    )
+
     news = subparsers.add_parser(
         "news", help="Market news intelligence (providers, PIT classes, clusters)"
     )
@@ -2924,6 +3126,12 @@ def main(argv: list[str] | None = None) -> int:
             return _pre_execution_command(args)
         if command == "market-state":
             return _market_state_command(args)
+        if command == "execution":
+            return _execution_wizard_command(args)
+        if command == "execution-costs":
+            return _execution_costs_command(args)
+        if command == "portfolio-reconcile":
+            return _portfolio_reconcile_command(args)
         if command == "news":
             return _news_command(args)
         if command == "intelligence":

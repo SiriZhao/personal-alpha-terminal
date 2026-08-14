@@ -47,6 +47,8 @@ from personal_alpha_terminal.decision_engine.repository import DecisionRepositor
 from personal_alpha_terminal.decision_engine.schemas import UserDecision
 from personal_alpha_terminal.models import (
     DailyPipelineRun,
+    ManualExecutionFill,
+    ManualExecutionOrder,
     Portfolio,
     PortfolioPosition,
     PortfolioTransaction,
@@ -561,6 +563,37 @@ class ApplicationService:
                 reason=reason,
             )
             return f"Manual execution {metrics.order_id}: {metrics.status.value}"
+
+    def list_open_execution_orders(self) -> tuple[dict[str, object], ...]:
+        """ROUND25 PHASE 14: accepted-but-unfilled manual orders for the wizard."""
+
+        with self._factory() as session:
+            orders = session.scalars(
+                select(ManualExecutionOrder)
+                .where(ManualExecutionOrder.status.in_(["PENDING", "PARTIAL"]))
+                .order_by(ManualExecutionOrder.id)
+            ).all()
+            rows: list[dict[str, object]] = []
+            for order in orders:
+                filled = session.scalar(
+                    select(func.coalesce(func.sum(ManualExecutionFill.quantity), 0)).where(
+                        ManualExecutionFill.order_id == order.id
+                    )
+                )
+                rows.append(
+                    {
+                        "order_id": order.id,
+                        "recommendation_id": order.recommendation_id,
+                        "symbol": order.symbol,
+                        "side": order.side,
+                        "approved_quantity": float(order.approved_quantity),
+                        "filled_quantity": float(filled or 0),
+                        "remaining_quantity": float(order.approved_quantity)
+                        - float(filled or 0),
+                        "status": order.status,
+                    }
+                )
+            return tuple(rows)
 
     def modify_candidate_execution(
         self,
