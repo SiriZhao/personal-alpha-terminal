@@ -51,6 +51,10 @@ from personal_alpha_terminal.application.decision_manifest import (
 from personal_alpha_terminal.application.intelligence_service import (
     IntelligenceApplicationService,
 )
+from personal_alpha_terminal.probability.forward_ledger import (
+    ProbabilityForwardLedger,
+    build_prediction,
+)
 from personal_alpha_terminal.application.pre_execution import (
     PreExecutionCheck,
     build_assessment,
@@ -407,6 +411,11 @@ class DailyQuantOrchestrator:
                 "composition": etf_composition,
             },
         )
+        self._record_probability_predictions(
+            workflow_result=workflow_result,
+            run_identity=run_identity,
+            decision_as_of=effective_decision_time,
+        )
         stage_started = perf_counter()
         pre_execution = self._add_pre_execution_stage(
             stages,
@@ -445,6 +454,83 @@ class DailyQuantOrchestrator:
             run_identity=run_identity,
         )
         return self._persist_result(result)
+
+    def _record_probability_predictions(
+        self,
+        *,
+        workflow_result: TodayResult,
+        run_identity: RunIdentity | None,
+        decision_as_of: datetime,
+    ) -> None:
+        """ROUND26 P0: immutable forward probability predictions.
+
+        One prediction per formal recommendation is appended at decision time
+        (before any outcome is observable).  With the current fallback model
+        every prediction records raw/calibrated probability None and state
+        CLASSICAL_FALLBACK -- an honest forward baseline, not fabricated
+        calibration.
+        """
+
+        if run_identity is None or not workflow_result.recommendations:
+            return
+        overlay = {
+            item.symbol: item
+            for item in workflow_result.probability_overlay_effects
+        }
+        ledger = ProbabilityForwardLedger()
+        try:
+            for rank, recommendation in enumerate(
+                sorted(
+                    workflow_result.recommendations,
+                    key=lambda item: (-item.expected_alpha, item.symbol),
+                ),
+                start=1,
+            ):
+                effect = overlay.get(recommendation.symbol)
+                ledger.append_prediction(
+                    build_prediction(
+                        run_id=run_identity.run_id,
+                        decision_id=run_identity.decision_id,
+                        ticker=recommendation.symbol,
+                        decision_cutoff=decision_as_of,
+                        factor_rank=rank,
+                        base_alpha=recommendation.expected_alpha,
+                        raw_probability=(
+                            float(effect.posterior_probability)
+                            if effect is not None
+                            and effect.posterior_probability is not None
+                            else None
+                        ),
+                        calibrated_probability=(
+                            float(effect.posterior_probability)
+                            if effect is not None
+                            and effect.posterior_probability is not None
+                            else None
+                        ),
+                        model_id=str(
+                            workflow_result.probability_artifact_id
+                        ),
+                        model_hash=str(
+                            (workflow_result.identity_hashes or {}).get(
+                                "probability_artifact_hash", "UNAVAILABLE"
+                            )
+                        ),
+                        cost_hurdle_bps=float(
+                            self._effective_config.transaction_cost.commission_bps
+                            + self._effective_config.transaction_cost.spread_bps
+                            + self._effective_config.transaction_cost.slippage_bps
+                        ),
+                        condition_state=(
+                            "CALIBRATED_OVERLAY"
+                            if workflow_result.probability_overlay_active
+                            else "CLASSICAL_FALLBACK"
+                        ),
+                    )
+                )
+        except (OSError, ValueError):
+            # Forward-ledger writes are research-only; a failed append must
+            # never block the production chain.
+            return
 
     def _add_etf_sleeve_stage(
         self,

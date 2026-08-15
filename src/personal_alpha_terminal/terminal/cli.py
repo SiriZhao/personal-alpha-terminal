@@ -1967,6 +1967,40 @@ def _resolve_run_dir(config, run_id):
     return candidates[0].parent
 
 
+def _probability_forward_command(args: argparse.Namespace) -> int:
+    """ROUND26 P0: forward probability evidence (research only, influence 0)."""
+
+    from personal_alpha_terminal.probability.forward_ledger import (
+        ProbabilityForwardLedger,
+        ProbabilityPromotionPolicy,
+        evaluate_forward_probability,
+    )
+
+    config = load_config(args.config)
+    ledger = ProbabilityForwardLedger()
+    predictions = ledger.predictions()
+    outcomes = ledger.outcomes()
+    report = evaluate_forward_probability(ledger)
+    policy = ProbabilityPromotionPolicy()
+    artifacts = config.report_dir / "validation-artifacts"
+    artifacts.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "forward_predictions": len(predictions),
+        "matured_outcomes": len(outcomes),
+        "production_influence": policy.production_influence,
+        "evaluation": report,
+        "promotion_conditions": policy.conditions(),
+        "auto_promote": False,
+        "human_approval_required": True,
+    }
+    (artifacts / "round26_probability_forward.json").write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, default=str),
+        encoding="utf-8",
+    )
+    console.print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
+    return 0
+
+
 def _decision_replay_command(args: argparse.Namespace) -> int:
     """ROUND26 P0: deterministic decision replay."""
 
@@ -2897,6 +2931,9 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser(  # noqa: E501
         "stress-exam-v21", help="Stress Exam 2.1 overlay comparison (scenario params unchanged)"
     )
+    subparsers.add_parser(
+        "probability-forward", help="Forward probability evidence ledger + evaluation"
+    )
     replay = subparsers.add_parser(
         "decision-replay", help="Deterministic decision replay (REPLAY PASS/FAIL)"
     )
@@ -3410,6 +3447,8 @@ def main(argv: list[str] | None = None) -> int:
             return _execution_wizard_command(args)
         if command == "execution-costs":
             return _execution_costs_command(args)
+        if command == "probability-forward":
+            return _probability_forward_command(args)
         if command == "decision-replay":
             return _decision_replay_command(args)
         if command == "decision-diff":
