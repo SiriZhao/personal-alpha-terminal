@@ -1914,12 +1914,10 @@ def _news_command(args: argparse.Namespace) -> int:
     from datetime import datetime as _datetime
 
     from personal_alpha_terminal.intelligence.market_news import (
-        NewsIntelligenceService,
         NewsLedger,
     )
 
     ledger = NewsLedger()
-    service = NewsIntelligenceService(ledger)
     now = _datetime.now(_UTC)
     rows = ledger.load_items()
     clusters = ledger.load_clusters()
@@ -1941,14 +1939,17 @@ def _news_command(args: argparse.Namespace) -> int:
         except (OSError, ValueError, TimeoutError) as error:
             console.print(f"OFFICIAL_MACRO_NEWS_UNAVAILABLE: {error}")
             return 0
-        if macro["items"]:
+        macro_rows = macro.get("items")
+        if macro_rows and isinstance(macro_rows, list):
             from personal_alpha_terminal.intelligence.market_news import (
                 NewsItem,
-                NewsSourceTier,
             )
 
             items = []
-            for row in macro["items"]:
+            for raw_row in macro_rows:
+                if not isinstance(raw_row, dict):
+                    continue
+                row = cast("dict[str, object]", raw_row)
                 published_raw = row.get("published_at")
                 published_at = (
                     _datetime.fromisoformat(published_raw)
@@ -1971,7 +1972,10 @@ def _news_command(args: argparse.Namespace) -> int:
                         available_at=published_at,
                         url_hash=str(row["url_hash"]),
                         content_hash=str(row["content_hash"]),
-                        topics=tuple(str(item) for item in (row.get("topics") or ())),
+                        topics=tuple(
+                            str(item)
+                            for item in cast("tuple[object, ...]", row.get("topics") or ())
+                        ),
                         country="US",
                         language="en",
                         evidence_state=str(row.get("evidence_state", "RAW_OFFICIAL")),
@@ -2000,7 +2004,9 @@ def _news_command(args: argparse.Namespace) -> int:
     return 0
 
 
-def _resolve_run_dir(config, run_id):
+def _resolve_run_dir(
+    config: EffectiveRuntimeConfig, run_id: str | None
+) -> Path:
     root = config.report_dir / "daily-runs"
     if run_id:
         return root / run_id
@@ -2176,7 +2182,7 @@ def _exposure_audit_command(args: argparse.Namespace) -> int:
     config = load_config(args.config)
     with get_session_factory()() as session:
         report = build_exposure_closure(session, as_of=_datetime.now(_UTC))
-        formal_symbols = tuple()
+        formal_symbols: tuple[str, ...] = ()
         try:
             runs = sorted(
                 (config.report_dir / "daily-runs").glob("*/run_certificate.json"),

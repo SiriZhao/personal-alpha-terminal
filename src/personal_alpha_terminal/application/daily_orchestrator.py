@@ -19,6 +19,10 @@ from personal_alpha_terminal.ai_advisory import (
     PRODUCTION_INFLUENCE,
     build_quant_facts,
 )
+from personal_alpha_terminal.application.current_exposure import (
+    build_current_sector_exposure,
+    build_current_size_exposure,
+)
 from personal_alpha_terminal.application.daily_result import (
     BenchmarkSummary,
     DailyQuantResult,
@@ -40,24 +44,15 @@ from personal_alpha_terminal.application.data_certification import (
     DailyDataCertification,
 )
 from personal_alpha_terminal.application.data_service import DataService, SyncRunner
-from personal_alpha_terminal.application.etf_sleeve_service import (
-    EtfSleeveApplicationService,
-)
 from personal_alpha_terminal.application.decision_manifest import (
-    DecisionManifest,
     RunIdentity,
     seal_decision_manifest,
 )
+from personal_alpha_terminal.application.etf_sleeve_service import (
+    EtfSleeveApplicationService,
+)
 from personal_alpha_terminal.application.intelligence_service import (
     IntelligenceApplicationService,
-)
-from personal_alpha_terminal.probability.forward_ledger import (
-    ProbabilityForwardLedger,
-    build_prediction,
-)
-from personal_alpha_terminal.application.current_exposure import (
-    build_current_sector_exposure,
-    build_current_size_exposure,
 )
 from personal_alpha_terminal.application.pre_execution import (
     PreExecutionCheck,
@@ -98,6 +93,10 @@ from personal_alpha_terminal.models.intelligence import (
     IntelligenceFeature,
     IntelligenceRawInformation,
     IntelligenceResearchResult,
+)
+from personal_alpha_terminal.probability.forward_ledger import (
+    ProbabilityForwardLedger,
+    build_prediction,
 )
 from personal_alpha_terminal.terminal.market_sessions import (
     MarketSessionCalendar,
@@ -888,11 +887,6 @@ class DailyQuantOrchestrator:
 
                 macro = OfficialMacroAcquisition().acquire()
                 macro_items = macro.get("items") or []
-                macro_news = (
-                    {"clusters": macro_items, "provider_statuses": macro.get("provider_statuses")}
-                    if macro_items
-                    else {"clusters": [], "status": macro.get("status")}
-                )
                 general = NewsIntelligenceService().acquire(
                     decision_as_of=as_of,
                     providers={},

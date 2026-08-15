@@ -142,7 +142,8 @@ def _symbol_action_map(certificate: dict[str, Any]) -> dict[str, str]:
 
 def diff_decisions(old_run_dir: Path, new_run_dir: Path) -> DecisionDiffReport:
     def load(path: Path) -> dict[str, Any]:
-        return json.loads((path / "run_certificate.json").read_text(encoding="utf-8"))
+        payload = json.loads((path / "run_certificate.json").read_text(encoding="utf-8"))
+        return payload if isinstance(payload, dict) else {}
 
     old_cert = load(old_run_dir)
     new_cert = load(new_run_dir)

@@ -41,7 +41,7 @@ def _http_get(url: str, *, timeout: float = 20.0) -> str:
     with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
         payload = response.read()
         charset = response.headers.get_content_charset() or "utf-8"
-        return payload.decode(charset, errors="replace")
+        return str(payload.decode(charset, errors="replace"))
 
 
 def _parse_rfc2822(value: str) -> datetime:
@@ -80,7 +80,11 @@ def _rss_items(
             published_at = _parse_rfc2822(published_raw)
         except (TypeError, ValueError):
             continue
-        summary = (description_node.text or "").strip()[:500] if description_node is not None else ""
+        summary = (
+            (description_node.text or "").strip()[:500]
+            if description_node is not None
+            else ""
+        )
         retrieved_at = datetime.now(UTC)
         import hashlib as _hashlib
 
@@ -159,7 +163,7 @@ class BLSPublicApiProvider:
                 if not year or not period:
                     continue
                 match = re.match(r"M(\d+)", period)
-                month = int(match.group(1)) if match else 1
+                _ = int(match.group(1)) if match else 1
                 # The public BLS endpoint does not expose the release date of
                 # each observation.  The publication date is therefore marked
                 # UNAVAILABLE and the item becomes PIT-visible only at
@@ -207,7 +211,7 @@ class OfficialMacroAcquisition:
         for provider in providers:
             try:
                 fetched = provider.fetch()
-            except (urllib.error.URLError, OSError, ValueError, TimeoutError) as error:
+            except (urllib.error.URLError, OSError, ValueError, TimeoutError):
                 statuses[provider.name] = f"{provider.name.upper()}_UNAVAILABLE"
                 continue
             statuses[provider.name] = "OK" if fetched else "EMPTY"

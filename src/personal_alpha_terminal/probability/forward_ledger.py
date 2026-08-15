@@ -26,7 +26,7 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 PRIMARY_PRODUCTION_RESEARCH_HORIZON = 21
 PRIMARY_BENCHMARK = "SPY"
@@ -181,8 +181,22 @@ def build_prediction(
     prediction_id = f"prob-{_hash(core)[:16]}"
     return ProbabilityPrediction(
         prediction_id=prediction_id,
+        run_id=str(core["run_id"]),
+        decision_id=str(core["decision_id"]),
+        ticker=str(core["ticker"]),
+        decision_cutoff=str(core["decision_cutoff"]),
+        factor_rank=core["factor_rank"],  # type: ignore[arg-type]
+        base_alpha=core["base_alpha"],  # type: ignore[arg-type]
+        condition_state=str(core["condition_state"]),
+        raw_probability=core["raw_probability"],  # type: ignore[arg-type]
+        calibrated_probability=core["calibrated_probability"],  # type: ignore[arg-type]
+        model_id=str(core["model_id"]),
+        model_hash=str(core["model_hash"]),
+        primary_horizon=int(core["primary_horizon"] or 21),
+        benchmark=str(core["benchmark"]),
+        target_definition=str(core["target_definition"]),
+        cost_hurdle_bps=float(core["cost_hurdle_bps"] or 0.0),
         created_at=cutoff.isoformat(),
-        **core,
     )
 
 
@@ -225,14 +239,17 @@ def outcome_from_prices(
 def _brier(outcomes: list[float], labels: list[int]) -> float:
     if not outcomes:
         return math.nan
-    return sum((probability - label) ** 2 for probability, label in zip(outcomes, labels)) / len(outcomes)
+    return sum(
+        (probability - label) ** 2
+        for probability, label in zip(outcomes, labels, strict=True)
+    ) / len(outcomes)
 
 
 def _log_loss(outcomes: list[float], labels: list[int]) -> float:
     if not outcomes:
         return math.nan
     total = 0.0
-    for probability, label in zip(outcomes, labels):
+    for probability, label in zip(outcomes, labels, strict=True):
         clipped = min(max(probability, 1e-9), 1 - 1e-9)
         total += -(label * math.log(clipped) + (1 - label) * math.log(1 - clipped))
     return total / len(outcomes)
@@ -241,7 +258,7 @@ def _log_loss(outcomes: list[float], labels: list[int]) -> float:
 def _ece(outcomes: list[float], labels: list[int], buckets: int = 5) -> float:
     if not outcomes:
         return math.nan
-    pairs = sorted(zip(outcomes, labels), key=lambda item: item[0])
+    pairs = sorted(zip(outcomes, labels, strict=True), key=lambda item: item[0])
     width = len(pairs) / buckets
     total = 0.0
     for bucket in range(buckets):
@@ -279,10 +296,27 @@ def evaluate_forward_probability(
             "promotion_status": "NOT_ELIGIBLE",
             "human_approval_required": True,
         }
-    probabilities = [float(pred["calibrated_probability"] or pred["raw_probability"] or 0.5) for pred, _ in matched]
+    probabilities = [
+        float(
+            cast(
+                "float | int | str | None",
+                cast("dict[str, object]", pred).get("calibrated_probability"),
+            )
+            or cast(
+                "float | int | str | None",
+                cast("dict[str, object]", pred).get("raw_probability"),
+            )
+            or 0.5
+        )
+        for pred, _item in matched
+    ]
     labels = [1 if item["target_hit"] else 0 for _, item in matched]
     decision_dates = sorted(
-        {str(pred["decision_cutoff"])[:10] for pred, _item in matched if pred}
+        {
+            str(pred.get("decision_cutoff"))[:10]
+            for pred, _item in matched
+            if pred and pred.get("decision_cutoff")
+        }
     )
     report: dict[str, object] = {
         "status": "FORWARD_EVIDENCE_AVAILABLE",

@@ -15,10 +15,8 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from datetime import datetime
-from typing import Any
 
-from sqlalchemy import func, select
-from sqlalchemy import or_
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from personal_alpha_terminal.models import SecurityMaster, UniverseMembership
@@ -127,7 +125,9 @@ def build_current_size_exposure(
         "portfolio_small_micro_exposure": round(small_micro, 6),
         "bucket_weights": {key: round(value, 6) for key, value in sorted(bucket_weights.items())},
         "largest_size_bucket": (
-            max(bucket_weights, key=bucket_weights.get) if bucket_weights else "UNKNOWN"
+            max(bucket_weights, key=lambda key: bucket_weights[key])
+            if bucket_weights
+            else "UNKNOWN"
         ),
         "portfolio_weighted_market_cap": weighted_cap,
         "smallest_holding_market_cap": min(caps) if caps else None,
@@ -196,11 +196,6 @@ def build_current_sector_exposure(
     for symbol, weight in weights.items():
         sector = normalized.get(symbol, "UNKNOWN")
         sector_weights[sector] = sector_weights.get(sector, 0.0) + weight
-    covered_weight = sum(
-        weight
-        for symbol, weight in weights.items()
-        if normalized.get(symbol) not in (None, "UNKNOWN")
-    )
     coverage = len(
         [symbol for symbol in target_symbols if normalized.get(symbol) not in (None, "UNKNOWN")]
     ) / len(target_symbols)
