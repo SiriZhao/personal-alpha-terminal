@@ -1922,6 +1922,56 @@ def _news_command(args: argparse.Namespace) -> int:
     rows = ledger.load_items()
     clusters = ledger.load_clusters()
     if getattr(args, "news_action", "status") == "status":
+        if rows and not clusters:
+            from personal_alpha_terminal.intelligence.market_news import (
+                NewsItem,
+                NewsSourceTier,
+                cluster_news,
+            )
+
+            rebuilt = []
+            for raw_row in rows:
+                if not isinstance(raw_row, dict):
+                    continue
+                published_raw = raw_row.get("published_at")
+                try:
+                    published_at = (
+                        _datetime.fromisoformat(str(published_raw))
+                        if isinstance(published_raw, str)
+                        else now
+                    )
+                except ValueError:
+                    continue
+                if published_at.tzinfo is None:
+                    published_at = published_at.replace(tzinfo=_UTC)
+                rebuilt.append(
+                    NewsItem(
+                        news_id=str(raw_row.get("news_id", "")),
+                        source=str(raw_row.get("source", "")),
+                        source_tier=str(
+                            raw_row.get("source_tier", NewsSourceTier.TIER1_OFFICIAL.value)
+                        ),
+                        headline=str(raw_row.get("headline", "")),
+                        summary=str(raw_row.get("summary", "")),
+                        published_at=published_at,
+                        retrieved_at=published_at,
+                        available_at=published_at,
+                        url_hash=str(raw_row.get("url_hash", "")),
+                        content_hash=str(raw_row.get("content_hash", "")),
+                        topics=tuple(
+                            str(item)
+                            for item in cast(
+                                "tuple[object, ...]", raw_row.get("topics") or ()
+                            )
+                        ),
+                        country="US",
+                        language="en",
+                        evidence_state=str(raw_row.get("evidence_state", "")),
+                    )
+                )
+            rebuilt_clusters = cluster_news(tuple(rebuilt))
+            ledger.write_clusters(rebuilt_clusters)
+            clusters = ledger.load_clusters()
         console.print(f"news rows: {len(rows)}")
         console.print(f"news clusters: {len(clusters)}")
         console.print(
@@ -1949,7 +1999,7 @@ def _news_command(args: argparse.Namespace) -> int:
             for raw_row in macro_rows:
                 if not isinstance(raw_row, dict):
                     continue
-                row = cast("dict[str, object]", raw_row)
+                row = raw_row
                 published_raw = row.get("published_at")
                 published_at = (
                     _datetime.fromisoformat(published_raw)

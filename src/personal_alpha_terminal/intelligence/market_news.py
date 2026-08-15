@@ -401,7 +401,6 @@ class NewsIntelligenceService:
                 f"news dedup on persist: {len(items) - appended} duplicate rows skipped"
             )
         clusters = cluster_news(items)
-        self.ledger.write_clusters(clusters)
         if not items:
             return NewsIntelligenceResult(
                 status=NEWS_PROVIDER_UNAVAILABLE,
@@ -409,6 +408,7 @@ class NewsIntelligenceService:
                 provider_statuses=statuses,
                 warnings=tuple(warnings),
             )
+        self.ledger.write_clusters(clusters)
         return NewsIntelligenceResult(
             status="MARKET_NEWS_OK",
             decision_as_of=decision_as_of,
