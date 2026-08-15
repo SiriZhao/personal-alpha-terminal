@@ -268,6 +268,9 @@ class DailyQuantResult:
     # ROUND25 PHASE 7: pre-execution overnight risk assessment (advisory only;
     # never cancels, never recomputes alpha).
     pre_execution: dict[str, object] | None = None
+    # ROUND26 P0: sealed DecisionManifest -- the single source of truth for
+    # every formal output of this run.
+    decision_manifest: dict[str, object] | None = None
 
     @property
     def duration_seconds(self) -> float:
@@ -509,6 +512,7 @@ class DailyQuantResult:
             "warnings": list(self.warnings),
             "provenance": _json_value(self.provenance),
             "decision_traces": _json_value(self.decision_traces or {}),
+            "decision_manifest": _json_value(self.decision_manifest or {}),
         }
         target = run_directory / "run_certificate.json"
         _atomic_json(target, certificate)

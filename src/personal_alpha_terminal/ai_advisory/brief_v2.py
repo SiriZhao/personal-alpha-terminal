@@ -437,6 +437,15 @@ def build_deterministic_v2(
                 "strength": "新闻管线未配置可用 provider;禁止伪造新闻。",
             }
         ]
+    default_refs = facts.get("evidence_refs") or []
+    run_refs = [
+        ref for ref in default_refs
+        if str(ref).startswith(("run:", "decision:", "decision-manifest:"))
+    ] or (
+        [f"run:{facts.get('run_id')}"]
+        if facts.get("run_id")
+        else []
+    )
     action_explanations: list[dict[str, Any]] = []
     for item in formal:
         symbol = str(item.get("symbol"))
@@ -454,7 +463,7 @@ def build_deterministic_v2(
                     f"{_pct(item.get('target_weight'))},已通过 SIGNAL→PORTFOLIO→"
                     "RISK→DECISION→EXECUTION 正式链。最终执行由用户人工确认。"
                 ),
-                "evidence_refs": [f"run-certificate:{facts.get('run_id', 'UNKNOWN')}"],
+                "evidence_refs": list(run_refs),
             }
         )
     etf_analysis: list[dict[str, Any]] = []
@@ -480,7 +489,7 @@ def build_deterministic_v2(
                     "不属于今日执行计划;它尚未进入正式交易链,不能被理解为持仓或"
                     "买卖指令。"
                 ),
-                "evidence_refs": [f"run-certificate:{facts.get('run_id', 'UNKNOWN')}"],
+                "evidence_refs": list(run_refs),
             }
         )
     pre_text = "隔夜/盘前风险检查数据不可用(PRE_EXECUTION_DATA_UNAVAILABLE)。"

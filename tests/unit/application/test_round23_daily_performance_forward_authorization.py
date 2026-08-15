@@ -218,6 +218,7 @@ def test_strategy_approval_absent_blocks_and_valid_provisional_matches(tmp_path:
         identity=identity,
         decision=StrategyApprovalDecision.ALLOW_PROVISIONAL_FORWARD,
         operator_intent="test provisional forward",
+        created_at=now,
     )
     store.save(approval)
     loaded, reason = store.status(identity, now=now)
@@ -238,6 +239,7 @@ def test_strategy_approval_identity_mismatch_blocks(tmp_path: Path) -> None:
         identity=identity,
         decision=StrategyApprovalDecision.ALLOW_PROVISIONAL_FORWARD,
         operator_intent="test",
+        created_at=now,
     )
     store.save(approval)
     changed = EffectiveRuntimeConfig(

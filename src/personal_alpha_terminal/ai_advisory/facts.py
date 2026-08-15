@@ -166,8 +166,21 @@ def build_quant_facts(
             }
         )
 
+    run_id = str(run_certificate.get("run_id") or "")
+    decision_id = str(run_certificate.get("decision_id") or "")
+    # ROUND26 P0: formal evidence references are stable identities, never
+    # UNKNOWN placeholders.  When a decision manifest hash exists it is cited
+    # too; the AI must only reference real, already-existing artifacts.
+    manifest = run_certificate.get("decision_manifest")
+    manifest_refs: list[str] = []
+    if isinstance(manifest, dict) and manifest.get("semantic_hash"):
+        manifest_refs.append(
+            f"decision-manifest:{str(manifest.get('semantic_hash'))[:16]}"
+        )
     evidence_refs: list[str] = [
-        f"run-certificate:{run_certificate.get('run_id', 'UNKNOWN')}",
+        *(f"run:{run_id}" if run_id else []),
+        *(f"decision:{decision_id}" if decision_id else []),
+        *manifest_refs,
         *event_refs,
     ]
     etf_section: dict[str, Any] = {}
@@ -212,6 +225,8 @@ def build_quant_facts(
     context_only = annotate_domain(benchmark_facts, CONTEXT_ONLY)
 
     facts = {
+        "run_id": run_id,
+        "decision_id": decision_id,
         "analysis_date": analysis_date,
         "trade_date": trade_date,
         "market_session": bounded_cert.get("market_session"),

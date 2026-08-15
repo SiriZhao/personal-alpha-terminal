@@ -1953,6 +1953,73 @@ def _news_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _resolve_run_dir(config, run_id):
+    root = config.report_dir / "daily-runs"
+    if run_id:
+        return root / run_id
+    candidates = sorted(
+        root.glob("*/run_certificate.json"),
+        key=lambda item: item.stat().st_mtime,
+        reverse=True,
+    )
+    if not candidates:
+        raise ValueError("no persisted daily runs found")
+    return candidates[0].parent
+
+
+def _decision_replay_command(args: argparse.Namespace) -> int:
+    """ROUND26 P0: deterministic decision replay."""
+
+    from personal_alpha_terminal.application.decision_replay import replay_decision
+
+    config = load_config(args.config)
+    try:
+        run_dir = _resolve_run_dir(config, args.run_id)
+    except ValueError as error:
+        console.print(str(error))
+        return 1
+    report = replay_decision(run_dir)
+    artifacts = config.report_dir / "validation-artifacts"
+    artifacts.mkdir(parents=True, exist_ok=True)
+    (artifacts / "round26_decision_replay.json").write_text(
+        json.dumps(report.document(), ensure_ascii=False, indent=2, default=str),
+        encoding="utf-8",
+    )
+    console.print(
+        f"{report.status} run={report.run_id}\n"
+        f"manifest_hash={report.manifest_hash}\n"
+        f"recomputed_hash={report.recomputed_hash}\n"
+        f"detail={report.detail}"
+    )
+    return 0 if report.status == "REPLAY_PASS" else 1
+
+
+def _decision_diff_command(args: argparse.Namespace) -> int:
+    """ROUND26 P0: decision drift attribution."""
+
+    from personal_alpha_terminal.application.decision_replay import diff_decisions
+
+    config = load_config(args.config)
+    root = config.report_dir / "daily-runs"
+    old_dir = root / args.old_run
+    new_dir = root / args.new_run
+    if not (old_dir / "run_certificate.json").exists():
+        console.print(f"old run missing: {args.old_run}")
+        return 1
+    if not (new_dir / "run_certificate.json").exists():
+        console.print(f"new run missing: {args.new_run}")
+        return 1
+    report = diff_decisions(old_dir, new_dir)
+    artifacts = config.report_dir / "validation-artifacts"
+    artifacts.mkdir(parents=True, exist_ok=True)
+    (artifacts / "decision_diff.json").write_text(
+        json.dumps(report.document(), ensure_ascii=False, indent=2, default=str),
+        encoding="utf-8",
+    )
+    console.print(json.dumps(report.document(), ensure_ascii=False, indent=2, default=str))
+    return 0
+
+
 def _stress_exam_v21_command(args: argparse.Namespace) -> int:
     """ROUND25 PHASE 19: Stress Exam 2.1 with unchanged ROUND24 scenarios."""
 
@@ -2830,6 +2897,15 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser(  # noqa: E501
         "stress-exam-v21", help="Stress Exam 2.1 overlay comparison (scenario params unchanged)"
     )
+    replay = subparsers.add_parser(
+        "decision-replay", help="Deterministic decision replay (REPLAY PASS/FAIL)"
+    )
+    replay.add_argument("run_id", nargs="?", default=None, help="Run id (default: latest)")
+    diff = subparsers.add_parser(
+        "decision-diff", help="Decision drift attribution between two runs"
+    )
+    diff.add_argument("old_run", help="Old run id")
+    diff.add_argument("new_run", help="New run id")
     labs = subparsers.add_parser(  # noqa: E501
         "research-labs", help="ROUND25 research promotion labs (never auto-promote)"
     )
@@ -3334,6 +3410,10 @@ def main(argv: list[str] | None = None) -> int:
             return _execution_wizard_command(args)
         if command == "execution-costs":
             return _execution_costs_command(args)
+        if command == "decision-replay":
+            return _decision_replay_command(args)
+        if command == "decision-diff":
+            return _decision_diff_command(args)
         if command == "stress-exam-v21":
             return _stress_exam_v21_command(args)
         if command == "exposure-audit":

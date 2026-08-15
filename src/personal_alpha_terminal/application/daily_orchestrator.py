@@ -43,6 +43,11 @@ from personal_alpha_terminal.application.data_service import DataService, SyncRu
 from personal_alpha_terminal.application.etf_sleeve_service import (
     EtfSleeveApplicationService,
 )
+from personal_alpha_terminal.application.decision_manifest import (
+    DecisionManifest,
+    RunIdentity,
+    seal_decision_manifest,
+)
 from personal_alpha_terminal.application.intelligence_service import (
     IntelligenceApplicationService,
 )
@@ -152,6 +157,7 @@ class DailyQuantOrchestrator:
     ) -> DailyQuantResult:
         started_at = datetime.now(UTC)
         run_id = f"daily-{uuid4().hex}"
+        run_identity = RunIdentity.create(run_id)
         now = decision_time or started_at
         effective_decision_time = now
         if now.tzinfo is None:
@@ -393,6 +399,7 @@ class DailyQuantOrchestrator:
             as_of=effective_decision_time,
             duration_started=stage_started,
             run_id=run_id,
+            run_identity=run_identity,
             workflow_result=workflow_result,
             etf_evidence={
                 "counts": etf_universe,
@@ -435,6 +442,7 @@ class DailyQuantOrchestrator:
             etf_composition=etf_composition,
             ai_brief=ai_brief,
             pre_execution=pre_execution,
+            run_identity=run_identity,
         )
         return self._persist_result(result)
 
@@ -572,6 +580,7 @@ class DailyQuantOrchestrator:
         as_of: datetime,
         duration_started: float,
         run_id: str,
+        run_identity: RunIdentity | None = None,
         workflow_result: TodayResult,
         etf_evidence: dict[str, object],
     ) -> dict[str, object] | None:
@@ -625,8 +634,14 @@ class DailyQuantOrchestrator:
                         .limit(50)
                     )
                 )
+            decision_id = (
+                run_identity.decision_id
+                if run_identity is not None
+                else f"decision-{run_id.removeprefix('daily-')}"
+            )
             certificate_view = {
                 "run_id": run_id,
+                "decision_id": decision_id,
                 "analysis_date": workflow_result.decision_time.date().isoformat(),
                 "trade_date": workflow_result.decision_time.date().isoformat(),
                 "market_session": workflow_result.market_session,
@@ -1220,6 +1235,7 @@ class DailyQuantOrchestrator:
         etf_composition: dict[str, object] | None = None,
         ai_brief: dict[str, object] | None = None,
         pre_execution: dict[str, object] | None = None,
+        run_identity: RunIdentity | None = None,
     ) -> DailyQuantResult:
         actionable = workflow.status in {"GENERATED", "NO_DECISION"} and not blockers
         data_cutoff = self._resolved_data_cutoff(stages, workflow.data_cutoff)
@@ -1499,6 +1515,48 @@ class DailyQuantOrchestrator:
             "holding_cap_policy": "NO_FIXED_CARDINALITY_CAP",
         }
 
+        identity_hashes = workflow.identity_hashes or {}
+        decision_manifest: dict[str, object] | None = None
+        if run_identity is not None:
+            try:
+                import scipy as _scipy
+
+                manifest = seal_decision_manifest(
+                    identity=run_identity,
+                    decision_cutoff=data_cutoff if data_cutoff is not None else now,
+                    analysis_date=analysis_date,
+                    trade_date=trade_date,
+                    market_data_snapshot_id=snapshot_id,
+                    market_data_hash=snapshot_hash,
+                    universe_snapshot_id=str(workflow.universe_snapshot_id),
+                    universe_hash=str(
+                        identity_hashes.get("universe_definition_hash", "UNAVAILABLE")
+                    ),
+                    portfolio_snapshot_id=str(workflow.portfolio_snapshot_id),
+                    portfolio_hash=str(
+                        identity_hashes.get("portfolio_constraint_hash", "UNAVAILABLE")
+                    ),
+                    config_hash=self._effective_config.canonical_run_config_hash,
+                    feature_version=str(workflow.strategy_version),
+                    factor_model_id=str(workflow.strategy_version),
+                    alpha_model_id=str(workflow.strategy_version),
+                    probability_model_id=str(workflow.probability_artifact_id),
+                    portfolio_model_id=str(workflow.portfolio_validation_artifact_id),
+                    risk_model_id=str(identity_hashes.get("risk_model_hash", "UNAVAILABLE")),
+                    cost_model_id=str(identity_hashes.get("cost_model_hash", "UNAVAILABLE")),
+                    strategy_approval_id=str(workflow.strategy_approval_id),
+                    operational_policy_id=str(workflow.operational_policy_id),
+                    random_seed=0,
+                    solver_name="SLSQP",
+                    solver_version=str(getattr(_scipy, "__version__", "UNAVAILABLE")),
+                    formal_action_ids=tuple(
+                        item.recommendation_id for item in decisions
+                    ),
+                    execution_plan_id=f"manual-plan-{run_id}",
+                )
+                decision_manifest = manifest.document()
+            except (AttributeError, ImportError, ValueError):
+                decision_manifest = None
         return DailyQuantResult(
             run_id,
             __version__,
@@ -1658,6 +1716,7 @@ class DailyQuantOrchestrator:
             etf_composition=etf_composition,
             ai_brief=ai_brief,
             pre_execution=pre_execution,
+            decision_manifest=decision_manifest,
         )
 
     @staticmethod
@@ -2135,6 +2194,20 @@ class DailyQuantOrchestrator:
                     encoding="utf-8",
                 )
                 temporary.replace(etf_path)
+            if updated.decision_manifest is not None:
+                run_directory = self._snapshot_root / updated.run_id
+                manifest_path = run_directory / "decision_manifest.json"
+                temporary = manifest_path.with_suffix(".json.tmp")
+                temporary.write_text(
+                    _json.dumps(
+                        updated.decision_manifest,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        default=str,
+                    ),
+                    encoding="utf-8",
+                )
+                temporary.replace(manifest_path)
             if updated.pre_execution is not None:
                 run_directory = self._snapshot_root / updated.run_id
                 pre_path = run_directory / "pre_execution.json"

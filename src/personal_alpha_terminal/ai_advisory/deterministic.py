@@ -109,7 +109,11 @@ def build_deterministic_brief(facts: dict[str, Any]) -> dict[str, Any]:
                     else "当前没有可用于该证券的 PIT 企业事件证据。"
                 ),
                 "ai_interpretation": _action_line(item),
-                "evidence_refs": [f"run-certificate:{facts.get('_run_id', 'UNKNOWN')}"],
+                "evidence_refs": (
+                    [f"run:{facts.get('run_id')}"]
+                    if facts.get("run_id")
+                    else []
+                ),
             }
         )
     event_risks = [
