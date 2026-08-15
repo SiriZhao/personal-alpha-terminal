@@ -89,7 +89,10 @@ def _brief_text(brief: dict[str, Any]) -> str:
 
 
 def _symbol_near_keyword(text: str, symbol: str, keywords: tuple[str, ...]) -> bool:
-    symbol_positions = [match.start() for match in re.finditer(re.escape(symbol), text)]
+    # Ticker symbols must match on word boundaries so a research candidate
+    # "LQD" is never matched inside a formal symbol "LQDA".
+    pattern = rf"(?<![A-Z0-9]){re.escape(symbol)}(?![A-Z0-9])"
+    symbol_positions = [match.start() for match in re.finditer(pattern, text)]
     if not symbol_positions:
         return False
     for keyword in keywords:
