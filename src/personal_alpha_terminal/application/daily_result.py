@@ -271,6 +271,9 @@ class DailyQuantResult:
     # ROUND26 P0: sealed DecisionManifest -- the single source of truth for
     # every formal output of this run.
     decision_manifest: dict[str, object] | None = None
+    # ROUND26 P0: current operational size/sector exposure evidence
+    # (strictly separated from historical PIT exposure).
+    current_exposure: dict[str, object] | None = None
 
     @property
     def duration_seconds(self) -> float:

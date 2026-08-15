@@ -2117,6 +2117,10 @@ def _exposure_audit_command(args: argparse.Namespace) -> int:
     from datetime import UTC as _UTC
     from datetime import datetime as _datetime
 
+    from personal_alpha_terminal.application.current_exposure import (
+        build_current_sector_exposure,
+        build_current_size_exposure,
+    )
     from personal_alpha_terminal.application.exposure_closure import (
         build_exposure_closure,
     )
@@ -2125,6 +2129,30 @@ def _exposure_audit_command(args: argparse.Namespace) -> int:
     config = load_config(args.config)
     with get_session_factory()() as session:
         report = build_exposure_closure(session, as_of=_datetime.now(_UTC))
+        formal_symbols = tuple()
+        try:
+            runs = sorted(
+                (config.report_dir / "daily-runs").glob("*/run_certificate.json"),
+                key=lambda item: item.stat().st_mtime,
+                reverse=True,
+            )
+            if runs:
+                certificate = json.loads(runs[0].read_text(encoding="utf-8"))
+                formal_symbols = tuple(
+                    str(item.get("symbol"))
+                    for item in (certificate.get("decision_recommendations") or [])
+                    if isinstance(item, dict) and item.get("symbol")
+                )
+        except (OSError, ValueError):
+            formal_symbols = ()
+        report["current_size_exposure"] = build_current_size_exposure(
+            session, as_of=_datetime.now(_UTC), target_symbols=formal_symbols
+        )
+        report["current_sector_exposure"] = build_current_sector_exposure(
+            sector_rows={symbol: None for symbol in formal_symbols},
+            target_symbols=formal_symbols,
+            classification_source="SEC_SIC",
+        )
     artifacts = config.report_dir / "validation-artifacts"
     artifacts.mkdir(parents=True, exist_ok=True)
     (artifacts / "round25_exposure_closure.json").write_text(

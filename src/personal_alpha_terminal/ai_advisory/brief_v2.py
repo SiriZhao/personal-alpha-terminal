@@ -21,10 +21,15 @@ from datetime import UTC, datetime
 from typing import Any
 
 from personal_alpha_terminal.agents.llm.schemas import LLMRequest
+from personal_alpha_terminal.ai_advisory.facts_v3 import build_facts_v3
 from personal_alpha_terminal.ai_advisory.grounding import (
     GROUNDING_OK,
     GROUNDING_QUARANTINED,
     validate_semantic_grounding,
+)
+from personal_alpha_terminal.ai_advisory.grounding_v3 import (
+    SECTION_LEVEL_QUARANTINED,
+    quarantine_sections,
 )
 from personal_alpha_terminal.ai_advisory.schemas import (
     LLM_BUY_SELL_AUTHORITY,
@@ -561,6 +566,7 @@ class AiBriefV2Result:
     usage: dict[str, Any] = field(default_factory=dict)
     semantic_grounding_status: str = GROUNDING_OK
     semantic_grounding_issues: tuple[str, ...] = ()
+    section_report: dict[str, Any] = field(default_factory=dict)
     generated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     production_influence: str = PRODUCTION_INFLUENCE
 
@@ -581,6 +587,7 @@ class AiBriefV2Result:
             },
             "semantic_grounding_status": self.semantic_grounding_status,
             "semantic_grounding_issues": list(self.semantic_grounding_issues),
+            "section_report": dict(self.section_report),
             "generated_at": self.generated_at.isoformat(),
             "production_influence": self.production_influence,
         }
@@ -599,6 +606,7 @@ class AiBriefV2Service:
         market_state: dict[str, Any] | None = None,
         news: dict[str, Any] | None = None,
         pre_execution: dict[str, Any] | None = None,
+        decision_manifest: dict[str, Any] | None = None,
     ) -> AiBriefV2Result:
         allowed_action = frozenset(facts.get("allowed_action_symbols", []))
         allowed_research = frozenset(facts.get("allowed_research_symbols", []))
@@ -678,12 +686,34 @@ class AiBriefV2Service:
                 facts, market_state=market_state, news=news, pre_execution=pre_execution
             )
         grounding_ok, grounding_issues = validate_semantic_grounding(brief, facts)
+        facts_v3 = build_facts_v3(
+            facts_v2=facts,
+            market_state=market_state,
+            news=news,
+            pre_execution=pre_execution,
+            decision_manifest=decision_manifest,
+        )
+        fallback_brief = build_deterministic_v2(
+            facts, market_state=market_state, news=news, pre_execution=pre_execution
+        )
         if source.startswith("DEEPSEEK") and not grounding_ok:
-            brief = build_deterministic_v2(
-                facts, market_state=market_state, news=news, pre_execution=pre_execution
-            )
+            brief = fallback_brief
             llm_status = "PASS_DEGRADED"
             source = GROUNDING_QUARANTINED
+        elif source.startswith("DEEPSEEK"):
+            # ROUND26 P0: section-level quarantine keeps healthy DeepSeek
+            # sections; only conflicting sections fall back.
+            brief, section_report = quarantine_sections(
+                brief, fallback_brief, facts_v3=facts_v3
+            )
+            if section_report["status"] == SECTION_LEVEL_QUARANTINED:
+                llm_status = "PASS_DEGRADED"
+                self._section_report = section_report
+            elif section_report["critical_failure"]:
+                brief = fallback_brief
+                llm_status = "PASS_DEGRADED"
+                source = GROUNDING_QUARANTINED
+        section_report = getattr(self, "_section_report", {})
         return AiBriefV2Result(
             run_id=run_id,
             model=model,
@@ -697,4 +727,5 @@ class AiBriefV2Service:
                 GROUNDING_OK if grounding_ok else GROUNDING_QUARANTINED
             ),
             semantic_grounding_issues=tuple(grounding_issues),
+            section_report=section_report,
         )

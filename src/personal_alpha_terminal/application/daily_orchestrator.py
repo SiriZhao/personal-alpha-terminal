@@ -55,6 +55,10 @@ from personal_alpha_terminal.probability.forward_ledger import (
     ProbabilityForwardLedger,
     build_prediction,
 )
+from personal_alpha_terminal.application.current_exposure import (
+    build_current_sector_exposure,
+    build_current_size_exposure,
+)
 from personal_alpha_terminal.application.pre_execution import (
     PreExecutionCheck,
     build_assessment,
@@ -416,6 +420,10 @@ class DailyQuantOrchestrator:
             run_identity=run_identity,
             decision_as_of=effective_decision_time,
         )
+        current_exposure = self._build_current_exposure(
+            workflow_result=workflow_result,
+            decision_as_of=effective_decision_time,
+        )
         stage_started = perf_counter()
         pre_execution = self._add_pre_execution_stage(
             stages,
@@ -452,6 +460,7 @@ class DailyQuantOrchestrator:
             ai_brief=ai_brief,
             pre_execution=pre_execution,
             run_identity=run_identity,
+            current_exposure=current_exposure,
         )
         return self._persist_result(result)
 
@@ -531,6 +540,50 @@ class DailyQuantOrchestrator:
             # Forward-ledger writes are research-only; a failed append must
             # never block the production chain.
             return
+
+    def _build_current_exposure(
+        self,
+        *,
+        workflow_result: TodayResult,
+        decision_as_of: datetime,
+    ) -> dict[str, object] | None:
+        """ROUND26 P0: current operational size/sector exposure evidence."""
+
+        symbols = tuple(
+            item.symbol for item in workflow_result.recommendations if item.symbol
+        )
+        if not symbols:
+            return None
+        try:
+            with self._factory.begin() as session:
+                size = build_current_size_exposure(
+                    session,
+                    as_of=decision_as_of,
+                    target_symbols=symbols,
+                )
+        except (OSError, SQLAlchemyError, ValueError):
+            size = {
+                "exposure_kind": "CURRENT_OPERATIONAL",
+                "status": "SIZE_RISK_DEGRADED",
+                "size_coverage": 0.0,
+                "portfolio_unknown_size_weight": 1.0,
+                "missing_never_assumed_large_cap": True,
+                "detail": "size evidence unavailable; honest degraded status",
+            }
+        # Sector: no verifiable full-universe issuer SIC feed is available in
+        # this environment; the classification stays honestly UNKNOWN rather
+        # than fabricated.
+        sector = build_current_sector_exposure(
+            sector_rows={symbol: None for symbol in symbols},
+            target_symbols=symbols,
+            classification_source="SEC_SIC",
+        )
+        return {
+            "size_exposure": size,
+            "sector_exposure": sector,
+            "exposure_kind": "CURRENT_OPERATIONAL",
+            "historical_pit_boundary": "CURRENT DATA NEVER USED FOR HISTORICAL NEUTRALIZATION",
+        }
 
     def _add_etf_sleeve_stage(
         self,
@@ -1322,6 +1375,7 @@ class DailyQuantOrchestrator:
         ai_brief: dict[str, object] | None = None,
         pre_execution: dict[str, object] | None = None,
         run_identity: RunIdentity | None = None,
+        current_exposure: dict[str, object] | None = None,
     ) -> DailyQuantResult:
         actionable = workflow.status in {"GENERATED", "NO_DECISION"} and not blockers
         data_cutoff = self._resolved_data_cutoff(stages, workflow.data_cutoff)
@@ -1803,6 +1857,7 @@ class DailyQuantOrchestrator:
             ai_brief=ai_brief,
             pre_execution=pre_execution,
             decision_manifest=decision_manifest,
+            current_exposure=current_exposure,
         )
 
     @staticmethod
@@ -2280,6 +2335,20 @@ class DailyQuantOrchestrator:
                     encoding="utf-8",
                 )
                 temporary.replace(etf_path)
+            if updated.current_exposure is not None:
+                run_directory = self._snapshot_root / updated.run_id
+                exposure_path = run_directory / "current_exposure.json"
+                temporary = exposure_path.with_suffix(".json.tmp")
+                temporary.write_text(
+                    _json.dumps(
+                        updated.current_exposure,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        default=str,
+                    ),
+                    encoding="utf-8",
+                )
+                temporary.replace(exposure_path)
             if updated.decision_manifest is not None:
                 run_directory = self._snapshot_root / updated.run_id
                 manifest_path = run_directory / "decision_manifest.json"
