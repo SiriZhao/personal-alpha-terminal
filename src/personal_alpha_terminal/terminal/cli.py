@@ -1932,16 +1932,63 @@ def _news_command(args: argparse.Namespace) -> int:
         )
         return 0
     if getattr(args, "news_action", None) == "acquire":
-        result = service.acquire(
-            decision_as_of=now,
-            providers={
-                "official-macro": __import__(
-                    "personal_alpha_terminal.intelligence.market_news",
-                    fromlist=["OfficialMacroNewsProvider"],
-                ).OfficialMacroNewsProvider(enabled=False),
-            },
+        from personal_alpha_terminal.intelligence.macro_news import (
+            OfficialMacroAcquisition,
         )
-        console.print(result.status)
+
+        try:
+            macro = OfficialMacroAcquisition().acquire()
+        except (OSError, ValueError, TimeoutError) as error:
+            console.print(f"OFFICIAL_MACRO_NEWS_UNAVAILABLE: {error}")
+            return 0
+        if macro["items"]:
+            from personal_alpha_terminal.intelligence.market_news import (
+                NewsItem,
+                NewsSourceTier,
+            )
+
+            items = []
+            for row in macro["items"]:
+                published_raw = row.get("published_at")
+                published_at = (
+                    _datetime.fromisoformat(published_raw)
+                    if isinstance(published_raw, str)
+                    else now
+                )
+                if published_at.tzinfo is None:
+                    published_at = published_at.replace(tzinfo=_UTC)
+                items.append(
+                    NewsItem(
+                        news_id=str(row["news_id"]),
+                        source=str(row["source"]),
+                        source_tier=str(row["source_tier"]),
+                        headline=str(row["headline"]),
+                        summary=str(row.get("summary", "")),
+                        published_at=published_at,
+                        retrieved_at=_datetime.fromisoformat(str(row["retrieved_at"]))
+                        if isinstance(row.get("retrieved_at"), str)
+                        else now,
+                        available_at=published_at,
+                        url_hash=str(row["url_hash"]),
+                        content_hash=str(row["content_hash"]),
+                        topics=tuple(str(item) for item in (row.get("topics") or ())),
+                        country="US",
+                        language="en",
+                        evidence_state=str(row.get("evidence_state", "RAW_OFFICIAL")),
+                    )
+                )
+            appended = ledger.append_items(tuple(items))
+            clusters = __import__(
+                "personal_alpha_terminal.intelligence.market_news",
+                fromlist=["cluster_news"],
+            ).cluster_news(tuple(items))
+            ledger.write_clusters(clusters)
+            console.print(
+                f"OFFICIAL_MACRO_NEWS_OK appended={appended} "
+                f"clusters={len(clusters)} (no fabricated news)"
+            )
+        else:
+            console.print(f"{macro.get('status')}: {macro.get('provider_statuses')}")
         return 0
     for row in rows[: (None if getattr(args, "full", False) else 20)]:
         console.print(

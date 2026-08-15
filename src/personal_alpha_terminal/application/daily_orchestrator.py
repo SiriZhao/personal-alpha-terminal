@@ -882,16 +882,41 @@ class DailyQuantOrchestrator:
                 market_state_doc = None
             news_doc: dict[str, object] | None = None
             try:
-                news_result = NewsIntelligenceService().acquire(
+                from personal_alpha_terminal.intelligence.macro_news import (
+                    OfficialMacroAcquisition,
+                )
+
+                macro = OfficialMacroAcquisition().acquire()
+                macro_items = macro.get("items") or []
+                macro_news = (
+                    {"clusters": macro_items, "provider_statuses": macro.get("provider_statuses")}
+                    if macro_items
+                    else {"clusters": [], "status": macro.get("status")}
+                )
+                general = NewsIntelligenceService().acquire(
                     decision_as_of=as_of,
                     providers={},
-                )
-                news_doc = news_result.document()
-            except (OSError, ValueError):
-                news_doc = None
+                ).document()
+                news_doc = {
+                    "macro_news": macro_items,
+                    "general_status": general.get("status"),
+                    "clusters": macro_items,
+                    "provider_statuses": macro.get("provider_statuses"),
+                    "fabricated": False,
+                }
+            except (OSError, ValueError, TimeoutError):
+                news_doc = {
+                    "clusters": [],
+                    "status": "OFFICIAL_MACRO_NEWS_UNAVAILABLE",
+                    "fabricated": False,
+                }
             from personal_alpha_terminal.ai_advisory.brief_v2 import AiBriefV2Service
 
             v2_service = AiBriefV2Service()
+            # ROUND26 P0: the decision manifest hash does not exist yet at AI
+            # brief time (two-phase identity); the brief cites only run:/
+            # decision: identities which already exist.  The sealed manifest
+            # is attached to the final certificate.
             brief_result = v2_service.generate(
                 run_id=run_id,
                 facts=facts,
@@ -899,6 +924,7 @@ class DailyQuantOrchestrator:
                 provider_factory=provider_factory,
                 market_state=market_state_doc,
                 news=news_doc,
+                decision_manifest=None,
             )
             stages["AI_BRIEF"] = StageResult(
                 "AI_BRIEF",
@@ -924,6 +950,7 @@ class DailyQuantOrchestrator:
                     "semantic_grounding_status": (
                         brief_result.semantic_grounding_status
                     ),
+                    "section_report": brief_result.section_report,
                     "production_influence": PRODUCTION_INFLUENCE,
                     "trade_authority": "NONE",
                     "target_weight_authority": "NONE",
