@@ -174,13 +174,13 @@ def write_round32_audit_artifacts(
     }
 
     audit["acceptance"] = {
-        "ROUND32_FULL_REPLAY": audit["ROUND32_FULL_REPLAY"]["status"],  # type: ignore[union-attr]
-        "RUN_INPUT_PERSISTENCE": audit["RUN_INPUT_PERSISTENCE"]["status"],  # type: ignore[union-attr]
-        "NO_FUTURE_REHYDRATION": audit["NO_FUTURE_REHYDRATION"]["status"],  # type: ignore[union-attr]
-        "IMMUTABILITY": audit["IMMUTABILITY"]["status"],  # type: ignore[union-attr]
-        "ROUND27_FULL_REPLAY": audit["ROUND27_FULL_REPLAY"]["status"],  # type: ignore[union-attr]
+        "ROUND32_FULL_REPLAY": _audit_status(audit, "ROUND32_FULL_REPLAY"),
+        "RUN_INPUT_PERSISTENCE": _audit_status(audit, "RUN_INPUT_PERSISTENCE"),
+        "NO_FUTURE_REHYDRATION": _audit_status(audit, "NO_FUTURE_REHYDRATION"),
+        "IMMUTABILITY": _audit_status(audit, "IMMUTABILITY"),
+        "ROUND27_FULL_REPLAY": _audit_status(audit, "ROUND27_FULL_REPLAY"),
     }
-    payload = {
+    sealed_payload: dict[str, object] = {
         "schema_version": AUDIT_SCHEMA,
         "acceptance_run_id": acceptance_run_id,
         "decision_manifest_semantic_hash": manifest.get("decision_manifest_semantic_hash"),
@@ -189,7 +189,7 @@ def write_round32_audit_artifacts(
     }
     path = output_dir / "round32_run_bundle_audit.json"
     path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, default=str),
+        json.dumps(sealed_payload, ensure_ascii=False, indent=2, default=str),
         encoding="utf-8",
     )
     return {"audit": path}
@@ -197,3 +197,14 @@ def write_round32_audit_artifacts(
 
 def _as_dict(value: object) -> dict[str, object]:
     return value if isinstance(value, dict) else {}
+
+
+def _audit_status(audit: dict[str, object], section: str) -> str:
+    """Extract a section's string status from the audit payload (typed)."""
+
+    entry = audit.get(section)
+    if isinstance(entry, dict):
+        status = entry.get("status")
+        if isinstance(status, str):
+            return status
+    return "UNAVAILABLE"

@@ -547,6 +547,8 @@ def _as_optional_text(value: object) -> str | None:
 def _as_optional_float(value: object) -> float | None:
     if value is None:
         return None
+    if not isinstance(value, (int, float, str)):
+        return None
     try:
         parsed = float(value)
     except (TypeError, ValueError):
@@ -559,6 +561,8 @@ def _as_float_strict(value: object, name: str) -> float:
 
     if value is None:
         raise ValueError(f"persisted bundle is missing required numeric field: {name}")
+    if not isinstance(value, (int, float, str)):
+        raise ValueError(f"persisted bundle contains a malformed numeric field: {name}")
     try:
         return float(value)
     except (TypeError, ValueError):
@@ -572,8 +576,10 @@ def _as_int_strict(value: object, name: str) -> int:
 
     if value is None:
         raise ValueError(f"persisted bundle is missing required integer field: {name}")
+    if not isinstance(value, (int, float, str)):
+        raise ValueError(f"persisted bundle contains a malformed integer field: {name}")
     try:
-        return int(value)  # type: ignore[arg-type]
+        return int(value)
     except (TypeError, ValueError):
         raise ValueError(
             f"persisted bundle contains a malformed integer field: {name}"
@@ -627,7 +633,9 @@ def _serialize_returns_frame(frame: pd.DataFrame) -> dict[str, object]:
 
 def _deserialize_returns_frame(payload: dict[str, object]) -> pd.DataFrame:
     columns = [_as_text(item, "") for item in _list(payload.get("columns"))]
-    index = [datetime.fromisoformat(item) for item in _list(payload.get("index"))]
+    index = [
+        datetime.fromisoformat(cast(str, item)) for item in _list(payload.get("index"))
+    ]
     raw = payload.get("values")
     if not isinstance(raw, list):
         raise ValueError("persisted returns values are missing")
@@ -845,7 +853,7 @@ def build_input_sections(
             "model_version": _as_text(risk.model_version) if risk is not None else "UNAVAILABLE",
             "status": _as_text(risk.status.value) if risk is not None else "UNAVAILABLE",
             "observations": int(risk.observations) if risk is not None else 0,
-            "returns_window": risk_payload["returns_window_identity"],  # type: ignore[arg-type]
+            "returns_window": risk_payload["returns_window_identity"],
             "covariance_blob": digests.get("covariance", "UNAVAILABLE"),
             "correlation_blob": digests.get("correlation", "UNAVAILABLE"),
             "returns_blob": digests["returns"],
@@ -916,9 +924,15 @@ def build_input_sections(
         "cash_weight": float(target.cash_weight) if target is not None else 1.0,
         "expected_alpha": float(target.expected_alpha) if target is not None else 0.0,
         "expected_volatility": (
-            float(target.expected_volatility) if target is not None else None
+            float(target.expected_volatility)
+            if target is not None and target.expected_volatility is not None
+            else None
         ),
-        "expected_beta": float(target.expected_beta) if target is not None else None,
+        "expected_beta": (
+            float(target.expected_beta)
+            if target is not None and target.expected_beta is not None
+            else None
+        ),
         "turnover": float(target.turnover) if target is not None else 0.0,
         "estimated_transaction_cost": (
             float(target.estimated_transaction_cost) if target is not None else 0.0
@@ -995,7 +1009,7 @@ def stage_run_bundle(
         operational_mode=operational_mode,
         store=store.blobs,
     )
-    manifest = {
+    manifest: dict[str, object] = {
         "schema_version": BUNDLE_SCHEMA_VERSION,
         "run_id": run_id,
         "decision_id": decision_id,
@@ -1266,7 +1280,6 @@ def reconstruct_optimizer_inputs(
         portfolio_value=portfolio_value,
         current_weights=current_weights,
     ), recorded
-    )
 
 
 @dataclass(frozen=True, slots=True)

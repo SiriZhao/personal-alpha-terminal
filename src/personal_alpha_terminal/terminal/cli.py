@@ -2304,6 +2304,8 @@ def _run_bundle_command(args: argparse.Namespace) -> int:
         except FileNotFoundError as error:
             console.print(str(error))
             return 1
+        sections_raw = manifest.get("sections", {})
+        section_names = sections_raw.keys() if isinstance(sections_raw, dict) else ()
         console.print(
             json.dumps(
                 {
@@ -2313,9 +2315,7 @@ def _run_bundle_command(args: argparse.Namespace) -> int:
                         "decision_manifest_semantic_hash"
                     ),
                     "bundle_hash": manifest.get("bundle_hash"),
-                    "sections": sorted(
-                        str(item) for item in manifest.get("sections", {}).keys()
-                    ),
+                    "sections": sorted(str(item) for item in section_names),
                     "blob_digests": manifest.get("blob_digests"),
                 },
                 ensure_ascii=False,
@@ -2333,29 +2333,32 @@ def _run_bundle_command(args: argparse.Namespace) -> int:
         return 0 if report.get("status") == "INTEGRITY_PASS" else 1
     if action == "replay":
         try:
-            report = replay_run_bundle(store=store, run_id=args.run_id)
+            replay_report = replay_run_bundle(store=store, run_id=args.run_id)
         except FileNotFoundError as error:
             console.print(str(error))
             return 1
         artifacts = config.report_dir / "validation-artifacts"
         artifacts.mkdir(parents=True, exist_ok=True)
         (artifacts / f"run_bundle_replay_{args.run_id}.json").write_text(
-            json.dumps(report.document(), ensure_ascii=False, indent=2, default=str),
+            json.dumps(
+                replay_report.document(), ensure_ascii=False, indent=2, default=str
+            ),
             encoding="utf-8",
         )
         console.print(
-            f"{report.status} run={report.run_id}\n"
-            f"bundle_hash={report.bundle_hash}\n"
-            f"decision_manifest_semantic_hash={report.decision_manifest_semantic_hash}\n"
-            f"occurrence={report.replay_occurrence_id}\n"
-            f"detail={report.detail}"
+            f"{replay_report.status} run={replay_report.run_id}\n"
+            f"bundle_hash={replay_report.bundle_hash}\n"
+            "decision_manifest_semantic_hash="
+            f"{replay_report.decision_manifest_semantic_hash}\n"
+            f"occurrence={replay_report.replay_occurrence_id}\n"
+            f"detail={replay_report.detail}"
         )
-        for metric in report.metrics:
+        for metric in replay_report.metrics:
             console.print(
                 f"  {metric.name}: recorded={metric.recorded} "
                 f"replayed={metric.replayed} passed={metric.passed}"
             )
-        return 0 if report.status == "REPLAY_PASS" else 1
+        return 0 if replay_report.status == "REPLAY_PASS" else 1
     console.print(f"unknown run-bundle action: {action}")
     return 2
 
@@ -2390,6 +2393,45 @@ def _round32_audit_command(args: argparse.Namespace) -> int:
     )
     for name, path in paths.items():
         console.print(f"{name}: {path.resolve()}")
+    return 0
+
+
+def _round33_audit_command(args: argparse.Namespace) -> int:
+    """ROUND33: write corrected performance evidence artifacts."""
+
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session, sessionmaker
+
+    from personal_alpha_terminal.application.round33_audit import (
+        write_round33_artifacts,
+    )
+
+    config = load_config(args.config)
+    engine = create_engine(f"sqlite:///{args.database}")
+    factory = sessionmaker(bind=engine, expire_on_commit=False, class_=Session)
+    decision_time = (
+        datetime.fromisoformat(args.as_of)
+        if args.as_of
+        else datetime.now(UTC)
+    )
+    if decision_time.tzinfo is None:
+        decision_time = decision_time.replace(tzinfo=UTC)
+    artifacts = config.report_dir / "validation-artifacts"
+    try:
+        with factory() as session:
+            result = write_round33_artifacts(
+                artifacts,
+                session=session,
+                decision_time=decision_time,
+                history_start=date.fromisoformat(args.history_start),
+                acceptance_run=args.acceptance_run,
+            )
+    except (OSError, RuntimeError, TypeError, ValueError) as error:
+        console.print(f"ROUND 33 research failed closed: {error}")
+        return 2
+    console.print("[bold]ROUND33 QUANT PERFORMANCE CLOSURE[/bold]")
+    console.print(f"Artifacts: {artifacts}")
+    console.print(json.dumps(result["summary"], ensure_ascii=False, indent=2))
     return 0
 
 
@@ -3372,6 +3414,30 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Acceptance run id (default: latest sealed bundle)",
     )
+    audit33 = subparsers.add_parser(
+        "round33-audit",
+        help="Write ROUND33 corrected performance evidence artifacts",
+    )
+    audit33.add_argument(
+        "--database",
+        type=Path,
+        default=Path("var/personal_alpha.db"),
+    )
+    audit33.add_argument(
+        "--as-of",
+        default=None,
+        help="Research decision time (ISO-8601; default now UTC)",
+    )
+    audit33.add_argument(
+        "--history-start",
+        default="2024-01-01",
+        help="History start date",
+    )
+    audit33.add_argument(
+        "--acceptance-run",
+        default="daily-33c600f064504fd9a71a596e36080fe6",
+        help="ROUND32 acceptance run id",
+    )
     audit28.add_argument("--output-dir", type=Path, default=None)
     labs = subparsers.add_parser(  # noqa: E501
         "research-labs", help="ROUND25 research promotion labs (never auto-promote)"
@@ -3893,6 +3959,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run_bundle_command(args)
         if command == "round32-audit":
             return _round32_audit_command(args)
+        if command == "round33-audit":
+            return _round33_audit_command(args)
         if command == "stress-exam-v21":
             return _stress_exam_v21_command(args)
         if command == "exposure-audit":

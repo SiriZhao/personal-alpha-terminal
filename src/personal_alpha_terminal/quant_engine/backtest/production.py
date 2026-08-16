@@ -73,8 +73,11 @@ class BacktestTarget:
             raise ValueError("backtest target signal_time must be timezone-aware")
         if self.earliest_execution_date <= self.signal_time.date():
             raise ValueError("target must execute after the signal date")
-        if self.validation_status != "PRODUCTION_APPROVED":
-            raise ValueError("backtest target must be production approved")
+        if self.validation_status not in {
+            "PRODUCTION_APPROVED",
+            "RESEARCH_SURVIVORSHIP_LIMITED",
+        }:
+            raise ValueError("backtest target has an invalid validation status")
         if not self.data_version.strip() or not self.model_version.strip():
             raise ValueError("backtest target requires immutable versions")
         if not self.parameter_lock_fingerprint.strip() or not self.oos_validation_id.strip():
@@ -215,8 +218,14 @@ class ProductionBacktestResult:
 class ProductionBacktestEngine:
     """Raw-price, next-session event-driven accounting engine."""
 
-    def __init__(self, cost_model: TransactionCostModel | None = None) -> None:
+    def __init__(
+        self,
+        cost_model: TransactionCostModel | None = None,
+        *,
+        research_mode: bool = False,
+    ) -> None:
         self.cost_model = cost_model or TransactionCostModel()
+        self.research_mode = research_mode
 
     def run(
         self,
@@ -226,8 +235,12 @@ class ProductionBacktestEngine:
         *,
         sectors: dict[int, str],
     ) -> ProductionBacktestResult:
-        limitations = _validate_dataset(dataset, config)
-        _validate_targets(dataset, targets)
+        limitations = (
+            _validate_research_dataset(dataset, config)
+            if self.research_mode
+            else _validate_dataset(dataset, config)
+        )
+        _validate_targets(dataset, targets, research_mode=self.research_mode)
         bars = {(item.trade_date, item.asset_id): item for item in dataset.bars}
         symbols = {item.asset_id: item.symbol for item in dataset.bars}
         target_by_date = {item.earliest_execution_date: item for item in targets}
@@ -467,7 +480,11 @@ class ProductionBacktestEngine:
         }
         manifest_hash = sha256(dumps(manifest_payload, sort_keys=True).encode()).hexdigest()
         return ProductionBacktestResult(
-            status=("PRODUCTION_APPROVED" if not limitations else "RESEARCH_ONLY"),
+            status=(
+                "RESEARCH_SURVIVORSHIP_LIMITED_BACKTEST"
+                if self.research_mode
+                else ("PRODUCTION_APPROVED" if not limitations else "RESEARCH_ONLY")
+            ),
             points=tuple(points),
             trades=tuple(trades),
             metrics=metrics,
@@ -667,11 +684,98 @@ def _validate_dataset(
     return tuple(limitations)
 
 
+def _validate_research_dataset(
+    dataset: ProductionBacktestDataset,
+    config: ProductionBacktestConfig,
+) -> tuple[str, ...]:
+    """Validate research-only parity input without certifying survivorship.
+
+    This deliberately reuses the same bar/calendar/cost accounting paths as the
+    production engine while making the missing historical evidence explicit.
+    """
+
+    if len(dataset.calendar) < config.minimum_sessions:
+        raise ValueError("research backtest has insufficient verified sessions")
+    if tuple(sorted(set(dataset.calendar))) != dataset.calendar:
+        raise ValueError("trading calendar must be sorted and unique")
+    if not dataset.calendar_source.strip() or not dataset.data_version.strip():
+        raise ValueError("calendar and data version lineage are required")
+    if dataset.market != "US":
+        raise ValueError("research backtest currently supports the US market only")
+    if dataset.execution_price_policy != "RAW_OHLC":
+        raise ValueError("execution must use raw, unadjusted OHLC prices")
+    if dataset.return_policy != "RESEARCH_RAW_OHLC_CORPORATE_ACTION_LIMITED":
+        raise ValueError("research return policy must be explicitly corporate-action limited")
+    if any(item.weekday() >= 5 for item in dataset.calendar):
+        raise ValueError("research calendar contains weekend sessions")
+    if not dataset.universe_timeline:
+        raise ValueError("research PIT-like universe timeline is required")
+    calendar = set(dataset.calendar)
+    seen: set[tuple[date, int]] = set()
+    providers: dict[int, set[tuple[str, str | None]]] = {}
+    open_tradable_unconfirmed = False
+    for bar in dataset.bars:
+        key = (bar.trade_date, bar.asset_id)
+        if key in seen:
+            raise ValueError("duplicate research backtest bar")
+        seen.add(key)
+        if bar.trade_date not in calendar:
+            raise ValueError("bar is outside the research calendar")
+        if bar.event_time is None or bar.available_time is None or bar.ingested_time is None:
+            raise ValueError("research bar lacks three-time lineage")
+        if not all(
+            isfinite(value) and value > 0
+            for value in (bar.open, bar.high, bar.low, bar.close)
+        ):
+            raise ValueError("research bar has invalid raw prices")
+        if bar.market != dataset.market:
+            raise ValueError("research bar market does not match dataset market")
+        if bar.event_time != market_close_utc(bar.trade_date, dataset.market):
+            raise ValueError("research bar event_time does not match the US market close")
+        if not (bar.event_time <= bar.available_time <= bar.ingested_time):
+            raise ValueError("research bar violates event/available/ingested ordering")
+        if not bar.source.strip() or not (bar.provider and bar.provider.strip()):
+            raise ValueError("research bar lacks source/provider lineage")
+        if bar.open_tradable is not True:
+            open_tradable_unconfirmed = True
+        providers.setdefault(bar.asset_id, set()).add((bar.source, bar.provider))
+    stitched = {
+        asset_id: values for asset_id, values in providers.items() if len(values) != 1
+    }
+    if stitched:
+        raise ValueError(f"provider stitching is forbidden in one immutable run: {stitched}")
+    limitations = [
+        "SURVIVORSHIP_BIAS_RISK",
+        "CORPORATE_ACTION_LEDGER_MISSING",
+        "PRICE_BASED_RANKING",
+        "RESEARCH_ONLY",
+        "OPEN_TRADABILITY_ASSUMED_RESEARCH",
+    ]
+    if open_tradable_unconfirmed:
+        limitations.append("OPEN_TRADABILITY_UNCONFIRMED_IN_INPUT")
+    benchmark_dates = {item[0] for item in config.benchmark_returns}
+    expected_benchmark_dates = set(dataset.calendar[1:])
+    if not expected_benchmark_dates.issubset(benchmark_dates):
+        limitations.append("BENCHMARK_TOTAL_RETURN_COVERAGE_INCOMPLETE")
+    return tuple(limitations)
+
+
 def _validate_targets(
-    dataset: ProductionBacktestDataset, targets: tuple[BacktestTarget, ...]
+    dataset: ProductionBacktestDataset,
+    targets: tuple[BacktestTarget, ...],
+    *,
+    research_mode: bool = False,
 ) -> None:
     calendar_index = {session: index for index, session in enumerate(dataset.calendar)}
     for target in targets:
+        if research_mode:
+            if target.validation_status not in {
+                "RESEARCH_SURVIVORSHIP_LIMITED",
+                "PRODUCTION_APPROVED",
+            }:
+                raise ValueError("research backtest target has invalid validation status")
+        elif target.validation_status != "PRODUCTION_APPROVED":
+            raise ValueError("production backtest target must be production approved")
         signal_date = target.signal_time.date()
         signal_index = calendar_index.get(signal_date)
         if signal_index is None:

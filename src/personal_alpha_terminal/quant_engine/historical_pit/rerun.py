@@ -230,6 +230,7 @@ def run_historical_research(
         )
         ab = simple_portfolio_ab(
             labeled_panel,
+            price_panel=price_panel,
             dates=oos,
             benchmark=benchmark,
         )

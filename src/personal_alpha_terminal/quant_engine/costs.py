@@ -74,7 +74,11 @@ class TransactionCostModel:
             raise ValueError("known positive ADV is required for transaction-cost estimation")
         participation = trade_value / average_daily_dollar_volume
         if participation > self.config.maximum_adv_participation + 1e-12:
-            raise ValueError("trade exceeds configured ADV participation limit")
+            raise ValueError(
+                "trade exceeds configured ADV participation limit: "
+                f"trade={trade_value:.2f} adv={average_daily_dollar_volume:.2f} "
+                f"participation={participation:.6f}"
+            )
         commission = max(
             self.config.minimum_fee,
             trade_value * self.config.commission_bps / 10_000,

@@ -156,6 +156,36 @@ class PortfolioAB:
 
 
 @dataclass(frozen=True, slots=True)
+class WeightAllocationResult:
+    universe_count: int
+    selected_count: int
+    positive_selected_count: int
+    desired_gross: float
+    capacity: float
+    actual_gross: float
+    cash: float
+    max_weight: float
+    min_weight: float
+    sum_error: float
+    weights: tuple[tuple[str, float], ...]
+
+    def document(self) -> dict[str, object]:
+        return {
+            "universe_count": self.universe_count,
+            "selected_count": self.selected_count,
+            "positive_selected_count": self.positive_selected_count,
+            "desired_gross": self.desired_gross,
+            "capacity": self.capacity,
+            "actual_gross": self.actual_gross,
+            "cash": self.cash,
+            "max_weight": self.max_weight,
+            "min_weight": self.min_weight,
+            "sum_error": self.sum_error,
+            "weights": self.weights,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class Round4ResearchReport:
     run_id: str
     created_at: datetime
@@ -693,6 +723,7 @@ def factor_diagnostics(
 def simple_portfolio_ab(
     labeled_panel: pd.DataFrame,
     *,
+    price_panel: pd.DataFrame,
     dates: tuple[date, ...],
     benchmark: str,
     cost_config: TransactionCostConfig | None = None,
@@ -734,6 +765,7 @@ def simple_portfolio_ab(
         adjusted,
         alpha_column="expected_alpha",
         dates=dates,
+        price_panel=price_panel,
         top_fraction=top_fraction,
         maximum_weight=maximum_weight,
         minimum_cash=minimum_cash,
@@ -744,6 +776,7 @@ def simple_portfolio_ab(
         adjusted,
         alpha_column="adjusted_alpha",
         dates=dates,
+        price_panel=price_panel,
         top_fraction=top_fraction,
         maximum_weight=maximum_weight,
         minimum_cash=minimum_cash,
@@ -911,6 +944,7 @@ def run_round4_research(
             )
             portfolio_ab = simple_portfolio_ab(
                 labeled_with_probability,
+                price_panel=price_panel,
                 dates=oos,
                 benchmark=benchmark,
             )
@@ -1168,18 +1202,36 @@ def _simulate_weights(
     *,
     alpha_column: str,
     dates: tuple[date, ...],
+    price_panel: pd.DataFrame,
     top_fraction: float,
     maximum_weight: float,
     minimum_cash: float,
     cost_model: TransactionCostModel,
 ) -> tuple[list[float], float, float]:
-    if panel.empty:
-        return ([1.0], 0.0, 0.0)
+    required = {"trade_date", "ticker", "close", "volume"}
+    if price_panel.empty or not required.issubset(set(price_panel.columns)):
+        raise ValueError("COST_UNAVAILABLE: corrected portfolio simulation requires price/volume")
+    dollar_panel = price_panel.copy()
+    dollar_panel["dollar_volume"] = (
+        pd.to_numeric(dollar_panel["close"], errors="coerce")
+        * pd.to_numeric(dollar_panel["volume"], errors="coerce")
+    )
+    dollar_panel["trade_date"] = pd.to_datetime(
+        dollar_panel["trade_date"], errors="raise"
+    ).dt.date
     points: list[float] = [1.0]
     total_cost = 0.0
     total_turnover = 0.0
     current: dict[str, float] = {}
     for day in dates:
+        day_panel = dollar_panel[dollar_panel["trade_date"] < day]
+        prior_dates = sorted({item.date() for item in pd.to_datetime(day_panel["trade_date"])})
+        if len(prior_dates) < 10:
+            raise ValueError(f"COST_UNAVAILABLE: insufficient prior sessions before {day}")
+        prior_cutoff = prior_dates[-21:]
+        prior_panel = day_panel[
+            pd.to_datetime(day_panel["trade_date"]).dt.date.isin(prior_cutoff)
+        ]
         target = _target_weights(
             adjusted,
             alpha_column=alpha_column,
@@ -1200,20 +1252,114 @@ def _simulate_weights(
             abs(target.get(symbol, 0.0) - current.get(symbol, 0.0))
             for symbol in set(target) | set(current)
         )
-        trade_value = turnover * 1_000_000.0
-        try:
-            cost = cost_model.estimate(
-                trade_value=trade_value,
-                average_daily_dollar_volume=100_000_000.0,
-            ).total_cost
-        except ValueError:
-            cost = 0.0
-        cost_fraction = cost / 1_000_000.0
+        cost_fraction = 0.0
+        for symbol in set(target) | set(current):
+            delta = abs(target.get(symbol, 0.0) - current.get(symbol, 0.0))
+            if delta <= 1e-15:
+                continue
+            observations = prior_panel.loc[
+                prior_panel["ticker"] == symbol, "dollar_volume"
+            ].dropna()
+            if len(observations) < 10 or float(observations.mean()) <= 0:
+                raise ValueError(
+                    f"COST_UNAVAILABLE: no prior ADV for {symbol} before {day}"
+                )
+            estimate = cost_model.estimate(
+                trade_value=delta * 1_000_000.0,
+                average_daily_dollar_volume=float(observations.mean()),
+            )
+            cost_fraction += estimate.total_cost / 1_000_000.0
         total_cost += cost_fraction * 1_000_000.0
         total_turnover += turnover
         current = target
         points.append(points[-1] * (1.0 + period_return) * (1.0 - cost_fraction))
     return points, total_cost, total_turnover
+
+
+def allocate_positive_alpha_weights(
+    frame: pd.DataFrame,
+    *,
+    alpha_column: str,
+    top_fraction: float,
+    maximum_weight: float,
+    minimum_cash: float,
+) -> WeightAllocationResult:
+    """Allocate gross exposure only to positive-alpha selected securities.
+
+    The invariant is:
+
+    ``desired_gross = 1 - minimum_cash``
+    ``capacity = positive_selected_count * maximum_weight``
+    ``actual_gross = min(desired_gross, capacity)``
+    ``weight_per_asset = actual_gross / positive_selected_count``
+
+    This avoids the old double ``selected_count`` scaling and prevents using
+    pre-filter selected count for capacity.
+    """
+
+    if not 0 <= top_fraction <= 1:
+        raise ValueError("top_fraction must be in [0, 1]")
+    if maximum_weight <= 0 or not 0 <= minimum_cash <= 1:
+        raise ValueError("maximum_weight and minimum_cash must be valid fractions")
+    universe_count = len(frame)
+    selected_count = (
+        max(0, min(universe_count, int(round(universe_count * top_fraction))))
+        if universe_count
+        else 0
+    )
+    if selected_count == 0:
+        return WeightAllocationResult(
+            universe_count,
+            0,
+            0,
+            1.0 - minimum_cash,
+            0.0,
+            0.0,
+            1.0,
+            maximum_weight,
+            0.0,
+            0.0,
+            (),
+        )
+    ranked = frame.sort_values(alpha_column, ascending=False)
+    selected = ranked.head(selected_count)
+    positive = selected[pd.to_numeric(selected[alpha_column], errors="coerce") > 0]
+    positive_count = len(positive)
+    desired_gross = 1.0 - minimum_cash
+    capacity = positive_count * maximum_weight
+    actual_gross = min(desired_gross, capacity)
+    if positive_count == 0 or actual_gross <= 0:
+        return WeightAllocationResult(
+            universe_count,
+            selected_count,
+            0,
+            desired_gross,
+            capacity,
+            0.0,
+            1.0,
+            maximum_weight,
+            0.0,
+            0.0,
+            (),
+        )
+    weight = actual_gross / positive_count
+    if weight > maximum_weight + 1e-12:
+        raise ValueError("weight allocation violates maximum_weight")
+    weights = tuple((str(symbol), float(weight)) for symbol in positive["ticker"])
+    assigned = sum(item[1] for item in weights)
+    return WeightAllocationResult(
+        universe_count,
+        selected_count,
+        positive_count,
+        desired_gross,
+        capacity,
+        actual_gross,
+        1.0 - actual_gross,
+        maximum_weight,
+        min((item[1] for item in weights), default=0.0),
+        actual_gross - assigned,
+        weights,
+    )
 
 
 def _target_weights(
@@ -1230,17 +1376,14 @@ def _target_weights(
         day_rows = adjusted[pd.to_datetime(adjusted["as_of_date"]).dt.date == day]
         if day_rows.empty:
             continue
-        ranked = day_rows.sort_values(alpha_column, ascending=False)
-        selected_count = max(1, int(round(len(ranked) * top_fraction)))
-        selected = ranked.head(selected_count)
-        target_value = 1.0 - minimum_cash
-        cap_total = selected_count * maximum_weight
-        scale = min(1.0, target_value / cap_total) if cap_total > 0 else 0.0
-        output[day] = {
-            symbol: min(maximum_weight, target_value * scale / selected_count)
-            for symbol in selected["ticker"]
-            if float(selected.loc[selected["ticker"] == symbol, alpha_column].iloc[0]) > 0
-        }
+        allocation = allocate_positive_alpha_weights(
+            day_rows,
+            alpha_column=alpha_column,
+            top_fraction=top_fraction,
+            maximum_weight=maximum_weight,
+            minimum_cash=minimum_cash,
+        )
+        output[day] = dict(allocation.weights)
     return output
 
 
