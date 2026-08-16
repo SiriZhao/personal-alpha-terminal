@@ -2435,6 +2435,19 @@ def _round33_audit_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cockpit_command(args: argparse.Namespace) -> int:
+    """ROUND39: render the persisted Chinese daily decision cockpit."""
+
+    from personal_alpha_terminal.terminal.cockpit import render_daily_cockpit
+
+    config = load_config(args.config)
+    return render_daily_cockpit(
+        console,
+        reports_root=config.report_dir,
+        run_id=args.run_id,
+    )
+
+
 def _stress_exam_v21_command(args: argparse.Namespace) -> int:
     """ROUND25 PHASE 19: Stress Exam 2.1 with unchanged ROUND24 scenarios."""
 
@@ -3438,6 +3451,15 @@ def build_parser() -> argparse.ArgumentParser:
         default="daily-33c600f064504fd9a71a596e36080fe6",
         help="ROUND32 acceptance run id",
     )
+    cockpit = subparsers.add_parser(
+        "cockpit",
+        help="ROUND39 Chinese daily decision cockpit (read-only)",
+    )
+    cockpit.add_argument(
+        "--run-id",
+        default="daily-33c600f064504fd9a71a596e36080fe6",
+        help="Persisted daily run id",
+    )
     audit28.add_argument("--output-dir", type=Path, default=None)
     labs = subparsers.add_parser(  # noqa: E501
         "research-labs", help="ROUND25 research promotion labs (never auto-promote)"
@@ -3961,6 +3983,8 @@ def main(argv: list[str] | None = None) -> int:
             return _round32_audit_command(args)
         if command == "round33-audit":
             return _round33_audit_command(args)
+        if command == "cockpit":
+            return _cockpit_command(args)
         if command == "stress-exam-v21":
             return _stress_exam_v21_command(args)
         if command == "exposure-audit":
