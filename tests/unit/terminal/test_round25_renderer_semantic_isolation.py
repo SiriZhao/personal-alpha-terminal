@@ -187,7 +187,7 @@ def _result(
         ),
         blockers=(),
         warnings=(),
-        provenance={"probability_overlay": {"active": False, "state": "FALLBACK_CLASSICAL"}},
+        provenance={"probability_overlay": {"active": False, "state": "RESEARCH_ONLY"}},
         config_hash="test",
         model_versions=("test",),
         etf_universe={
@@ -226,7 +226,7 @@ def test_etf_research_candidates_never_render_as_buy() -> None:
     )
     output = _render(result)
     # The research section must exist with the isolation notice.
-    assert "研究候选" in output
+    assert "研究观察" in output
     assert "不执行" in output
     # ETF symbols appear only inside the research section context, never as a
     # BUY in the formal table: the formal list renders exactly one STOCK row.
@@ -269,3 +269,15 @@ def test_etf_research_targets_never_reach_execution_plan() -> None:
     leg_symbols = {leg.symbol for leg in result.execution_plan.legs}
     assert leg_symbols == {"VSTS"}
     assert "VOO" not in leg_symbols
+
+
+def test_round30_participation_panel_is_rendered_from_runtime_provenance() -> None:
+    result = _result(
+        decisions=(_decision("VSTS", 0.069, 513, 6943.57),),
+        etf_targets=(),
+    )
+    output = _render(result)
+    assert "本次正式参与决策" in output
+    assert "RESEARCH_ONLY / 0%" in output
+    assert "OBSERVATION_ONLY" in output
+    assert "ADVISORY_ONLY" in output

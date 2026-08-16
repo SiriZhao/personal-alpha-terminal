@@ -106,13 +106,20 @@ def _symbol_near_keyword(text: str, symbol: str, keywords: tuple[str, ...]) -> b
 
 
 def _find_percent_near(text: str, label: str) -> list[float]:
-    """Extract percentages appearing within _CASH_WINDOW of ``label``."""
+    """Extract the first percentage in the same clause as ``label``.
+
+    ROUND28: one label claim must not pull unrelated percentages from later
+    clauses (for example ``合计权重约19.17%，风险贡献合计约80.25%`` must not
+    treat 80.25% as a total-weight claim).
+    """
 
     found: list[float] = []
     for match in re.finditer(re.escape(label), text):
         window = text[match.start() : match.start() + _CASH_WINDOW]
-        for number in re.findall(r"(\d+(?:\.\d+)?)\s*%", window):
-            found.append(float(number))
+        clause = re.split(r"[,;。，；\n]", window, maxsplit=1)[0]
+        numbers = re.findall(r"(\d+(?:\.\d+)?)\s*%", clause)
+        if numbers:
+            found.append(float(numbers[0]))
     return found
 
 
@@ -186,7 +193,7 @@ def validate_semantic_grounding(
             if isinstance(item, dict)
         )
         if formal_gross > 0:
-            for label in ("总敞口", "总权重", "合计权重"):
+            for label in ("总敞口", "组合总权重", "总权重", "gross exposure"):
                 for value in _find_percent_near(text, label):
                     if abs(value / 100.0 - formal_gross) > _PCT_TOLERANCE:
                         issues.append(

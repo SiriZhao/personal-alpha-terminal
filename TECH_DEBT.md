@@ -15,7 +15,7 @@
 
 ## P1
 
-### TECH-ROUND24-001 ? ROUND24 ETF sleeve models are research candidates
+### TECH-ROUND24-001 — ROUND24 ETF sleeve models are research candidates
 
 - Severity: OPEN (2026-08-14)
 - Area: `instruments/`, `quant_engine/factors/etf_factors.py`,
@@ -29,7 +29,7 @@
   unchanged); the risk is mislabeling these outputs as certified in future
   rounds.
 
-### TECH-ROUND24-002 ? ETF look-through unavailable
+### TECH-ROUND24-002 — ETF look-through unavailable
 
 - Severity: OPEN (2026-08-14)
 - Area: `quant_engine/portfolio/etf_sleeves.py` (OverlapReport)
@@ -41,7 +41,7 @@
   carry hidden single-name overlap; current mitigation is the correlation
   warning plus explicit UNAVAILABLE labeling.
 
-### TECH-ROUND24-003 ? Size neutralization degraded (no PIT market-cap source)
+### TECH-ROUND24-003 — Size neutralization degraded (no PIT market-cap source)
 
 - Severity: OPEN (2026-08-14)
 - Area: `quant_engine/input_assembler.py`, `quant_engine/risk/model.py`,
@@ -54,7 +54,7 @@
 - Remaining risk: Size tilt is unmeasured for the operational path; the
   fail-closed label prevents pretending otherwise.
 
-### TECH-ROUND24-004 ? Regime v1 / drawdown governor research-only
+### TECH-ROUND24-004 — Regime v1 / drawdown governor research-only
 
 - Severity: OPEN (2026-08-14)
 - Area: `scenario_simulator/regime_engine_v1.py`,
@@ -66,7 +66,7 @@
 - Remaining risk: None for production today; future rounds must not
   hard-wire regime outputs into risk limits without evidence.
 
-### TECH-ROUND24-005 ? REAUTHORIZATION_REQUIRED after ROUND24
+### TECH-ROUND24-005 — REAUTHORIZATION_REQUIRED after ROUND24
 
 - Severity: OPEN (2026-08-14)
 - Area: `var/operational/strategy_approval.json`,
@@ -79,7 +79,6 @@
 - Remaining risk: Daily SIGNAL stays FAIL_BLOCKING until re-authorization.
 
 ## P1
-
 
 ### TECH-002 — Untracked root-level reports are not governed
 

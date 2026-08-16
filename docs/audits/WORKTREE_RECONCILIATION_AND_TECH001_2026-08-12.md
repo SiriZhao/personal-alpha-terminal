@@ -129,4 +129,4 @@ Working tree is clean after the final commits (only ignored runtime data remains
 - P0: none.
 - P1: TECH-002 (governance of future session reports; mitigated by history INDEX);
   TECH-003 (runtime evidence growth).
-- P2: TECH-004/005/006/007 unchanged from `docs/TECH_DEBT.md`.
+- P2: TECH-004/005/006/007 unchanged from `TECH_DEBT.md`.

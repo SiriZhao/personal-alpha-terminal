@@ -1,0 +1,32 @@
+{
+  "schema_version": "round27-acceptance-manifest-v1",
+  "acceptance_run_id": "daily-2420c68452d142298e6b42482341391f",
+  "classification": "VALID_ANALYSIS_ACTIONABLE_PROVISIONAL",
+  "decision_manifest": "reports/daily-runs/daily-2420c68452d142298e6b42482341391f/decision_manifest.json",
+  "decision_manifest_semantic_hash": "def9b6be383088f6dc6d88308cc80623c5733f710aa98fbbe95cf589d246d16b",
+  "certificate": "reports/daily-runs/daily-2420c68452d142298e6b42482341391f/run_certificate.json",
+  "performance_profile": "reports/validation-artifacts/daily_performance_trace.json",
+  "performance_diff": "reports/validation-artifacts/performance_diff.json",
+  "news_artifact": "reports/daily-runs/daily-2420c68452d142298e6b42482341391f/ai_brief.json",
+  "ai_artifact": "reports/daily-runs/daily-2420c68452d142298e6b42482341391f/ai_brief.json",
+  "forward_prediction_audit": "reports/validation-artifacts/forward_prediction_audit.json",
+  "risk_exposure_artifact": "reports/daily-runs/daily-2420c68452d142298e6b42482341391f/current_exposure.json",
+  "validation": {
+    "pytest": "1172 passed (2 unrelated Python 3.12 sqlite deprecation warnings)",
+    "quant_critical": "31 passed",
+    "quant_regression": "10 passed",
+    "future_leakage_and_semantic_isolation": "20 passed",
+    "ruff": "PASS",
+    "mypy_strict": "PASS (464 source files)",
+    "secret_scan": "SECRET_SCAN_PASS"
+  },
+  "invariants": {
+    "automatic_execution": "DISABLED",
+    "broker_api": "DISABLED",
+    "manual_confirmation": true,
+    "ai_trade_authority": "NONE",
+    "news_trade_authority": "NONE",
+    "probability_production_influence": 0.0,
+    "research_certification": "NOT_CERTIFIABLE"
+  }
+}

@@ -183,6 +183,9 @@ python scripts/export_broad_universe_probability_certifications.py --config conf
 python scripts/export_historical_data_acquisition.py --config config.yaml
 ```
 
-详细审计见 [Broad Universe 与 Probability Overlay 报告](docs/BROAD_UNIVERSE_PROBABILITY_OVERLAY_REPORT.md)。
+详细审计见 [ROUND21 Broad Universe PIT/Factor 收口](docs/audits/ROUND21_BROAD_UNIVERSE_PIT_FACTOR_ELIGIBILITY_CLOSURE_2026-08-14.md) 与
+[ROUND27 Forward Evidence / AI / News / Exposure](docs/audits/ROUND27_FORWARD_EVIDENCE_AI_NEWS_EXPOSURE_PERFORMANCE_2026-08-15.md)。
 
-更多资料：[Current status](docs/CURRENT_STATUS.md)、[中文终端架构](docs/CHINESE_TERMINAL_ARCHITECTURE.md)、[历史数据基础报告](docs/RESEARCH_DATA_FOUNDATION_REPORT.md)、[历史数据获取与认证报告](docs/HISTORICAL_DATA_ACQUISITION_REPORT.md)、[Provider 决策](docs/DATA_PROVIDER_DECISION.md)、[Alpha 研究认证报告](docs/ALPHA_RESEARCH_CERTIFICATION_REPORT.md)。
+更多资料：[Current status](docs/CURRENT_STATUS.md)、[架构](ARCHITECTURE.md)、
+[Repository Guide](REPOSITORY_GUIDE.md)、[Technical Debt](TECH_DEBT.md)、
+[docs 说明](docs/README.md)、[ROUND28 Production Integrity](docs/audits/ROUND28_PRODUCTION_DECISION_PROVENANCE_CARDINALITY_PARITY_2026-08-15.md)。

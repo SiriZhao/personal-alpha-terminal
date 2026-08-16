@@ -46,18 +46,24 @@ def render_brief_v2(brief: dict[str, Any]) -> str:
         ("九、企业 / SEC 重点事件", None),
         ("十、当前组合分析", "portfolio_risk_analysis"),
         ("十一、今日每个正式操作的逐项解释", None),
-        ("十二、ETF 研究候选解读", None),
-        ("十三、风险集中度分析", "portfolio_risk_analysis"),
-        ("十四、反方观点 / 风险质疑", "bear_case"),
-        ("十五、隔夜与开盘风险", "overnight_risk"),
-        ("十六、SPY / QQQ benchmark 对照", "index_analysis"),
-        ("十七、未来 1-5 个交易日需要重点观察的事项", None),
-        ("十八、数据 / 模型局限", None),
-        ("十九、最终人工执行提示", None),
+        ("十二、AI 对正式操作的看法", None),
+        ("十三、组合层 AI Review", None),
+        ("十四、AI 反方审查", None),
+        ("十五、ETF 研究观察 · 不需要操作", None),
+        ("十六、风险集中度分析", "portfolio_risk_analysis"),
+        ("十七、反方观点 / 风险质疑", "bear_case"),
+        ("十八、隔夜与开盘风险", "overnight_risk"),
+        ("十九、SPY / QQQ benchmark 对照", "index_analysis"),
+        ("二十、未来 1-5 个交易日需要重点观察的事项", None),
+        ("二十一、数据 / 模型局限", None),
+        ("二十二、最终人工执行提示", None),
     )
     news_rows = payload.get("important_news") or []
     sec_events = payload.get("sec_events") or []
     action_rows = payload.get("formal_action_explanations") or []
+    commentary_rows = payload.get("action_commentaries") or []
+    portfolio_review = payload.get("portfolio_review") or {}
+    devils_rows = payload.get("devils_advocate") or []
     etf_rows = payload.get("etf_research_analysis") or []
     uncertainties = payload.get("uncertainties") or []
     watchlist = payload.get("watchlist_next_sessions") or []
@@ -94,25 +100,65 @@ def render_brief_v2(brief: dict[str, Any]) -> str:
                     lines.append(f"证据引用:{row.get('evidence_refs', [])}")
                 if not action_rows:
                     lines.append("本轮没有正式操作建议。")
-            elif title == "十二、ETF 研究候选解读":
+            elif title == "十二、AI 对正式操作的看法":
+                for row in commentary_rows:
+                    lines.append(f"—— {row.get('ticker')} ({row.get('formal_action')})")
+                    lines.append(f"公司:{row.get('company_name', 'UNAVAILABLE')}")
+                    lines.append(
+                        f"LLM 观点:{row.get('llm_view', 'NEUTRAL')} | "
+                        f"支持度 {row.get('support_level', 0)}"
+                    )
+                    lines.append(f"业务摘要:{row.get('business_summary', '')}")
+                    lines.append(f"为何量化可能喜欢:{row.get('why_quant_may_like_it', '')}")
+                    lines.append(f"近期正面催化:{row.get('recent_positive_catalysts', [])}")
+                    lines.append(f"近期负面催化:{row.get('recent_negative_catalysts', [])}")
+                    lines.append(f"关键风险:{row.get('key_risks', [])}")
+                    lines.append(f"反方论证:{row.get('llm_counterargument', '')}")
+                    lines.append(f"人工复核重点:{row.get('human_review_focus', '')}")
+                    lines.append("")
+                if not commentary_rows:
+                    lines.append("本轮没有逐标的 AI commentary。")
+            elif title == "十三、组合层 AI Review":
+                if portfolio_review:
+                    lines.append(f"组合主题:{portfolio_review.get('theme', '')}")
+                    lines.append(f"行业集中:{portfolio_review.get('industry_concentration', {})}")
+                    lines.append(f"最大行业:{portfolio_review.get('top_sector', '')}")
+                    lines.append(f"主要风险:{portfolio_review.get('major_risk_sources', [])}")
+                    lines.append(f"现金评价:{portfolio_review.get('cash_level_comment', '')}")
+                    lines.append(
+                        "状态:AI_OPINION_NOT_A_FORMAL_INSTRUCTION;"
+                        "正式现金/权重/风险以 FormalFactPacket 为准。"
+                    )
+                else:
+                    lines.append("本轮没有组合层 AI Review。")
+            elif title == "十四、AI 反方审查":
+                for row in devils_rows:
+                    lines.append(f"—— {row.get('ticker')}")
+                    lines.append(f"失败模式:{row.get('quant_signal_failure_modes', [])}")
+                    lines.append(f"近期负面:{row.get('recent_negative_events', [])}")
+                    lines.append(f"结论:{row.get('conclusion', '')}")
+                if not devils_rows:
+                    lines.append("本轮没有反方审查记录。")
+            elif title == "十五、ETF 研究观察 · 不需要操作":
                 for row in etf_rows:
                     lines.append(
                         f"- {row.get('symbol')} [{row.get('sleeve')}] "
                         f"研究目标权重 {row.get('research_target_weight', '不适用')}"
                     )
+                    lines.append("  是否需要操作:否 | 交易权限:NONE / RESEARCH_ONLY")
                     lines.append(f"  指标:{row.get('metric_note', '不适用')}")
                     lines.append(f"  AI 解读:{row.get('ai_interpretation', '')}")
                 if not etf_rows:
-                    lines.append("当前没有 ETF 研究候选。")
-            elif title == "十七、未来 1-5 个交易日需要重点观察的事项":
+                    lines.append("当前没有 ETF 研究观察标的。")
+            elif title == "二十、未来 1-5 个交易日需要重点观察的事项":
                 for row in watchlist:
                     lines.append(f"- {row}")
-            elif title == "十八、数据 / 模型局限":
+            elif title == "二十一、数据 / 模型局限":
                 for row in limitations:
                     lines.append(f"- {row}")
                 for row in uncertainties:
                     lines.append(f"- 不确定性:{row}")
-            elif title == "十九、最终人工执行提示":
+            elif title == "二十二、最终人工执行提示":
                 for row in manual_notes:
                     lines.append(f"- {row}")
                 lines.append("- 请勿把研究候选当作正式持仓或订单。")

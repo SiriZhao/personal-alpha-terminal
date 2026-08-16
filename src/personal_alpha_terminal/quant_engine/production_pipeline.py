@@ -30,6 +30,7 @@ from personal_alpha_terminal.quant_engine.risk.budget import (
     DynamicRiskBudget,
     PortfolioRiskState,
     RegimeRiskInput,
+    RiskBudget,
 )
 from personal_alpha_terminal.quant_engine.risk.model import (
     AssetRiskMetadata,
@@ -87,6 +88,9 @@ class DailyQuantOutput:
     decision: ProductionDecision | None
     blockers: tuple[str, ...]
     stress: PortfolioStressReport | None = None
+    # ROUND32: the exact evaluated risk budget feeding the optimizer.  Persisted
+    # in the immutable run bundle so replay re-runs the same optimization.
+    risk_budget: RiskBudget | None = None
 
 
 class DailyQuantPipeline:
@@ -403,6 +407,7 @@ class DailyQuantPipeline:
             decision,
             (),
             stress,
+            budget,
         )
 
 

@@ -274,6 +274,9 @@ class DailyQuantResult:
     # ROUND26 P0: current operational size/sector exposure evidence
     # (strictly separated from historical PIT exposure).
     current_exposure: dict[str, object] | None = None
+    # ROUND28 P0: per-formal-decision immutable provenance (factor inputs,
+    # optimizer raw/constrained target, risk, cost, gates and hashes).
+    decision_provenance: dict[str, object] | None = None
 
     @property
     def duration_seconds(self) -> float:
@@ -488,11 +491,12 @@ class DailyQuantResult:
             "data": [_json_value(asdict(item)) for item in self.data_health],
             "factor_count": len(self.factors),
             "factor_statistics": _factor_statistics(self.factors),
-            "candidate_count": len(self.candidates),
+            "candidate_count": self._optimizer_candidate_count(),
             "signals": {
                 "universe_size": self.provenance.get("universe_count", 0),
                 "eligible": len(self.factors),
-                "top_candidates": [item.symbol for item in self.candidates],
+                "optimizer_candidate_count": self._optimizer_input_count(),
+                "display_top10_candidates": [item.symbol for item in self.candidates],
                 "rejected": len(self.rejected_signals),
             },
             "probability": [_json_value(asdict(item)) for item in self.probabilities],
@@ -519,7 +523,22 @@ class DailyQuantResult:
         }
         target = run_directory / "run_certificate.json"
         _atomic_json(target, certificate)
+        if self.decision_provenance is not None:
+            _atomic_json(
+                run_directory / "decision_provenance.json",
+                self.decision_provenance,
+            )
         return target
+
+    def _universe_evidence(self) -> dict[str, Any]:
+        evidence = self.provenance.get("universe_evidence")
+        return evidence if isinstance(evidence, dict) else {}
+
+    def _optimizer_candidate_count(self) -> int:
+        return int(str(self._universe_evidence().get("candidate_count", len(self.candidates))) or 0)
+
+    def _optimizer_input_count(self) -> int:
+        return int(str(self._universe_evidence().get("optimizer_input", 0)) or 0)
 
 
 def canonical_input_hash(result: DailyQuantResult) -> str:

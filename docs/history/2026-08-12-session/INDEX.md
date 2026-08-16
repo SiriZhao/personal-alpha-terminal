@@ -2,9 +2,9 @@
 
 These documents are **superseded session records** from one development session and
 are retained only for engineering history. They do **not** describe the current
-truth source. For current state, read `docs/CURRENT_STATUS.md`, `docs/ARCHITECTURE.md`,
-`docs/REPOSITORY_GUIDE.md`, `docs/TECH_DEBT.md`, and the latest run certificate under
-`reports/daily-runs/`.
+truth source. For current state, read `../../CURRENT_STATUS.md`, `../../ARCHITECTURE.md`,
+`../../REPOSITORY_GUIDE.md`, `../../TECH_DEBT.md`, and the latest run certificate under
+`../../reports/daily-runs/`.
 
 ## Superseded statuses in these reports
 

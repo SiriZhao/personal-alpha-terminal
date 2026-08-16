@@ -14,6 +14,7 @@ from personal_alpha_terminal.intelligence.market_news import (
     classify_news_time,
     cluster_news,
     headline_similarity,
+    materialize_news_facts,
 )
 
 AS_OF = datetime(2026, 8, 14, 8, 0, tzinfo=UTC)
@@ -177,3 +178,38 @@ def test_time_class_report_counts_are_honest(tmp_path) -> None:
     assert counts["DECISION_SAFE"] == 1
     assert counts["POST_DECISION_PRE_EXECUTION"] == 1
     assert counts["POST_EXECUTION_CONTEXT"] == 1
+
+
+def test_official_news_reaches_ai_facts_without_none_source_count() -> None:
+    item = NewsItem(
+        news_id="official-1",
+        source="official-fed",
+        source_tier=NewsSourceTier.TIER1_OFFICIAL.value,
+        headline="Federal Reserve issues FOMC statement",
+        summary="Official release",
+        published_at=AS_OF - timedelta(hours=1),
+        retrieved_at=AS_OF - timedelta(hours=1),
+        available_at=AS_OF - timedelta(hours=1),
+        url_hash="official-url",
+        content_hash="official-content",
+        topics=("MACRO", "FOMC"),
+    )
+    facts = materialize_news_facts(rows=(item.document(),), decision_as_of=AS_OF)
+    assert facts["pre_decision_news_count"] == 1
+    assert facts["ai_used_rows"] == 1
+    assert facts["clusters"][0]["source_count"] == 1
+
+
+def test_post_decision_counts_materialized_not_ai_eligible() -> None:
+    items = (
+        _item("pre", "Federal Reserve statement", available_at=AS_OF - timedelta(hours=1)),
+        _item("post", "Treasury update", available_at=AS_OF + timedelta(hours=1)),
+    )
+    facts = materialize_news_facts(
+        rows=tuple(item.document() for item in items),
+        decision_as_of=AS_OF,
+        execution_boundary=AS_OF + timedelta(hours=4),
+    )
+    assert facts["pre_decision_news_count"] == 1
+    assert facts["post_decision_pre_execution_count"] == 1
+    assert facts["ai_used_rows"] == 1

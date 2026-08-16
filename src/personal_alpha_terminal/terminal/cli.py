@@ -204,6 +204,13 @@ def _as_trace_int(value: object) -> int:
         return 0
 
 
+def _as_trace_float(value: object) -> float:
+    try:
+        return float(value) if isinstance(value, (int, float, str)) else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _write_performance_trace(result: DailyQuantResult, config: EffectiveRuntimeConfig) -> None:
     """Write a machine-readable per-stage performance trace for the daily run."""
     try:
@@ -220,12 +227,33 @@ def _write_performance_trace(result: DailyQuantResult, config: EffectiveRuntimeC
             (item.metadata for item in result.stages if item.name == "DATA"),
             {},
         )
+        ai_meta: dict[str, object] = next(
+            (item.metadata for item in result.stages if item.name == "AI_BRIEF"),
+            {},
+        )
+        profile = data_meta.get("data_stage_profile", {})
+        profile = profile if isinstance(profile, dict) else {}
+        segments = profile.get("segments_seconds", {})
+        segments = segments if isinstance(segments, dict) else {}
+        market_network = _as_trace_float(segments.get("provider_sync"))
+        data_wall = float(stages.get("DATA", 0.0) or 0.0)
+        news_network = _as_trace_float(ai_meta.get("news_network_seconds"))
+        llm_network = _as_trace_float(ai_meta.get("llm_network_seconds"))
         trace = {
             "run_id": str(getattr(result, "run_id", "UNAVAILABLE")),
             "started_at": started.isoformat() if started else None,
             "finished_at": finished.isoformat() if finished else None,
             "total_seconds": total,
             "stages_seconds": stages,
+            "stage_profiler_v2": {
+                "data_core_seconds": round(max(0.0, data_wall - market_network), 4),
+                "market_data_network_seconds": round(market_network, 4),
+                "news_network_seconds": round(news_network, 4),
+                "llm_network_seconds": round(llm_network, 4),
+                "total_wall_clock_seconds": total,
+                "data_segments_seconds": segments,
+                "db_query_count": "UNAVAILABLE",
+            },
             "data": {
                 "requested": _as_trace_int(data_meta.get("requested_security_count")),
                 "refreshed": _as_trace_int(data_meta.get("actual_refresh_count")),
@@ -237,6 +265,15 @@ def _write_performance_trace(result: DailyQuantResult, config: EffectiveRuntimeC
                     data_meta.get("incremental_refresh_requested_count")
                 ),
                 "full_backfill": _as_trace_int(data_meta.get("full_backfill_requested_count")),
+                "refresh_request_ratio": (
+                    _as_trace_int(data_meta.get("actual_refresh_count"))
+                    / _as_trace_int(data_meta.get("requested_security_count"))
+                    if _as_trace_int(data_meta.get("requested_security_count"))
+                    else 0.0
+                ),
+                "refresh_success_rate": data_meta.get("provider_success_rate"),
+                "latest_price_coverage": data_meta.get("latest_price_coverage"),
+                "history_coverage": data_meta.get("coverage"),
             },
         }
         target = config.report_dir / "validation-artifacts"
@@ -2077,6 +2114,7 @@ def _probability_forward_command(args: argparse.Namespace) -> int:
         ProbabilityForwardLedger,
         ProbabilityPromotionPolicy,
         evaluate_forward_probability,
+        forward_prediction_audit,
     )
 
     config = load_config(args.config)
@@ -2084,12 +2122,20 @@ def _probability_forward_command(args: argparse.Namespace) -> int:
     predictions = ledger.predictions()
     outcomes = ledger.outcomes()
     report = evaluate_forward_probability(ledger)
+    audit = forward_prediction_audit(ledger)
+    ledger.write_canonical_index()
     policy = ProbabilityPromotionPolicy()
     artifacts = config.report_dir / "validation-artifacts"
     artifacts.mkdir(parents=True, exist_ok=True)
     payload = {
-        "forward_predictions": len(predictions),
-        "matured_outcomes": len(outcomes),
+        "raw_prediction_rows": len(predictions),
+        "canonical_predictions": audit["canonical_prediction_rows"],
+        "duplicate_prediction_rows": audit["duplicate_prediction_rows"],
+        "matured_outcome_rows": len(outcomes),
+        "matured_canonical_predictions": report.get("matured_canonical_predictions", 0),
+        "decision_dates": report.get("decision_date_n", 0),
+        "effective_sample_size": report.get("effective_sample_size", 0),
+        "audit": audit,
         "production_influence": policy.production_influence,
         "evaluation": report,
         "promotion_conditions": policy.conditions(),
@@ -2098,6 +2144,10 @@ def _probability_forward_command(args: argparse.Namespace) -> int:
     }
     (artifacts / "round26_probability_forward.json").write_text(
         json.dumps(payload, ensure_ascii=False, indent=2, default=str),
+        encoding="utf-8",
+    )
+    (artifacts / "forward_prediction_audit.json").write_text(
+        json.dumps(audit, ensure_ascii=False, indent=2, default=str) + "\n",
         encoding="utf-8",
     )
     console.print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
@@ -2154,6 +2204,192 @@ def _decision_diff_command(args: argparse.Namespace) -> int:
         encoding="utf-8",
     )
     console.print(json.dumps(report.document(), ensure_ascii=False, indent=2, default=str))
+    return 0
+
+
+def _round28_audit_command(args: argparse.Namespace) -> int:
+    """ROUND28 P0: write cardinality/risk/parity audit artifacts."""
+
+    from personal_alpha_terminal.application.round28_audit import (
+        write_round28_audit_artifacts,
+    )
+
+    config = load_config(args.config)
+    root = config.report_dir / "daily-runs"
+    acceptance_dir = root / args.acceptance_run
+    production_dir = root / args.production_run
+    if not (acceptance_dir / "run_certificate.json").exists():
+        console.print(f"acceptance run missing: {acceptance_dir}")
+        return 1
+    if not (production_dir / "run_certificate.json").exists():
+        console.print(f"production run missing: {production_dir}")
+        return 1
+    output_dir = args.output_dir or config.report_dir / "validation-artifacts"
+    paths = write_round28_audit_artifacts(
+        acceptance_run_dir=acceptance_dir,
+        production_run_dir=production_dir,
+        output_dir=output_dir,
+    )
+    console.print("ROUND28 audit artifacts written:")
+    for name, path in paths.items():
+        console.print(f"- {name}: {path}")
+    return 0
+
+
+def _round30_audit_command(args: argparse.Namespace) -> int:
+    """ROUND30: write model influence, promotion ladder, counterfactual artifacts."""
+
+    from personal_alpha_terminal.application.round30_audit import (
+        write_round30_audit_artifacts,
+    )
+
+    config = load_config(args.config)
+    root = config.report_dir / "daily-runs"
+    acceptance_dir = root / args.acceptance_run
+    output_dir = config.report_dir / "validation-artifacts"
+    if not (acceptance_dir / "run_certificate.json").exists():
+        console.print(f"acceptance run missing: {acceptance_dir}")
+        return 1
+    paths = write_round30_audit_artifacts(
+        acceptance_run_dir=acceptance_dir,
+        output_dir=output_dir,
+    )
+    for name, path in paths.items():
+        console.print(f"{name}: {path.resolve()}")
+    return 0
+
+
+def _round31_audit_command(args: argparse.Namespace) -> int:
+    """ROUND31: write breadth/capital/ETF/forward policy audit artifacts."""
+
+    from personal_alpha_terminal.application.round31_audit import (
+        write_round31_audit_artifacts,
+    )
+
+    config = load_config(args.config)
+    root = config.report_dir / "daily-runs"
+    acceptance_dir = root / args.acceptance_run
+    output_dir = config.report_dir / "validation-artifacts"
+    if not (acceptance_dir / "run_certificate.json").exists():
+        console.print(f"acceptance run missing: {acceptance_dir}")
+        return 1
+    paths = write_round31_audit_artifacts(
+        acceptance_run_dir=acceptance_dir,
+        output_dir=output_dir,
+    )
+    for name, path in paths.items():
+        console.print(f"{name}: {path.resolve()}")
+    return 0
+
+
+def _run_bundle_command(args: argparse.Namespace) -> int:
+    """ROUND32: immutable production run bundle inspection and replay."""
+
+    from personal_alpha_terminal.application.run_bundle import (
+        RunBundleStore,
+        replay_run_bundle,
+        verify_bundle_integrity,
+    )
+
+    config = load_config(args.config)
+    store = RunBundleStore(config.report_dir / "evidence-bundles")
+    action = args.run_bundle_action
+    if action == "list":
+        run_ids = store.list_run_ids()
+        console.print(json.dumps({"run_ids": run_ids}, ensure_ascii=False, indent=2))
+        return 0
+    if action == "show":
+        try:
+            manifest = store.load_manifest(args.run_id)
+        except FileNotFoundError as error:
+            console.print(str(error))
+            return 1
+        console.print(
+            json.dumps(
+                {
+                    "run_id": manifest.get("run_id"),
+                    "status": manifest.get("status"),
+                    "decision_manifest_semantic_hash": manifest.get(
+                        "decision_manifest_semantic_hash"
+                    ),
+                    "bundle_hash": manifest.get("bundle_hash"),
+                    "sections": sorted(
+                        str(item) for item in manifest.get("sections", {}).keys()
+                    ),
+                    "blob_digests": manifest.get("blob_digests"),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 0
+    if action == "verify":
+        try:
+            report = verify_bundle_integrity(store=store, run_id=args.run_id)
+        except FileNotFoundError as error:
+            console.print(str(error))
+            return 1
+        console.print(json.dumps(report, ensure_ascii=False, indent=2, default=str))
+        return 0 if report.get("status") == "INTEGRITY_PASS" else 1
+    if action == "replay":
+        try:
+            report = replay_run_bundle(store=store, run_id=args.run_id)
+        except FileNotFoundError as error:
+            console.print(str(error))
+            return 1
+        artifacts = config.report_dir / "validation-artifacts"
+        artifacts.mkdir(parents=True, exist_ok=True)
+        (artifacts / f"run_bundle_replay_{args.run_id}.json").write_text(
+            json.dumps(report.document(), ensure_ascii=False, indent=2, default=str),
+            encoding="utf-8",
+        )
+        console.print(
+            f"{report.status} run={report.run_id}\n"
+            f"bundle_hash={report.bundle_hash}\n"
+            f"decision_manifest_semantic_hash={report.decision_manifest_semantic_hash}\n"
+            f"occurrence={report.replay_occurrence_id}\n"
+            f"detail={report.detail}"
+        )
+        for metric in report.metrics:
+            console.print(
+                f"  {metric.name}: recorded={metric.recorded} "
+                f"replayed={metric.replayed} passed={metric.passed}"
+            )
+        return 0 if report.status == "REPLAY_PASS" else 1
+    console.print(f"unknown run-bundle action: {action}")
+    return 2
+
+
+def _round32_audit_command(args: argparse.Namespace) -> int:
+    """ROUND32: write run-bundle / replay acceptance artifacts."""
+
+    from personal_alpha_terminal.application.round32_audit import (
+        write_round32_audit_artifacts,
+    )
+
+    config = load_config(args.config)
+    run_id = args.acceptance_run
+    if not run_id:
+        from personal_alpha_terminal.application.run_bundle import RunBundleStore
+
+        store = RunBundleStore(config.report_dir / "evidence-bundles")
+        sealed = [
+            item
+            for item in store.list_run_ids()
+            if store.load_manifest(item).get("status") == "SEALED"
+        ]
+        if not sealed:
+            console.print("no sealed run bundle found; provide --acceptance-run")
+            return 1
+        run_id = sealed[-1]
+    output_dir = config.report_dir / "validation-artifacts"
+    paths = write_round32_audit_artifacts(
+        acceptance_run_id=run_id,
+        bundle_root=config.report_dir / "evidence-bundles",
+        output_dir=output_dir,
+    )
+    for name, path in paths.items():
+        console.print(f"{name}: {path.resolve()}")
     return 0
 
 
@@ -3074,6 +3310,69 @@ def build_parser() -> argparse.ArgumentParser:
     )
     diff.add_argument("old_run", help="Old run id")
     diff.add_argument("new_run", help="New run id")
+    audit28 = subparsers.add_parser(
+        "round28-audit",
+        help="Write ROUND28 cardinality/risk/parity audit artifacts",
+    )
+    audit28.add_argument(
+        "--acceptance-run",
+        default="daily-2420c68452d142298e6b42482341391f",
+        help="Acceptance run id (default: ROUND27 acceptance)",
+    )
+    audit28.add_argument(
+        "--production-run",
+        default="daily-74e83bb34b014a13a8520c0c377101df",
+        help="Production daily run id (default: ROUND27 production parity run)",
+    )
+    audit30 = subparsers.add_parser(
+        "round30-audit",
+        help="Write ROUND30 model influence/promotion/counterfactual artifacts",
+    )
+    audit30.add_argument(
+        "--acceptance-run",
+        default="daily-2420c68452d142298e6b42482341391f",
+        help="Acceptance run id (default: ROUND27 acceptance)",
+    )
+    audit31 = subparsers.add_parser(
+        "round31-audit",
+        help="Write ROUND31 breadth/capital/ETF/forward policy audit artifacts",
+    )
+    audit31.add_argument(
+        "--acceptance-run",
+        default="daily-2420c68452d142298e6b42482341391f",
+        help="Acceptance run id (default: ROUND27 acceptance)",
+    )
+    run_bundle = subparsers.add_parser(
+        "run-bundle",
+        help="ROUND32 immutable production run bundle (list/show/replay/verify)",
+    )
+    run_bundle_actions = run_bundle.add_subparsers(
+        dest="run_bundle_action",
+        required=True,
+    )
+    run_bundle_actions.add_parser("list", help="List sealed run bundles")
+    run_bundle_show = run_bundle_actions.add_parser(
+        "show", help="Show a run bundle manifest summary"
+    )
+    run_bundle_show.add_argument("run_id", help="Run id (daily-...)")
+    run_bundle_replay = run_bundle_actions.add_parser(
+        "replay", help="Deterministic replay of a sealed run bundle"
+    )
+    run_bundle_replay.add_argument("run_id", help="Run id (daily-...)")
+    run_bundle_verify = run_bundle_actions.add_parser(
+        "verify", help="Verify blob integrity of a run bundle"
+    )
+    run_bundle_verify.add_argument("run_id", help="Run id (daily-...)")
+    audit32 = subparsers.add_parser(
+        "round32-audit",
+        help="Write ROUND32 run-bundle / replay acceptance artifacts",
+    )
+    audit32.add_argument(
+        "--acceptance-run",
+        default=None,
+        help="Acceptance run id (default: latest sealed bundle)",
+    )
+    audit28.add_argument("--output-dir", type=Path, default=None)
     labs = subparsers.add_parser(  # noqa: E501
         "research-labs", help="ROUND25 research promotion labs (never auto-promote)"
     )
@@ -3584,6 +3883,16 @@ def main(argv: list[str] | None = None) -> int:
             return _decision_replay_command(args)
         if command == "decision-diff":
             return _decision_diff_command(args)
+        if command == "round28-audit":
+            return _round28_audit_command(args)
+        if command == "round30-audit":
+            return _round30_audit_command(args)
+        if command == "round31-audit":
+            return _round31_audit_command(args)
+        if command == "run-bundle":
+            return _run_bundle_command(args)
+        if command == "round32-audit":
+            return _round32_audit_command(args)
         if command == "stress-exam-v21":
             return _stress_exam_v21_command(args)
         if command == "exposure-audit":

@@ -169,3 +169,66 @@ def test_no_provider_falls_back_to_deterministic_v2() -> None:
     )
     assert result.source == "RULE_BASED_DETERMINISTIC_V2"
     assert result.brief["formal_action_explanations"]
+
+
+class _V3StructuredProvider:
+    def generate(self, request):
+        if "PASS 1" in request.user_prompt:
+            payload = {
+                "formal_count": 1, "formal_symbols": ["VSTS"], "research_count": 1,
+                "research_symbols": ["VOO"], "cash_and_portfolio": "由程序提供",
+                "gates": "已验证", "research_certification": "NOT_CERTIFIABLE",
+            }
+        elif "PASS 2" in request.user_prompt:
+            payload = {
+                "risk_critic": "风险可见", "concentration_risks": [],
+                "execution_risks": [], "unknowns": [],
+            }
+        elif "PASS 3" in request.user_prompt:
+            payload = {
+                "market_synthesis": "市场观察", "index_view": "指数观察",
+                "breadth_view": "宽度观察", "macro_view": "宏观观察", "news_events": [],
+            }
+        else:
+            payload = {
+                "market_interpretation": "市场解释", "risk_interpretation": "风险解释",
+                "narrative": "叙事", "watch_list": ["观察波动"], "limitations": ["数据局限"],
+            }
+            return LLMResponse(
+                content="```json\n" + json.dumps(payload, ensure_ascii=False) + "\n```",
+                provider="deepseek", model="deepseek-v4-flash", is_mock=True,
+            )
+        return LLMResponse(
+            content=json.dumps(payload, ensure_ascii=False), provider="deepseek",
+            model="deepseek-v4-flash", is_mock=True,
+        )
+
+
+def test_pass4_valid_structured_output_and_fence_normalization() -> None:
+    result = AiBriefV2Service().generate(
+        run_id="r1", facts=_facts(), model="deepseek-v4-flash",
+        provider_factory=lambda: _V3StructuredProvider(),
+    )
+    assert result.source == "DEEPSEEK_STRUCTURED_V3"
+    assert result.ai_status == "PASS"
+    assert result.brief["market_state"] == "市场解释"
+    assert result.passes["pass4_final"]["schema_validation_result"] == "PASS"
+
+
+def test_semantic_errors_are_not_repaired() -> None:
+    class _InvalidSynthesisProvider(_V3StructuredProvider):
+        def generate(self, request):
+            if "PASS 4" in request.user_prompt:
+                return LLMResponse(
+                    content='{"market_interpretation":"only"}',
+                    provider="deepseek",
+                    model="x",
+                )
+            return super().generate(request)
+
+    result = AiBriefV2Service().generate(
+        run_id="r1", facts=_facts(), model="deepseek-v4-flash",
+        provider_factory=lambda: _InvalidSynthesisProvider(),
+    )
+    assert result.source == "RULE_BASED_DETERMINISTIC_V2"
+    assert result.ai_status == "PASS_DEGRADED_WHOLE_FALLBACK"

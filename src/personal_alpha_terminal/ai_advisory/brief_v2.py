@@ -15,12 +15,24 @@ weights or strategy parameters.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
 from personal_alpha_terminal.agents.llm.schemas import LLMRequest
+from personal_alpha_terminal.ai_advisory.action_commentary import (
+    build_deterministic_action_commentaries,
+    build_deterministic_devils_advocate,
+    build_deterministic_portfolio_review,
+    merge_llm_action_commentaries,
+    merge_llm_devils_advocate,
+    merge_llm_portfolio_review,
+    validate_llm_action_commentaries,
+    validate_llm_devils_advocate,
+    validate_llm_portfolio_review,
+)
 from personal_alpha_terminal.ai_advisory.facts_v3 import build_facts_v3
 from personal_alpha_terminal.ai_advisory.grounding import (
     GROUNDING_OK,
@@ -55,6 +67,10 @@ V2_TOP_LEVEL_KEYS = frozenset(
         "sec_events",
         "formal_action_explanations",
         "etf_research_analysis",
+        "action_commentaries",
+        "portfolio_review",
+        "devils_advocate",
+        "company_dossiers",
         "portfolio_risk_analysis",
         "overnight_risk",
         "bear_case",
@@ -160,16 +176,38 @@ def _raw_call(
     )
     if not content:
         return None, usage
-    if content.startswith("```"):
-        first = content.find("\n")
-        last = content.rfind("```")
-        content = content[first + 1 : last].strip() if first != -1 and last > first else content
+    usage["raw_response"] = content
+    normalized = content
+    if normalized.startswith("```"):
+        first = normalized.find("\n")
+        last = normalized.rfind("```")
+        normalized = (
+            normalized[first + 1 : last].strip()
+            if first != -1 and last > first
+            else normalized
+        )
+        usage["normalization"] = "MARKDOWN_FENCE_REMOVED"
+    # Deterministic syntax-only normalization.  It never invents absent
+    # sections, symbols, weights or news facts.
+    normalized = normalized.replace("\u201c", '"').replace("\u201d", '"')
+    normalized = normalized.replace("\u2018", "'").replace("\u2019", "'")
+    normalized = re.sub(r",\s*([}\]])", r"\1", normalized)
     try:
-        payload = json.loads(content)
+        decoder = json.JSONDecoder()
+        payload, end = decoder.raw_decode(normalized.lstrip())
+        trailing = normalized.lstrip()[end:].strip()
+        if trailing:
+            usage["normalization"] = "TRAILING_PROSE_IGNORED"
     except json.JSONDecodeError:
-        usage["status"] = "SCHEMA_INVALID"
+        usage["status"] = "JSON_DECODE_ERROR"
+        usage["parse_error_class"] = "JSON_DECODE_ERROR"
         return None, usage
-    return (payload if isinstance(payload, dict) else None), usage
+    if not isinstance(payload, dict):
+        usage["status"] = "JSON_NOT_OBJECT"
+        usage["parse_error_class"] = "JSON_NOT_OBJECT"
+        return None, usage
+    usage["parsed_response"] = payload
+    return payload, usage
 
 
 def _pass1_prompt(facts: dict[str, Any]) -> str:
@@ -222,17 +260,105 @@ def _pass4_prompt(
     pass1: dict[str, Any],
     pass2: dict[str, Any],
     pass3: dict[str, Any],
-    schema_hint: str,
 ) -> str:
     return (
-        "PASS 4 最终中文每日简报:综合前三阶段,输出严格 JSON 对象,字段结构如下"
-        "(不要增加顶层字段,全部内容简体中文,完整专业可阅读,不要省略正式动作):\n"
-        f"{schema_hint}\n\n"
-        f"facts={json.dumps(facts, ensure_ascii=False, default=str)[:9000]}\n"
-        f"pass1={json.dumps(pass1, ensure_ascii=False, default=str)[:4000]}\n"
-        f"pass2={json.dumps(pass2, ensure_ascii=False, default=str)[:4000]}\n"
-        f"pass3={json.dumps(pass3, ensure_ascii=False, default=str)[:5000]}\n"
+        "PASS 4 最终叙事综合:只输出一个严格 JSON 对象，不要代码块或其它文字。"
+        "不要重算或复述正式股票、动作数量、现金、总敞口、权重、成本、基准收益。"
+        "这些由程序生成。只解释市场、风险、叙事、观察项与局限。结构必须恰好为:\n"
+        '{"market_interpretation":"string","risk_interpretation":"string",'
+        '"narrative":"string","watch_list":["string"],"limitations":["string"],'
+        '"action_commentaries":[{...}],"portfolio_review":{...},'
+        '"devils_advocate":[{...}]}\n'
+        "action_commentaries/portfolio_review/devils_advocate 是可选字段;"
+        "如果返回,必须只引用 FormalFactPacket 中的正式 ticker/action/target weight,"
+        "不得改变这些数字。LLM 观点仅用于解释。\n\n"
+        f"validated_pass1={json.dumps(pass1, ensure_ascii=False, default=str)[:2200]}\n"
+        f"validated_pass2={json.dumps(pass2, ensure_ascii=False, default=str)[:2600]}\n"
+        f"validated_pass3={json.dumps(pass3, ensure_ascii=False, default=str)[:3200]}\n"
+        "fact_references="
+        f"{json.dumps(facts.get('evidence_refs', []), ensure_ascii=False, default=str)[:1200]}\n"
+        "formal_facts="
+        f"{json.dumps(build_facts_v3(facts_v2=facts), ensure_ascii=False, default=str)[:6000]}\n"
     )
+
+
+def _validate_pass1(payload: dict[str, Any]) -> tuple[bool, str]:
+    expected = {
+        "formal_count", "formal_symbols", "research_count", "research_symbols",
+        "cash_and_portfolio", "gates", "research_certification",
+    }
+    if set(payload) != expected:
+        return False, "PASS1 keys mismatch"
+    if not isinstance(payload["formal_count"], int) or not isinstance(
+        payload["research_count"], int
+    ):
+        return False, "PASS1 counts must be integers"
+    if not all(isinstance(item, str) for item in payload["formal_symbols"]):
+        return False, "PASS1 formal_symbols must be strings"
+    if not all(isinstance(item, str) for item in payload["research_symbols"]):
+        return False, "PASS1 research_symbols must be strings"
+    return True, ""
+
+
+def _validate_pass2(payload: dict[str, Any]) -> tuple[bool, str]:
+    expected = {"risk_critic", "concentration_risks", "execution_risks", "unknowns"}
+    if set(payload) != expected or not isinstance(payload.get("risk_critic"), str):
+        return False, "PASS2 schema mismatch"
+    if not all(
+        isinstance(item, str)
+        for key in expected - {"risk_critic"}
+        for item in payload.get(key, [])
+    ):
+        return False, "PASS2 list fields must contain strings"
+    return True, ""
+
+
+def _validate_pass3(payload: dict[str, Any]) -> tuple[bool, str]:
+    expected = {"market_synthesis", "index_view", "breadth_view", "macro_view", "news_events"}
+    if set(payload) != expected:
+        return False, "PASS3 keys mismatch"
+    if not all(isinstance(payload.get(key), str) for key in expected - {"news_events"}):
+        return False, "PASS3 narrative fields must be strings"
+    if not isinstance(payload.get("news_events"), list):
+        return False, "PASS3 news_events must be a list"
+    return True, ""
+
+
+def _validate_pass4_synthesis(payload: dict[str, Any]) -> tuple[bool, str]:
+    expected = {
+        "market_interpretation",
+        "risk_interpretation",
+        "narrative",
+        "watch_list",
+        "limitations",
+    }
+    optional = {"action_commentaries", "portfolio_review", "devils_advocate"}
+    unknown = set(payload) - expected - optional
+    if unknown:
+        return False, f"PASS4 synthesis unknown keys: {sorted(unknown)}"
+    missing = expected - set(payload)
+    if missing:
+        return False, f"PASS4 synthesis missing keys: {sorted(missing)}"
+    if not all(
+        isinstance(payload.get(key), str)
+        for key in expected - {"watch_list", "limitations"}
+    ):
+        return False, "PASS4 narrative fields must be strings"
+    if not all(
+        isinstance(item, str)
+        for key in ("watch_list", "limitations")
+        for item in payload.get(key, [])
+    ):
+        return False, "PASS4 lists must contain strings"
+    if "action_commentaries" in payload and not isinstance(
+        payload["action_commentaries"], list
+    ):
+        return False, "PASS4 action_commentaries must be a list"
+    if "portfolio_review" in payload and not isinstance(payload["portfolio_review"], dict):
+        return False, "PASS4 portfolio_review must be an object"
+    if "devils_advocate" in payload and not isinstance(payload["devils_advocate"], list):
+        return False, "PASS4 devils_advocate must be a list"
+    return True, ""
 
 
 V2_SCHEMA_HINT = json.dumps(
@@ -276,6 +402,68 @@ V2_SCHEMA_HINT = json.dumps(
                 "metric_note": "string",
                 "ai_interpretation": "string",
                 "evidence_refs": ["string"],
+            }
+        ],
+        "action_commentaries": [
+            {
+                "ticker": "string",
+                "company_name": "string",
+                "formal_action": "string",
+                "formal_target_weight": "number",
+                "llm_view": "SUPPORTIVE|NEUTRAL|CAUTIOUS|CONTRARIAN|INSUFFICIENT_INFORMATION",
+                "support_level": "int 0-100",
+                "business_summary": "string",
+                "why_quant_may_like_it": "string",
+                "recent_positive_catalysts": ["string"],
+                "recent_negative_catalysts": ["string"],
+                "key_risks": ["string"],
+                "what_could_make_signal_wrong": "string",
+                "valuation_or_fundamental_context_if_available": "string",
+                "sector_context": "string",
+                "market_context": "string",
+                "earnings_or_filing_context": "string",
+                "event_risk": ["string"],
+                "liquidity_comment": "string",
+                "portfolio_role": "string",
+                "correlation_or_overlap_comment": "string",
+                "llm_counterargument": "string",
+                "human_review_focus": "string",
+            }
+        ],
+        "portfolio_review": {
+            "theme": "string",
+            "industry_concentration": {},
+            "top_sector": "string",
+            "size_characteristics": "string",
+            "beta_volatility": {},
+            "major_risk_sources": ["string"],
+            "major_alpha_sources": "string",
+            "correlation_comment": "string",
+            "homogeneous_stock_comment": "string",
+            "most_vulnerable": "string",
+            "strongest_quant_signal": "string",
+            "llm_most_aligned": "string",
+            "llm_most_concerned": "string",
+            "common_risks": ["string"],
+            "macro_sensitivity": "string",
+            "event_sensitivity": "string",
+            "cash_level_comment": "string",
+            "next_1_5_days": ["string"],
+            "opinion_status": "string"
+        },
+        "devils_advocate": [
+            {
+                "ticker": "string",
+                "quant_signal_failure_modes": ["string"],
+                "recent_negative_events": ["string"],
+                "industry_risk": "string",
+                "valuation_risk": "string",
+                "liquidity_risk": "string",
+                "event_risk": "string",
+                "crowding_risk": "string",
+                "abnormal_price_behavior": "string",
+                "regime_conflict": "string",
+                "conclusion": "string"
             }
         ],
         "portfolio_risk_analysis": "string",
@@ -335,6 +523,19 @@ def validate_brief_v2(
             )
         if not isinstance(item.get("ai_explanation"), str):
             return False, f"formal_action_explanations[{index}] ai_explanation required"
+    raw_commentaries = payload.get("action_commentaries")
+    if raw_commentaries is not None:
+        ok, error = validate_llm_action_commentaries(
+            raw_commentaries, allowed_symbols=allowed_action_symbols
+        )
+        if not ok:
+            return False, error
+    portfolio_review = payload.get("portfolio_review")
+    if portfolio_review is not None and not isinstance(portfolio_review, dict):
+        return False, "portfolio_review must be an object"
+    devils_advocate = payload.get("devils_advocate")
+    if devils_advocate is not None and not isinstance(devils_advocate, list):
+        return False, "devils_advocate must be a list"
     for index, item in enumerate(payload.get("etf_research_analysis", []) or []):
         if not isinstance(item, dict) or set(item) - ETF_RESEARCH_KEYS_V2:
             return False, f"etf_research_analysis[{index}] invalid"
@@ -414,34 +615,46 @@ def build_deterministic_v2(
     market_state_text = "\n".join(market_lines) or "市场状态数据不可用。"
     news_clusters = (news or {}).get("clusters") or []
     important_news: list[dict[str, str]] = []
-    for index, cluster in enumerate(news_clusters[:20], start=1):
+    for cluster in news_clusters[:20]:
+        headline = str(cluster.get("title") or cluster.get("canonical_headline") or "")
+        source = str(cluster.get("source") or "")
+        published_at = str(cluster.get("published_at") or "")
+        event_type = str(cluster.get("event_type") or "")
+        freshness = str(cluster.get("freshness_bucket") or "UNKNOWN")
+        if (
+            not headline
+            or not source
+            or not published_at
+            or not event_type
+            or freshness == "HISTORICAL_CONTEXT"
+        ):
+            continue
+        source_count = cluster.get("source_count")
+        source_count_text = str(source_count) if source_count is not None else "UNKNOWN"
         important_news.append(
             {
-                "evidence_ref": f"N{index}",
-                "headline": str(cluster.get("canonical_headline", "")),
-                "why_matters": "由已持久化新闻聚类生成;具体影响由用户结合量化事实判断。",
+                "evidence_ref": str(cluster.get("evidence_ref") or cluster.get("event_cluster_id")),
+                "headline": f"{headline} | {source} | {published_at} | {event_type}",
+                "why_matters": "该条目在 decision cutoff 前且通过确定性相关性筛选。",
                 "affected": (
                     ", ".join(str(item) for item in (cluster.get("symbols") or []))
                     or "未知"
                 ),
-                "portfolio_link": "与当前正式组合的关系见正式操作清单。",
+                "portfolio_link": (
+                    "与正式组合存在 ticker 关联。"
+                    if cluster.get("relation") == "ticker"
+                    else "市场/宏观关联；不改变正式组合。"
+                ),
                 "strength": (
-                    f"source_count={cluster.get('source_count')} "
-                    "(Tier 1/2/3 以来源元数据为准)"
+                    f"source_count={source_count_text}; "
+                    f"{cluster.get('evidence_strength', 'UNKNOWN')}; "
+                    f"freshness={freshness}; "
+                    f"decision_cutoff_relation="
+                    f"{cluster.get('decision_cutoff_relation', 'PRE_DECISION')}"
                 ),
             }
         )
-    if not important_news:
-        important_news = [
-            {
-                "evidence_ref": "N0",
-                "headline": "当前没有已持久化的市场新闻(GENERAL_MARKET_NEWS_UNAVAILABLE)。",
-                "why_matters": "不适用",
-                "affected": "不适用",
-                "portfolio_link": "不适用",
-                "strength": "新闻管线未配置可用 provider;禁止伪造新闻。",
-            }
-        ]
+    historical_context = (news or {}).get("historical_context") or []
     default_refs = facts.get("evidence_refs") or []
     run_refs = [
         ref for ref in default_refs
@@ -504,6 +717,31 @@ def build_deterministic_v2(
             "该层不自动取消订单、不重算昨日 Alpha,LLM 没有取消权限;"
             "人工复核要求以终端横幅为准。"
         )
+    raw_dossiers = facts.get("company_dossiers")
+    if isinstance(raw_dossiers, dict):
+        dossier_map = {
+            str(key): value
+            for key, value in raw_dossiers.items()
+            if isinstance(value, dict)
+        }
+    elif isinstance(raw_dossiers, list):
+        dossier_map = {
+            str(item.get("ticker")): item
+            for item in raw_dossiers
+            if isinstance(item, dict) and item.get("ticker")
+        }
+    else:
+        dossier_map = {}
+    action_commentaries = build_deterministic_action_commentaries(
+        facts=facts,
+        dossiers=dossier_map,
+        news=news,
+    )
+    portfolio_review = build_deterministic_portfolio_review(
+        facts=facts,
+        dossiers=dossier_map,
+    )
+    devils_advocate = build_deterministic_devils_advocate(facts=facts, news=news)
     return {
         "schema_version": SCHEMA_VERSION_V2,
         "executive_summary": summary,
@@ -518,13 +756,27 @@ def build_deterministic_v2(
             f"因子数 {facts.get('factor_count')},候选数 {facts.get('candidate_count')};"
             "轮动解读仅基于已冻结的因子统计,不构成预测。"
         ),
-        "macro_context": "宏观环境解读仅基于已持久化的官方宏观新闻;当前无可引用条目。",
+        "macro_context": (
+            "宏观环境仅基于 decision cutoff 前的官方宏观条目;"
+            "今日新闻区不包含 HISTORICAL_CONTEXT。"
+            if important_news
+            else (
+                f"本次今日新闻区无满足 PIT 与展示完整性条件的官方宏观条目;"
+                f"历史宏观背景 {len(historical_context)} 条已移至历史背景区。"
+                if historical_context
+                else "本次无满足 PIT 与展示完整性条件的官方宏观条目。"
+            )
+        ),
         "important_news": important_news,
         "sec_events": [
             "当前没有可用于任何正式标的的 PIT 企业事件证据;ETF 不适用公司级 SEC 事件分析。"
         ],
         "formal_action_explanations": action_explanations,
         "etf_research_analysis": etf_analysis,
+        "action_commentaries": action_commentaries,
+        "portfolio_review": portfolio_review,
+        "devils_advocate": devils_advocate,
+        "company_dossiers": dossier_map,
         "portfolio_risk_analysis": (
             f"组合信息:{portfolio}。风险解释仅基于不可变运行证书;"
             "正式敞口为正式目标权重之和,研究候选权重不计入。"
@@ -554,12 +806,72 @@ def build_deterministic_v2(
     }
 
 
+def apply_deepseek_synthesis(
+    brief: dict[str, Any],
+    pass4_payload: dict[str, Any],
+    *,
+    facts: dict[str, Any],
+    allowed_action: frozenset[str],
+) -> dict[str, Any]:
+    """Merge LLM synthesis while protecting critical formal sections.
+
+    Critical formal sections (executive_summary, formal_conclusions,
+    portfolio_risk_analysis) remain deterministic.  The LLM may provide
+    market/commentary/portfolio-review narrative; any wrong formal numbers in
+    non-critical sections can be quarantined section-by-section without
+    invalidating the formal facts.
+    """
+
+    brief = dict(brief)
+    brief.update(
+        {
+            "market_state": str(pass4_payload.get("market_interpretation", "")),
+            "macro_context": str(pass4_payload.get("market_interpretation", "")),
+            "bear_case": str(pass4_payload.get("narrative", "")),
+            "bull_case": str(pass4_payload.get("narrative", "")),
+            "watchlist_next_sessions": list(pass4_payload.get("watch_list") or []),
+            "data_limitations": list(pass4_payload.get("limitations") or []),
+        }
+    )
+    llm_commentaries = pass4_payload.get("action_commentaries")
+    llm_review = pass4_payload.get("portfolio_review")
+    llm_devil = pass4_payload.get("devils_advocate")
+    if isinstance(llm_commentaries, list):
+        comments_ok, _ = validate_llm_action_commentaries(
+            llm_commentaries, allowed_symbols=allowed_action
+        )
+        if comments_ok:
+            brief["action_commentaries"] = merge_llm_action_commentaries(
+                base=brief["action_commentaries"],
+                llm=llm_commentaries,
+                facts=facts,
+            )
+    if isinstance(llm_review, dict):
+        review_ok, _ = validate_llm_portfolio_review(llm_review)
+        if review_ok:
+            brief["portfolio_review"] = merge_llm_portfolio_review(
+                base=brief["portfolio_review"],
+                llm=llm_review,
+            )
+    if isinstance(llm_devil, list):
+        devil_ok, _ = validate_llm_devils_advocate(
+            llm_devil, allowed_symbols=allowed_action
+        )
+        if devil_ok:
+            brief["devils_advocate"] = merge_llm_devils_advocate(
+                base=brief["devils_advocate"],
+                llm=llm_devil,
+            )
+    return brief
+
+
 @dataclass(frozen=True, slots=True)
 class AiBriefV2Result:
     run_id: str
     model: str
     prompt_version: str
     llm_status: str
+    ai_status: str
     source: str
     brief: dict[str, Any]
     passes: dict[str, Any] = field(default_factory=dict)
@@ -571,11 +883,14 @@ class AiBriefV2Result:
     production_influence: str = PRODUCTION_INFLUENCE
 
     def document(self) -> dict[str, Any]:
+        fallback_sections = list(self.section_report.get("quarantined_sections", []))
+        deepseek_sections_used = 5 if self.source.startswith("DEEPSEEK") else 0
         return {
             "run_id": self.run_id,
             "model": self.model,
             "prompt_version": self.prompt_version,
             "llm_status": self.llm_status,
+            "ai_status": self.ai_status,
             "source": self.source,
             "brief": self.brief,
             "passes": dict(self.passes),
@@ -588,6 +903,9 @@ class AiBriefV2Result:
             "semantic_grounding_status": self.semantic_grounding_status,
             "semantic_grounding_issues": list(self.semantic_grounding_issues),
             "section_report": dict(self.section_report),
+            "deepseek_sections_used": deepseek_sections_used,
+            "deepseek_sections_total": 5,
+            "fallback_sections": fallback_sections,
             "generated_at": self.generated_at.isoformat(),
             "production_influence": self.production_influence,
         }
@@ -617,7 +935,12 @@ class AiBriefV2Service:
             "latency_ms": 0,
         }
 
-        def run_pass(name: str, prompt: str, max_tokens: int) -> dict[str, Any]:
+        def run_pass(
+            name: str,
+            prompt: str,
+            max_tokens: int,
+            validator: Callable[[dict[str, Any]], tuple[bool, str]],
+        ) -> dict[str, Any]:
             nonlocal usage
             payload, call_usage = _raw_call(
                 provider_factory, model=model, user_prompt=prompt, max_tokens=max_tokens
@@ -626,23 +949,41 @@ class AiBriefV2Service:
             usage["prompt_tokens"] += call_usage.get("prompt_tokens", 0)
             usage["completion_tokens"] += call_usage.get("completion_tokens", 0)
             usage["latency_ms"] += call_usage.get("latency_ms", 0)
+            valid, schema_error = (
+                validator(payload)
+                if payload is not None
+                else (False, "no JSON object")
+            )
             return {
                 "name": name,
-                "status": call_usage.get("status", "NOT_CALLED"),
+                "status": (
+                    "PASS"
+                    if valid
+                    else f"SCHEMA_INVALID: {schema_error}"
+                ),
                 "payload": payload or {},
+                "raw_response": call_usage.get("raw_response", ""),
+                "parsed_response": call_usage.get("parsed_response"),
+                "schema_validation_result": "PASS" if valid else schema_error,
+                "semantic_validation_result": "NOT_APPLICABLE",
+                "latency_ms": call_usage.get("latency_ms", 0),
+                "prompt_tokens": call_usage.get("prompt_tokens", 0),
+                "completion_tokens": call_usage.get("completion_tokens", 0),
+                "error_class": call_usage.get("parse_error_class"),
             }
 
         pass_results: dict[str, Any] = {}
         pass_results["pass1_facts"] = run_pass(
-            "PASS1_FACT_EXTRACTION", _pass1_prompt(facts), 1200
+            "PASS1_FACT_INTERPRETATION", _pass1_prompt(facts), 1200, _validate_pass1
         )
         pass_results["pass2_risk"] = run_pass(
-            "PASS2_PORTFOLIO_RISK_CRITIC", _pass2_prompt(facts), 1200
+            "PASS2_RISK_CRITIC", _pass2_prompt(facts), 1200, _validate_pass2
         )
         pass_results["pass3_market"] = run_pass(
             "PASS3_MARKET_NEWS_SYNTHESIS",
             _pass3_prompt(facts, market_state, news),
             1800,
+            _validate_pass3,
         )
         pass4_payload, pass4_usage = _raw_call(
             provider_factory,
@@ -652,9 +993,8 @@ class AiBriefV2Service:
                 pass_results["pass1_facts"].get("payload", {}),
                 pass_results["pass2_risk"].get("payload", {}),
                 pass_results["pass3_market"].get("payload", {}),
-                V2_SCHEMA_HINT,
             ),
-            max_tokens=8000,
+            max_tokens=1800,
         )
         usage["total_calls"] += 1
         usage["prompt_tokens"] += pass4_usage.get("prompt_tokens", 0)
@@ -664,23 +1004,53 @@ class AiBriefV2Service:
             "name": "PASS4_FINAL_BRIEF",
             "status": pass4_usage.get("status", "NOT_CALLED"),
             "payload": pass4_payload or {},
+            "raw_response": pass4_usage.get("raw_response", ""),
+            "parsed_response": pass4_usage.get("parsed_response"),
+            "latency_ms": pass4_usage.get("latency_ms", 0),
+            "prompt_tokens": pass4_usage.get("prompt_tokens", 0),
+            "completion_tokens": pass4_usage.get("completion_tokens", 0),
+            "error_class": pass4_usage.get("parse_error_class"),
         }
 
         brief: dict[str, Any] | None = None
         source = "RULE_BASED_DETERMINISTIC_V2"
         llm_status = "PASS_DEGRADED"
+        ai_status = "UNAVAILABLE" if provider_factory is None else "PASS_DEGRADED_WHOLE_FALLBACK"
         if pass4_payload is not None:
-            ok, error = validate_brief_v2(
+            # Compatibility for frozen ROUND25 artifacts and deterministic
+            # fixture providers.  Live DeepSeek uses the smaller V3 synthesis
+            # contract below, avoiding a 19-section all-or-nothing schema.
+            legacy_ok, legacy_error = validate_brief_v2(
                 pass4_payload,
                 allowed_action_symbols=allowed_action,
                 allowed_research_symbols=allowed_research,
             )
-            if ok:
+            synthesis_ok, synthesis_error = _validate_pass4_synthesis(pass4_payload)
+            if legacy_ok:
                 brief = pass4_payload
                 source = "DEEPSEEK_MULTIPASS_JSON"
                 llm_status = "PASS"
+                ai_status = "PASS"
+                pass_results["pass4_final"]["schema_validation_result"] = "PASS_LEGACY_V2"
+            elif synthesis_ok:
+                brief = build_deterministic_v2(
+                    facts, market_state=market_state, news=news, pre_execution=pre_execution
+                )
+                brief = apply_deepseek_synthesis(
+                    brief,
+                    pass4_payload,
+                    facts=facts,
+                    allowed_action=allowed_action,
+                )
+                source = "DEEPSEEK_STRUCTURED_V3"
+                llm_status = "PASS"
+                ai_status = "PASS"
+                pass_results["pass4_final"]["schema_validation_result"] = "PASS"
             else:
-                pass_results["pass4_final"]["status"] = f"SCHEMA_INVALID: {error}"
+                pass_results["pass4_final"]["status"] = (
+                    f"SCHEMA_INVALID: {synthesis_error}; legacy={legacy_error}"
+                )
+                pass_results["pass4_final"]["schema_validation_result"] = synthesis_error
         if brief is None:
             brief = build_deterministic_v2(
                 facts, market_state=market_state, news=news, pre_execution=pre_execution
@@ -700,6 +1070,7 @@ class AiBriefV2Service:
             brief = fallback_brief
             llm_status = "PASS_DEGRADED"
             source = GROUNDING_QUARANTINED
+            ai_status = "PASS_DEGRADED_WHOLE_FALLBACK"
         elif source.startswith("DEEPSEEK"):
             # ROUND26 P0: section-level quarantine keeps healthy DeepSeek
             # sections; only conflicting sections fall back.
@@ -708,17 +1079,20 @@ class AiBriefV2Service:
             )
             if section_report["status"] == SECTION_LEVEL_QUARANTINED:
                 llm_status = "PASS_DEGRADED"
+                ai_status = "PASS_DEGRADED_SECTION_FALLBACK"
                 self._section_report = section_report
             elif section_report["critical_failure"]:
                 brief = fallback_brief
                 llm_status = "PASS_DEGRADED"
                 source = GROUNDING_QUARANTINED
+                ai_status = "PASS_DEGRADED_WHOLE_FALLBACK"
         section_report = getattr(self, "_section_report", {})
         return AiBriefV2Result(
             run_id=run_id,
             model=model,
             prompt_version=PROMPT_VERSION_V2,
             llm_status=llm_status,
+            ai_status=ai_status,
             source=source,
             brief=brief,
             passes=pass_results,

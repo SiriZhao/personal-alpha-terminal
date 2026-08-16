@@ -74,7 +74,7 @@ files (37.40 MB), 710 backups, 1 validation artifact; dry-run showed 0 deletions
 
 ## Gate Matrix
 
-Documented in `docs/ARCHITECTURE.md` and enforced by the pipeline:
+Documented in `ARCHITECTURE.md` and enforced by the pipeline:
 
 | Gate | PASS | FAIL |
 |---|---|---|

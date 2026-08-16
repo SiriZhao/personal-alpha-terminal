@@ -1,75 +1,249 @@
 {
-  "schema_version": "current-status-v2",
-  "version": "1.2.0-rc.1",
-  "git_commit": "81a34b294d4a83820753b6f3ee39dc0da40d5803",
-  "build_id": "pat-1.2.0-rc.1-81a34b294d4a-20260813180525",
-  "generated_at": "2026-08-09T15:49:00+08:00",
-  "evidence_level": "FIXTURE_TESTED",
-  "operating_mode": "SHADOW_ONLY",
   "alembic_head": "d4a5b6c7d8e9",
+  "build_id": "pat-1.2.0-rc.1-7dce2e541880-20260815",
   "capabilities": {
-    "DATA": {
-      "state": "REAL_DATA_TESTED",
-      "evidence": "Primary live retrieval and certification producers ran; the required independent secondary evidence remains unavailable for most symbols."
-    },
-    "PIT": {
-      "state": "BLOCKED_BY_DATA",
-      "evidence": "Contracts and leakage tests exist; survivorship-safe universe, delistings, and historical corporate-action availability are not fully certified."
+    "AI Intelligence": {
+      "evidence": "AI_BRIEF status PASS; AI trade authority NONE; production influence NONE.",
+      "state": "REAL_DATA_TESTED"
     },
     "Alpha": {
-      "state": "FIXTURE_TESTED",
-      "evidence": "USAdaptiveAlphaCoreV1 runs deterministically through the production adapter; this is not real Locked-OOS validation."
-    },
-    "Probability": {
-      "state": "BLOCKED_BY_VALIDATION",
-      "evidence": "Calibration artifact contract is implemented; no real Locked-OOS calibration artifact is approved."
-    },
-    "Portfolio": {
-      "state": "BLOCKED_BY_VALIDATION",
-      "evidence": "Exact-fingerprint approval injection works; no real portfolio Locked-OOS approval artifact exists."
-    },
-    "Risk": {
-      "state": "FIXTURE_TESTED",
-      "evidence": "Causal correlation baseline, size validation, covariance, concentration, liquidity and fail-closed rules pass deterministic contracts."
-    },
-    "Stress": {
-      "state": "FIXTURE_TESTED",
-      "evidence": "Governed stress is in the daily risk chain; production veto authority requires an exact approved risk artifact."
+      "evidence": "USAdaptiveAlphaCoreV1 produced 2,135 cross-sectional factor rows; 1,171 candidates reached the optimizer.",
+      "state": "REAL_DATA_TESTED"
     },
     "Backtest": {
-      "state": "BLOCKED_BY_DATA",
-      "evidence": "One PIT-gated engine exists, but certified survivorship-safe historical evidence remains unavailable."
+      "evidence": "No survivorship-safe historical certification.",
+      "state": "BLOCKED_BY_DATA"
     },
-    "Locked OOS": {
-      "state": "BLOCKED_BY_DATA",
-      "evidence": "No real locked test was opened or promoted in this closure."
+    "DATA": {
+      "evidence": "acceptance run daily-2420c68452d142298e6b42482341391f; DATA PASS; PIT cutoff 2026-08-14T20:30:00+00:00; 2,135 universe members.",
+      "state": "REAL_DATA_TESTED"
     },
-    "Terminal": {
-      "state": "FIXTURE_TESTED",
-      "evidence": "Renderer identity is checked against the persisted DailyQuantResult from the vertical production path."
-    },
-    "Manual Execution": {
-      "state": "FIXTURE_TESTED",
-      "evidence": "Accepted recommendations support persisted multi-fill PENDING/PARTIAL/FILLED/CANCELLED/MODIFIED state; only actual fills mutate holdings."
+    "ETF Research": {
+      "evidence": "ETF sleeve remains RESEARCH_CANDIDATE; no formal ETF recommendations in ROUND27 acceptance.",
+      "state": "REAL_DATA_TESTED"
     },
     "Live Capital": {
-      "state": "DISABLED",
-      "evidence": "LIVE_CAPITAL_NOT_APPROVED; real PIT, Locked-OOS, approval and shadow-forward evidence are incomplete."
+      "evidence": "LIVE_CAPITAL_NOT_APPROVED",
+      "state": "DISABLED"
+    },
+    "Locked OOS": {
+      "evidence": "No mature OOS sample for probability promotion.",
+      "state": "BLOCKED_BY_DATA"
+    },
+    "Manual Execution": {
+      "evidence": "Manual execution remains the only execution path.",
+      "state": "FIXTURE_TESTED"
+    },
+    "Market Regime": {
+      "evidence": "deterministic market-regime-v1 runs in OBSERVATION_ONLY; no production influence.",
+      "state": "OBSERVATION_ONLY"
+    },
+    "PIT": {
+      "evidence": "PIT stage PASS for the acceptance run; historical research certification remains NOT_CERTIFIABLE.",
+      "state": "REAL_DATA_TESTED"
+    },
+    "Portfolio": {
+      "evidence": "optimizer input 1,171; no fixed cardinality cap; 10 non-zero targets produced by SLSQP constraints.",
+      "state": "REAL_DATA_TESTED"
+    },
+    "Portfolio Breadth": {
+      "evidence": "Fixture/OOS-style breadth research only; no certified historical OOS or mature forward outcome evidence.",
+      "state": "BLOCKED_BY_DATA"
+    },
+    "Probability": {
+      "evidence": "RESEARCH_ONLY; matured outcomes 0; effective N 0; production influence 0%.",
+      "state": "BLOCKED_BY_VALIDATION"
+    },
+    "Risk": {
+      "evidence": "RISK PASS; expected vol 7.60%; gross 27.23%; cash 72.77%; size neutralization degraded.",
+      "state": "REAL_DATA_TESTED"
+    },
+    "Stress": {
+      "evidence": "Governed stress remains in the risk chain.",
+      "state": "FIXTURE_TESTED"
+    },
+    "Terminal": {
+      "evidence": "backend formal actions and renderer action list are cardinality/ticker consistent for the acceptance run.",
+      "state": "REAL_DATA_TESTED"
     }
   },
-  "validation_checkpoint": {
-    "command": "pytest -q",
-    "result": "516 passed",
-    "quant_critical": "31 passed; 485 deselected; permanent minimum 31",
-    "commit": "c95b2b668f4365fe2d57f131b5732951342f3322"
+  "evidence_level": "VALID_ANALYSIS_ACTIONABLE_PROVISIONAL",
+  "generated_at": "2026-08-15T16:50:53.880726Z",
+  "git_commit": "7dce2e5418803d73d26da86ea2a4171ed9dd94e4",
+  "operating_mode": "MANUAL_ADVISORY_ONLY",
+  "round28": {
+    "acceptance_run_id": "daily-2420c68452d142298e6b42482341391f",
+    "ai_trade_authority": "NONE",
+    "automatic_execution": "DISABLED",
+    "broker_api": "DISABLED",
+    "classification": "VALID_ANALYSIS_ACTIONABLE_PROVISIONAL",
+    "decision_manifest_semantic_hash": "def9b6be383088f6dc6d88308cc80623c5733f710aa98fbbe95cf589d246d16b",
+    "final_action_count": 10,
+    "fixed_holdings_cap": null,
+    "formal_actions": [
+      {
+        "action": "BUY",
+        "symbol": "ATEX",
+        "target_weight": 0.027797309105095147
+      },
+      {
+        "action": "BUY",
+        "symbol": "CDNA",
+        "target_weight": 0.015761173873008374
+      },
+      {
+        "action": "BUY",
+        "symbol": "DK",
+        "target_weight": 0.012325574477942414
+      },
+      {
+        "action": "BUY",
+        "symbol": "LQDA",
+        "target_weight": 0.013385330442977014
+      },
+      {
+        "action": "BUY",
+        "symbol": "RLAY",
+        "target_weight": 0.02418174627196105
+      },
+      {
+        "action": "BUY",
+        "symbol": "RVMD",
+        "target_weight": 0.041876612446819686
+      },
+      {
+        "action": "BUY",
+        "symbol": "STX",
+        "target_weight": 0.022403407274050543
+      },
+      {
+        "action": "BUY",
+        "symbol": "TVTX",
+        "target_weight": 0.029461720698789613
+      },
+      {
+        "action": "BUY",
+        "symbol": "UMC",
+        "target_weight": 0.015983038297771722
+      },
+      {
+        "action": "BUY",
+        "symbol": "VSTS",
+        "target_weight": 0.06909927636475353
+      }
+    ],
+    "optimizer_input_count": 1171,
+    "pre_optimizer_top_n": null,
+    "probability_production_influence": 0.0,
+    "research_certification": "NOT_CERTIFIABLE"
   },
-  "release": {
-    "directory": "release/PersonalAlphaTerminal-v1.2.0-rc.1-win64",
-    "archive": "release/PersonalAlphaTerminal-v1.2.0-rc.1-win64.zip",
-    "zip_sha256": "04203e9bf254148add0100fb944df89dc1a50d5664cd1abb03c3978cdfc58222",
-    "dependency_lock_hash": "96390cad531b9d2f086f645f582b4b3dd43dffb05d752c3d533aa443d9124456",
-    "manifest_file_count": 1961,
-    "manifest_mismatches": 0,
-    "clean_path_smoke": "PASS"
-  }
+  "round29": {
+    "acceptance_mode": "FROZEN_REPLAY",
+    "action_commentary_count": 10,
+    "ai_source": "AI_BRIEF_QUARANTINED_SEMANTIC_MISMATCH",
+    "ai_status": "PASS_DEGRADED_WHOLE_FALLBACK",
+    "classification": "VALID_ANALYSIS_ACTIONABLE_PROVISIONAL",
+    "company_dossier_count": 10,
+    "devils_advocate_count": 10,
+    "frozen_replay": "PASS",
+    "frozen_replay_source": "FROZEN_LLM_OUTPUT_REPLAY",
+    "llm_usage": {
+      "completion_tokens": 3041,
+      "latency_ms": 25139,
+      "prompt_tokens": 21518,
+      "total_calls": 4
+    },
+    "news": {
+      "ai_used_rows": 9,
+      "cluster_count": 58,
+      "normalized_news_rows": 60,
+      "post_decision_pre_execution_count": 0,
+      "post_execution_count": 0,
+      "pre_decision_news_count": 60,
+      "raw_news_rows": 60,
+      "terminal_displayed_rows": 9,
+      "unknown_timestamp_count": 0
+    },
+    "portfolio_review_present": true,
+    "run_id": "daily-c3c0107d1d7641b49bbb81c32615fbbc",
+    "semantic_grounding_status": "AI_SEMANTIC_GROUNDING_OK",
+    "status": "PASS",
+    "validation": {
+      "frozen_replay": "PASS",
+      "full_pytest": "1201 passed",
+      "git_diff_check": "PASS",
+      "mypy_strict": "PASS (468 source files)",
+      "quant_critical": "31 passed",
+      "quant_regression": "317 passed",
+      "ruff": "PASS",
+      "run_id": "daily-c3c0107d1d7641b49bbb81c32615fbbc",
+      "schema_version": "round29-validation-summary-v1",
+      "secret_scan": "SECRET_SCAN_PASS"
+    }
+  },
+  "round30": {
+    "counterfactual_evidence_type": "FIXTURE_OOS_STYLE",
+    "counterfactual_variants": [
+      "A_FULL",
+      "B_NO_PROBABILITY",
+      "C_NO_TRANSACTION_COST",
+      "D_NO_LIQUIDITY",
+      "E_NO_COVARIANCE",
+      "F_NO_TURNOVER",
+      "G_NO_EXPOSURE_CONSTRAINTS",
+      "H_ONLY_FACTOR_ALPHA"
+    ],
+    "formal_participation": {
+      "Alpha": "ACTIVE",
+      "Covariance": "ACTIVE",
+      "LLM": "ADVISORY_ONLY",
+      "Liquidity": "ACTIVE",
+      "Market regime": "OBSERVATION_ONLY",
+      "Probability": "RESEARCH_ONLY / 0%",
+      "Risk": "ACTIVE",
+      "Sector constraint": "ACTIVE",
+      "Size constraint": "DEGRADED",
+      "Transaction cost": "ACTIVE",
+      "Turnover": "ACTIVE"
+    },
+    "model_registry_schema": "round30-model-influence-registry-v1",
+    "probability_production_influence": 0.0,
+    "probability_promotion_status": "RESEARCH_ONLY",
+    "source_run_id": "daily-2420c68452d142298e6b42482341391f",
+    "status": "PASS"
+  },
+  "round31": {
+    "etf_formal_action_count": 0,
+    "etf_research_count": 55,
+    "evidence_type": "FIXTURE_OOS_STYLE_WALK_FORWARD_NOT_CERTIFIED",
+    "policies": [
+      10,
+      15,
+      20,
+      25,
+      30,
+      40,
+      "VARIABLE",
+      "OPTIMIZER_DECIDED"
+    ],
+    "policy_status": "ROUND31_KEEP_CURRENT_POLICY_FORWARD_EVIDENCE_REQUIRED",
+    "recommended_policy": "OPTIMIZER_DECIDED",
+    "status": "PASS"
+  },
+  "schema_version": "current-status-v2",
+  "validation_checkpoint": {
+    "full_pytest": "1217 passed",
+    "git_diff_check": "PASS",
+    "mypy_strict": "PASS (471 source files)",
+    "quant_critical": "31 passed",
+    "quant_regression": "317 passed",
+    "round31_status_current": "10 passed",
+    "round31_targeted": "6 passed",
+    "ruff": "PASS",
+    "run_id": "daily-2420c68452d142298e6b42482341391f",
+    "schema_version": "round31-validation-summary-v1",
+    "secret_scan": "SECRET_SCAN_PASS",
+    "walk_forward_pit_leakage_cost_optimizer_cardinality_etf_tui": "66 passed"
+  },
+  "version": "1.2.0-rc.1"
 }

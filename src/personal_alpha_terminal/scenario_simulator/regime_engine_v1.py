@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 
 MODEL_VERSION = "market-regime-v1"
-MODEL_STATUS = "RESEARCH_ONLY"
+MODEL_STATUS = "OBSERVATION_ONLY"
 
 
 @dataclass(frozen=True, slots=True)

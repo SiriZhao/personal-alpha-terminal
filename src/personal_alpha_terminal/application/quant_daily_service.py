@@ -10,6 +10,7 @@ from math import floor
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from personal_alpha_terminal.application.decision_manifest import RunIdentity
 from personal_alpha_terminal.application.operational_readiness import (
     OperationalPolicy,
     OperationalPolicyDecision,
@@ -21,6 +22,10 @@ from personal_alpha_terminal.application.regime_link import (
     REGIME_UNAVAILABLE,
     RegimeLinkResult,
     latest_regime_link,
+)
+from personal_alpha_terminal.application.run_bundle import (
+    RunBundleStore,
+    stage_run_bundle,
 )
 from personal_alpha_terminal.application.strategy_approval import (
     StrategyApproval,
@@ -55,7 +60,10 @@ from personal_alpha_terminal.quant_engine.production_pipeline import (
     PipelineStage,
     ProductionPipelineStatus,
 )
-from personal_alpha_terminal.quant_engine.risk.budget import PortfolioRiskState
+from personal_alpha_terminal.quant_engine.risk.budget import (
+    PortfolioRiskState,
+    RiskBudget,
+)
 from personal_alpha_terminal.quant_engine.risk.model import PortfolioRiskModel, RiskModelEstimate
 from personal_alpha_terminal.quant_engine.risk.stress import (
     PortfolioStressReport,
@@ -169,6 +177,9 @@ class TodayResult:
     operational_degraded_reason: str | None = None
     lifecycle: dict[str, object] | None = None
     lifecycle_blocked_symbols: tuple[str, ...] = ()
+    # ROUND32: immutable production run bundle receipt (inputs staged; the
+    # orchestrator seals it with the DecisionManifest semantic hash).
+    run_bundle: dict[str, object] | None = None
 
 
 class ProductionDailyWorkflow:
@@ -231,6 +242,7 @@ class ProductionDailyWorkflow:
         portfolio_id: int | None,
         decision_time: datetime,
         analysis_date: date | None = None,
+        run_identity: RunIdentity | None = None,
     ) -> TodayResult:
         if decision_time.tzinfo is None:
             raise ValueError("decision_time must be timezone-aware")
@@ -376,6 +388,38 @@ class ProductionDailyWorkflow:
             )
 
         inputs = assembled.inputs
+        run_bundle: dict[str, object] | None = None
+        if run_identity is not None:
+            try:
+                run_bundle = stage_run_bundle(
+                    store=RunBundleStore(
+                        self.effective_config.report_dir / "evidence-bundles"
+                    ),
+                    run_id=run_identity.run_id,
+                    decision_id=run_identity.decision_id,
+                    created_at=run_identity.created_at,
+                    analysis_date=(
+                        analysis_date.isoformat()
+                        if analysis_date is not None
+                        else decision_time.date().isoformat()
+                    ),
+                    decision_cutoff=inputs.decision_time,
+                    trade_date=decision_time.date().isoformat(),
+                    inputs=inputs,
+                    risk=output.risk,
+                    target=output.target,
+                    constraints=self.pipeline.construction.constraints,
+                    cost_model=self.pipeline.cost_model,
+                    risk_budget=output.risk_budget
+                    if output.risk_budget is not None
+                    else RiskBudget(1.0, 1.0, 1.0, False, ("UNAVAILABLE",)),
+                    operational_mode=operational_mode,
+                )
+            except (ArithmeticError, LookupError, RuntimeError, TypeError, ValueError):
+                # Bundle staging is fail-soft for diagnostics but must never
+                # fabricate a sealed bundle: the receipt stays absent and the
+                # orchestrator will report the run as not fully replayable.
+                run_bundle = None
         if inputs.authorization.evidence is None:
             raise ValueError("production authorization is missing immutable data evidence")
         evidence = inputs.authorization.evidence
@@ -405,6 +449,7 @@ class ProductionDailyWorkflow:
                 output=output,
                 classical_output=classical_output,
                 regime_link=regime_link,
+                run_bundle=run_bundle,
             )
 
         if output.status is ProductionPipelineStatus.BLOCKED or output.decision is None:
@@ -429,6 +474,7 @@ class ProductionDailyWorkflow:
                 output=output,
                 classical_output=classical_output,
                 regime_link=regime_link,
+                run_bundle=run_bundle,
             )
 
         execution = self.sessions.next_tradable_open(decision_time=decision_time)
@@ -510,6 +556,7 @@ class ProductionDailyWorkflow:
             output=output,
             classical_output=classical_output,
             regime_link=regime_link,
+            run_bundle=run_bundle,
         )
 
     def _append_forward_predictions(
@@ -923,6 +970,7 @@ class ProductionDailyWorkflow:
         output: DailyQuantOutput | None = None,
         classical_output: DailyQuantOutput | None = None,
         regime_link: RegimeLinkResult | None = None,
+        run_bundle: dict[str, object] | None = None,
     ) -> TodayResult:
         recommendations = tuple(
             TodayRecommendation(
@@ -1227,6 +1275,7 @@ class ProductionDailyWorkflow:
             ),
             lifecycle=lifecycle,
             lifecycle_blocked_symbols=lifecycle_blocked_symbols,
+            run_bundle=run_bundle,
         )
 
     def _lifecycle_and_blocked(

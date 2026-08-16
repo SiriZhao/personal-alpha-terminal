@@ -16,6 +16,9 @@ from personal_alpha_terminal.application.daily_result import (
     DecisionRow,
     StageStatus,
 )
+from personal_alpha_terminal.application.model_participation import (
+    decision_participation_from_provenance,
+)
 from personal_alpha_terminal.application.semantic_domains import (
     FORMAL_ACTIONABLE,
     classify_item,
@@ -45,6 +48,7 @@ def render_daily_quant_result(
             )
         )
         _overview(result, console)
+        _decision_participation(result, console)
         _pre_execution_section(result, console)
         _today_actions(result, console)
         _ai_brief_section(result, console)
@@ -300,17 +304,23 @@ def _etf_research_candidates(result: DailyQuantResult, console: Console) -> None
     ]
     table = Table()
     table.add_column("Ticker")
+    table.add_column(_t("\u540d\u79f0", "Name"))
     table.add_column("Type")
     table.add_column("Sleeve")
     table.add_column(_t("\u7814\u7a76\u65b9\u5411", "Research target"))
     table.add_column(_t("\u5f53\u524d", "Current"))
+    table.add_column(_t("\u6295\u8d44\u65b9\u5411", "Direction"))
     table.add_column(_t("12M \u52a8\u91cf", "12M momentum"))
     table.add_column(_t("\u52a8\u91cf/\u6ce2\u52a8\u6bd4", "Momentum/Vol"))
+    table.add_column(_t("\u7814\u7a76\u8bc4\u5206", "Research score"))
     table.add_column(_t("\u72b6\u6001", "Status"))
     table.add_column(_t("\u4ea4\u6613\u6743\u9650", "Trading"))
+    table.add_column(_t("\u662f\u5426\u9700\u8981\u64cd\u4f5c", "Action needed"))
+    table.add_column(_t("\u539f\u56e0", "Reason"))
     for item in (*rows_with_weight, *rows_without_weight):
         momentum = item.get("momentum_252_21")
         ratio = item.get("momentum_vol_ratio")
+        research_score = ratio
         momentum_number = (
             float(cast("float", momentum)) if is_finite_metric(momentum) else None
         )
@@ -320,24 +330,32 @@ def _etf_research_candidates(result: DailyQuantResult, console: Console) -> None
         ratio_text = f"{float(cast('float', ratio)):.3f}" if is_finite_metric(ratio) else "--"
         table.add_row(
             str(item.get("symbol", "--")),
+            str(item.get("instrument_name") or item.get("name") or "UNAVAILABLE"),
             str(item.get("instrument_type", "ETF")),
             str(item.get("sleeve", "--")),
             _percent(_as_float(item.get("target_weight"))),
             _percent(_as_float(item.get("current_weight"))),
+            str(item.get("investment_direction") or "UNAVAILABLE"),
             momentum_text,
             ratio_text,
+            f"{research_score:.3f}" if is_finite_metric(research_score) else "--",
             str(item.get("model_status", "RESEARCH_CANDIDATE")),
             str(item.get("trading_permission", "NONE")),
+            _t("\u5426", "NO"),
+            str(item.get("rationale") or "RESEARCH_ONLY"),
         )
     notice = _t(
-        "\u7814\u7a76\u5019\u9009\uff1a\u4ec5\u5c55\u793a\u5019\u9009\u914d\u7f6e\u65b9\u5411\uff0c"
+        "\u7814\u7a76\u89c2\u5bdf\u00b7\u4e0d\u6267\u884c\uff1a"
+        "\u4ec5\u5c55\u793a\u5019\u9009\u914d\u7f6e\u65b9\u5411\uff0c"
         "\u4e0d\u5c5e\u4e8e\u4eca\u65e5\u6267\u884c\u8ba1\u5212\uff0c"  # noqa: E501
-        "\u4ea4\u6613\u6743\u9650 NONE\u3002"
+        "\u4ea4\u6613\u6743\u9650 NONE / RESEARCH_ONLY\u3002"
+        "\u662f\u5426\u9700\u8981\u64cd\u4f5c\uff1a\u5426\u3002"
         "\u8fd9\u4e9b\u8bc1\u5238\u672a\u7ecf\u8fc7 "  # noqa: E501
         "SIGNAL\u2192PORTFOLIO\u2192RISK\u2192DECISION\u2192EXECUTION "
         "\u6b63\u5f0f\u94fe\uff0c\u7981\u6b62\u88ab\u89e3\u8bfb\u4e3a\u4e70\u5165/\u5356\u51fa\u6307\u4ee4\u3002",
-        "RESEARCH CANDIDATES: research direction only. NOT part of today's "
-        "execution plan. Trading permission NONE. These securities have not "
+        "ETF RESEARCH WATCH: research direction only. NOT executed. NOT part of today's "
+        "execution plan. Trading permission NONE / RESEARCH_ONLY. Action needed: NO. "
+        "These securities have not "
         "passed the formal SIGNAL->PORTFOLIO->RISK->DECISION->EXECUTION chain "
         "and must never be read as BUY/SELL orders.",
     )
@@ -346,8 +364,9 @@ def _etf_research_candidates(result: DailyQuantResult, console: Console) -> None
             Group(
                 Text(
                     _t(  # noqa: E501
-                        "\u3010\u7814\u7a76\u5019\u9009 \u00b7 \u4e0d\u6267\u884c\u3011",
-                        "RESEARCH CANDIDATES \u00b7 NOT EXECUTED",
+                        "\u3010ETF \u7814\u7a76\u89c2\u5bdf \u00b7 "
+                        "\u4e0d\u9700\u8981\u64cd\u4f5c\u3011",
+                        "ETF RESEARCH WATCH \u00b7 NO ACTION REQUIRED",
                     ),
                     style="bold yellow",
                 ),
@@ -457,6 +476,17 @@ def _overview(result: DailyQuantResult, console: Console) -> None:
         default=None,
     )
     estimated = sum(item.estimated_value for item in actions)
+    etf_targets = tuple(result.etf_targets)
+    etf_formal = sum(
+        1
+        for item in etf_targets
+        if classify_item(item) == FORMAL_ACTIONABLE
+    )
+    etf_research = sum(
+        1
+        for item in etf_targets
+        if classify_item(item) == "RESEARCH_CANDIDATE"
+    )
     llm_stage = next((item for item in result.stages if item.name == "LLM_INTELLIGENCE"), None)
     llm_meta = llm_stage.metadata if llm_stage is not None else {}
     llm_participation = bool(llm_meta.get("production_influence"))
@@ -475,6 +505,9 @@ def _overview(result: DailyQuantResult, console: Console) -> None:
     body = _t(
         f"\u4eca\u65e5\u72b6\u6001\uff1a{action_zh}\n"
         f"\u64cd\u4f5c\uff1a{len(actions)} \u9879   \u4e70\u5165 {buys}   \u5356\u51fa {sells}\n"
+        f"ETF \u6b63\u5f0f\u64cd\u4f5c\uff1a{etf_formal}   "
+        f"ETF \u7814\u7a76\u89c2\u5bdf\uff1a{etf_research}\n"
+        f"{'无需执行任何ETF交易' if etf_formal == 0 else 'ETF正式操作见下方清单'}\n"
         f"\u9884\u8ba1\u91d1\u989d {_money(estimated)}   \u6700\u65e9\u6267\u884c {earliest_text}\n"
         f"LLM \u53c2\u4e0e\uff1a{'YES' if llm_participation else 'NO'}   "
         f"\u751f\u4ea7\u5f71\u54cd\uff1a{participation_zh}\n"
@@ -483,6 +516,8 @@ def _overview(result: DailyQuantResult, console: Console) -> None:
         f"\u95e8\u7981\uff1a{'; '.join(degraded) or 'none'}",
         f"Today: {'ACTIONABLE' if result.actionable else 'NOT_ACTIONABLE'}\n"
         f"Actions {len(actions)}   Buy/Add {buys}   Sell/Reduce {sells}\n"
+        f"ETF formal actions {etf_formal}   ETF research watch {etf_research}\n"
+        f"{'No ETF trades required' if etf_formal == 0 else 'See ETF formal action list below'}\n"
         f"Estimated value {_money(estimated)}   Earliest {earliest_text}\n"
         f"LLM participation: {'YES' if llm_participation else 'NO'}   "
         f"Production influence: {'YES' if llm_participation else 'NO'}\n"
@@ -494,6 +529,30 @@ def _overview(result: DailyQuantResult, console: Console) -> None:
         Panel(
             body,
             title=_t("\u3010\u4eca\u65e5\u603b\u89c8\u3011", "TODAY OVERVIEW"),
+            border_style="cyan",
+        )
+    )
+
+
+def _decision_participation(result: DailyQuantResult, console: Console) -> None:
+    """ROUND30: show which modules formally participated, not a generic claim."""
+
+    participation = decision_participation_from_provenance(
+        result.provenance,
+        market_regime="OBSERVATION_ONLY",
+    )
+    table = Table(show_header=False, box=None, pad_edge=False)
+    table.add_column(style="bold cyan")
+    table.add_column()
+    for label, value in participation.items():
+        table.add_row(label, value)
+    console.print(
+        Panel(
+            table,
+            title=_t(
+                "\u3010\u672c\u6b21\u6b63\u5f0f\u53c2\u4e0e\u51b3\u7b56\u3011",
+                "FORMAL DECISION PARTICIPATION",
+            ),
             border_style="cyan",
         )
     )
@@ -780,7 +839,15 @@ def _market_data(result: DailyQuantResult, console: Console) -> None:
     actual_refresh = str(data_meta.get("actual_refresh_count", "N/A"))
     cache_reuse = str(data_meta.get("cache_reuse_count", "N/A"))
     provider_returned = str(data_meta.get("provider_returned_count", "N/A"))
-    provider_response_coverage = _as_float(data_meta.get("provider_response_coverage"))
+    refreshed_count = _as_float(data_meta.get("actual_refresh_count"))
+    requested_count = _as_float(data_meta.get("requested_security_count"))
+    refresh_request_ratio = (
+        refreshed_count / requested_count
+        if refreshed_count is not None
+        and requested_count is not None
+        and requested_count != 0.0
+        else None
+    )
     latest_price_coverage = _as_float(data_meta.get("latest_price_coverage"))
     certified_coverage = _as_float(data_meta.get("certified_coverage"))
     quarantine = str(data_meta.get("quarantine_count", "N/A"))
@@ -821,8 +888,8 @@ def _market_data(result: DailyQuantResult, console: Console) -> None:
         ),
         (_t("Provider \u8fd4\u56de", "Provider returned"), provider_returned),
         (
-            _t("Provider \u54cd\u5e94\u8986\u76d6", "Provider response coverage"),
-            _percent(provider_response_coverage),
+            _t("\u672c\u8f6e\u9700\u5237\u65b0\u6bd4\u4f8b", "Refresh request ratio"),
+            _percent(refresh_request_ratio),
         ),
         (
             _t("\u6700\u65b0\u884c\u60c5\u8986\u76d6", "Latest-price coverage"),

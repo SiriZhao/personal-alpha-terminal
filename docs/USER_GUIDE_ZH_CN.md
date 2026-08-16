@@ -1203,7 +1203,7 @@ rem DEEPSEEK_API_KEY 必须由启动该进程的操作系统环境预先继承
 | `docs/USER_GUIDE_ZH_CN.md` | 本教程（中文使用手册） |
 | `docs/CLI_REFERENCE_ZH_CN.md` | 全部 CLI 命令参考（中文） |
 | `docs/TROUBLESHOOTING_ZH_CN.md` | 完整故障排查手册（中文） |
-| `docs/ARCHITECTURE.md` | 系统架构 |
+| `ARCHITECTURE.md` | 系统架构 |
 | `docs/LLM_CONFIGURATION.md` | LLM 配置（英文） |
 | `docs/TERMINAL_GUIDE.md` | 终端指南（英文） |
 | `docs/TROUBLESHOOTING.md` | 故障排查（英文） |
@@ -1214,6 +1214,5 @@ rem DEEPSEEK_API_KEY 必须由启动该进程的操作系统环境预先继承
 > **免责声明**：本软件是研究与决策支持工具，不构成投资建议。
 > 历史表现不保证未来收益。示例中的所有数字仅为格式演示，
 > 不代表任何买卖建议。交易决策与风险由使用者自行承担。
-
 
 

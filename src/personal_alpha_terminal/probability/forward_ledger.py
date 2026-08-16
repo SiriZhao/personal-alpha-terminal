@@ -57,6 +57,14 @@ class ProbabilityPrediction:
     target_definition: str
     cost_hurdle_bps: float
     created_at: str
+    # ROUND27: a run is an occurrence, not automatically an independent OOS
+    # observation.  These frozen fields define the semantic prediction unit.
+    canonical_prediction_id: str = ""
+    trade_date: str = ""
+    market_data_semantic_hash: str = "UNAVAILABLE"
+    universe_semantic_hash: str = "UNAVAILABLE"
+    portfolio_predecision_hash: str = "UNAVAILABLE"
+    run_type: str = "PRODUCTION_DECISION"
     immutable_hash: str = ""
 
     def document(self) -> dict[str, object]:
@@ -109,25 +117,115 @@ class ProbabilityForwardLedger:
     def outcomes_path(self) -> Path:
         return self.root / "outcomes.jsonl"
 
-    def append_prediction(self, prediction: ProbabilityPrediction) -> None:
-        self.root.mkdir(parents=True, exist_ok=True)
-        with self.predictions_path.open("a", encoding="utf-8") as handle:
-            handle.write(
-                json.dumps(prediction.document(), ensure_ascii=False, sort_keys=True) + "\n"
-            )
+    @property
+    def occurrences_path(self) -> Path:
+        return self.root / "occurrences.jsonl"
 
-    def append_outcome(self, outcome: ProbabilityOutcome) -> None:
+    @property
+    def canonical_index_path(self) -> Path:
+        return self.root / "canonical-index.json"
+
+    def append_prediction(self, prediction: ProbabilityPrediction) -> bool:
+        """Append a new canonical observation, or record a repeat occurrence.
+
+        Returns ``True`` only when the raw append created a statistical
+        observation.  REPLAY/TEST/DEBUG/VALIDATION/BACKFILL/REPORT_ONLY runs
+        never write either kind of forward evidence.
+        """
+        if prediction.run_type != "PRODUCTION_DECISION":
+            return False
         self.root.mkdir(parents=True, exist_ok=True)
+        document = prediction.document()
+        canonical_id = str(document.get("canonical_prediction_id") or "")
+        if not canonical_id:
+            canonical_id = canonical_prediction_id(document)
+            document["canonical_prediction_id"] = canonical_id
+        canonical = canonical_predictions(self.predictions())
+        first = canonical.get(canonical_id)
+        occurrence = {
+            "canonical_prediction_id": canonical_id,
+            "prediction_id": document.get("prediction_id"),
+            "run_id": document.get("run_id"),
+            "decision_id": document.get("decision_id"),
+            "occurred_at": document.get("created_at"),
+            "is_first_occurrence": first is None,
+        }
+        with self.occurrences_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(occurrence, ensure_ascii=False, sort_keys=True) + "\n")
+        if first is not None:
+            self.write_canonical_index()
+            return False
+        with self.predictions_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(document, ensure_ascii=False, sort_keys=True) + "\n")
+        self.write_canonical_index()
+        return True
+
+    def append_outcome(self, outcome: ProbabilityOutcome) -> bool:
+        """Append at most one formal outcome for each canonical prediction."""
+        self.root.mkdir(parents=True, exist_ok=True)
+        prediction_by_id = {
+            str(row.get("prediction_id")): row for row in self.predictions()
+        }
+        prediction = prediction_by_id.get(outcome.prediction_id)
+        canonical_id = canonical_prediction_id(
+            prediction or {"prediction_id": outcome.prediction_id}
+        )
+        existing_canonical = {
+            canonical_prediction_id(prediction_by_id.get(str(row.get("prediction_id"))) or {})
+            for row in self.outcomes()
+        }
+        if canonical_id in existing_canonical:
+            return False
         with self.outcomes_path.open("a", encoding="utf-8") as handle:
             handle.write(
                 json.dumps(outcome.document(), ensure_ascii=False, sort_keys=True) + "\n"
             )
+        return True
 
     def predictions(self) -> tuple[dict[str, object], ...]:
         return _read_jsonl(self.predictions_path)
 
     def outcomes(self) -> tuple[dict[str, object], ...]:
         return _read_jsonl(self.outcomes_path)
+
+    def write_canonical_index(self) -> dict[str, object]:
+        """Materialize a reversible index; the raw append-only ledger remains intact."""
+        raw = self.predictions()
+        canonical = audit_canonical_predictions(raw)
+        occurrences: dict[str, list[str]] = {key: [] for key in canonical}
+        raw_to_audit_key: dict[str, str] = {}
+        for row in raw:
+            audit_key = "canonical-prob-" + _hash(_migrated_audit_identity(row))[:24]
+            raw_key = str(row.get("canonical_prediction_id") or canonical_prediction_id(row))
+            raw_to_audit_key[raw_key] = audit_key
+            run_id = str(row.get("run_id") or "")
+            if audit_key in occurrences and run_id:
+                occurrences[audit_key].append(run_id)
+        for row in _read_jsonl(self.occurrences_path):
+            key = raw_to_audit_key.get(str(row.get("canonical_prediction_id") or ""), "")
+            run_id = str(row.get("run_id") or "")
+            if key in occurrences and run_id:
+                occurrences[key].append(run_id)
+        payload = {
+            "schema_version": "probability-canonical-index-v1",
+            "raw_prediction_rows": len(raw),
+            "canonical_prediction_rows": len(canonical),
+            "duplicate_prediction_rows": len(raw) - len(canonical),
+            "canonical_predictions": [
+                {
+                    "canonical_prediction_id": key,
+                    "first_prediction_id": row.get("prediction_id"),
+                    "first_run_id": row.get("run_id"),
+                    "occurrence_run_ids": list(dict.fromkeys(occurrences.get(key, []))),
+                }
+                for key, row in sorted(canonical.items())
+            ],
+        }
+        self.canonical_index_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        return payload
 
 
 def _read_jsonl(path: Path) -> tuple[dict[str, object], ...]:
@@ -145,6 +243,131 @@ def _read_jsonl(path: Path) -> tuple[dict[str, object], ...]:
     return tuple(rows)
 
 
+def canonical_prediction_identity(row: dict[str, object]) -> dict[str, object]:
+    """Return the frozen semantic identity of one prediction observation.
+
+    Legacy ROUND26 rows lack the four semantic hashes.  They stay readable and
+    are indexed with explicit ``UNAVAILABLE`` placeholders rather than being
+    modified or silently discarded.
+    """
+    return {
+        "decision_cutoff": row.get("decision_cutoff"),
+        "trade_date": row.get("trade_date") or str(row.get("decision_cutoff") or "")[:10],
+        "ticker": row.get("ticker"),
+        "probability_model_id": row.get("model_id"),
+        "probability_model_hash": row.get("model_hash"),
+        "target_definition": row.get("target_definition"),
+        "primary_horizon": row.get("primary_horizon"),
+        "benchmark": row.get("benchmark"),
+        "market_data_semantic_hash": row.get("market_data_semantic_hash", "UNAVAILABLE"),
+        "universe_semantic_hash": row.get("universe_semantic_hash", "UNAVAILABLE"),
+        "portfolio_predecision_hash": row.get("portfolio_predecision_hash", "UNAVAILABLE"),
+    }
+
+
+def canonical_prediction_id(row: dict[str, object]) -> str:
+    return "canonical-prob-" + _hash(canonical_prediction_identity(row))[:24]
+
+
+def canonical_predictions(
+    rows: tuple[dict[str, object], ...],
+) -> dict[str, dict[str, object]]:
+    """First raw row wins; later same-semantic rows are occurrences only."""
+    result: dict[str, dict[str, object]] = {}
+    for row in rows:
+        if str(row.get("run_type", "PRODUCTION_DECISION")) != "PRODUCTION_DECISION":
+            continue
+        key = str(row.get("canonical_prediction_id") or canonical_prediction_id(row))
+        result.setdefault(key, row)
+    return result
+
+
+def _migrated_audit_identity(row: dict[str, object]) -> dict[str, object]:
+    """Backfill only the ROUND26/early-ROUND27 wall-clock cutoff defect.
+
+    Raw ledger records are deliberately not edited.  Early producers wrote the
+    report-generation time into ``decision_cutoff`` and used a run-artifact
+    hash as the market semantic hash.  When an immutable DecisionManifest is
+    present, its PIT cutoff proves those values were not the semantic decision
+    identity.  The audit/index projection restores the frozen cutoff and a
+    cutoff-scoped migration marker, while retaining the source row verbatim.
+    """
+    identity = canonical_prediction_identity(row)
+    run_id = str(row.get("run_id") or "")
+    manifest_path = Path("reports/daily-runs") / run_id / "decision_manifest.json"
+    if not run_id or not manifest_path.exists():
+        return identity
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return identity
+    manifest_cutoff = str(manifest.get("decision_cutoff") or "")
+    if not manifest_cutoff or str(row.get("decision_cutoff") or "") == manifest_cutoff:
+        return identity
+    identity["decision_cutoff"] = manifest_cutoff
+    identity["trade_date"] = str(manifest.get("trade_date") or identity["trade_date"])
+    # The raw value was a report artifact hash, not a content-addressed market
+    # input identity.  Its manifest-proven PIT boundary is the only safe
+    # stable value recoverable without rewriting history.
+    identity["market_data_semantic_hash"] = f"MIGRATED_PIT_CUTOFF:{manifest_cutoff}"
+    return identity
+
+
+def audit_canonical_predictions(
+    rows: tuple[dict[str, object], ...],
+) -> dict[str, dict[str, object]]:
+    """Canonical projection for statistics, including the reversible migration."""
+    result: dict[str, dict[str, object]] = {}
+    for row in rows:
+        if str(row.get("run_type", "PRODUCTION_DECISION")) != "PRODUCTION_DECISION":
+            continue
+        key = "canonical-prob-" + _hash(_migrated_audit_identity(row))[:24]
+        result.setdefault(key, row)
+    return result
+
+
+def forward_prediction_audit(ledger: ProbabilityForwardLedger) -> dict[str, object]:
+    """Audit raw history without deleting or rewriting the append-only ledger."""
+    raw = ledger.predictions()
+    canonical = audit_canonical_predictions(raw)
+    run_types: dict[str, int] = {}
+    for row in raw:
+        kind = str(row.get("run_type", "PRODUCTION_DECISION"))
+        run_types[kind] = run_types.get(kind, 0) + 1
+    canonical_rows = tuple(canonical.values())
+    decision_dates = {str(row.get("decision_cutoff", ""))[:10] for row in canonical_rows}
+    manifests = {str(row.get("decision_id", "")) for row in canonical_rows}
+    tickers = {str(row.get("ticker", "")) for row in canonical_rows}
+    return {
+        "schema_version": "forward-prediction-audit-v1",
+        "raw_prediction_rows": len(raw),
+        "canonical_prediction_rows": len(canonical_rows),
+        "duplicate_prediction_rows": len(raw) - len(canonical_rows),
+        "distinct_decision_dates": len(decision_dates),
+        "distinct_decision_manifests": len(manifests),
+        "distinct_tickers": len(tickers),
+        "run_type_rows": run_types,
+        "migration": {
+            "kind": "ROUND27_PIT_CUTOFF_IDENTITY_PROJECTION",
+            "raw_ledger_modified": False,
+            "strict_canonical_prediction_rows": len(canonical_predictions(raw)),
+            "migrated_canonical_prediction_rows": len(canonical_rows),
+        },
+        "legacy_rows_without_full_semantic_identity": sum(
+            1
+            for row in raw
+            if any(
+                row.get(key) in (None, "", "UNAVAILABLE")
+                for key in (
+                    "market_data_semantic_hash",
+                    "universe_semantic_hash",
+                    "portfolio_predecision_hash",
+                )
+            )
+        ),
+    }
+
+
 def build_prediction(
     *,
     run_id: str,
@@ -159,9 +382,14 @@ def build_prediction(
     model_hash: str,
     cost_hurdle_bps: float,
     condition_state: str = "CLASSICAL_FALLBACK",
+    trade_date: str | None = None,
+    market_data_semantic_hash: str = "UNAVAILABLE",
+    universe_semantic_hash: str = "UNAVAILABLE",
+    portfolio_predecision_hash: str = "UNAVAILABLE",
+    run_type: str = "PRODUCTION_DECISION",
 ) -> ProbabilityPrediction:
     cutoff = decision_cutoff.astimezone(UTC)
-    core = {
+    core: dict[str, object] = {
         "run_id": run_id,
         "decision_id": decision_id,
         "ticker": ticker,
@@ -177,6 +405,11 @@ def build_prediction(
         "benchmark": PRIMARY_BENCHMARK,
         "target_definition": TARGET_DEFINITION,
         "cost_hurdle_bps": cost_hurdle_bps,
+        "trade_date": trade_date or cutoff.date().isoformat(),
+        "market_data_semantic_hash": market_data_semantic_hash,
+        "universe_semantic_hash": universe_semantic_hash,
+        "portfolio_predecision_hash": portfolio_predecision_hash,
+        "run_type": run_type,
     }
     prediction_id = f"prob-{_hash(core)[:16]}"
     return ProbabilityPrediction(
@@ -192,11 +425,17 @@ def build_prediction(
         calibrated_probability=core["calibrated_probability"],  # type: ignore[arg-type]
         model_id=str(core["model_id"]),
         model_hash=str(core["model_hash"]),
-        primary_horizon=int(core["primary_horizon"] or 21),
+        primary_horizon=int(cast("int | str", core["primary_horizon"] or 21)),
         benchmark=str(core["benchmark"]),
         target_definition=str(core["target_definition"]),
-        cost_hurdle_bps=float(core["cost_hurdle_bps"] or 0.0),
+        cost_hurdle_bps=float(cast("float | int | str", core["cost_hurdle_bps"] or 0.0)),
         created_at=cutoff.isoformat(),
+        canonical_prediction_id=canonical_prediction_id(core),
+        trade_date=str(core["trade_date"]),
+        market_data_semantic_hash=str(core["market_data_semantic_hash"]),
+        universe_semantic_hash=str(core["universe_semantic_hash"]),
+        portfolio_predecision_hash=str(core["portfolio_predecision_hash"]),
+        run_type=str(core["run_type"]),
     )
 
 
@@ -280,17 +519,29 @@ def evaluate_forward_probability(
 ) -> dict[str, object]:
     """Date-clustered evaluation report (research only)."""
 
+    raw_predictions = ledger.predictions()
     outcomes = ledger.outcomes()
-    predictions = {item.get("prediction_id"): item for item in ledger.predictions()}
-    matched = [
-        (predictions.get(item.get("prediction_id")), item)
-        for item in outcomes
-        if item.get("prediction_id") in predictions
-    ]
+    predictions_by_id = {str(item.get("prediction_id")): item for item in raw_predictions}
+    canonical = audit_canonical_predictions(raw_predictions)
+    # Outcomes are deduplicated by canonical prediction even for legacy rows
+    # that predate the explicit canonical_prediction_id field.
+    matched_by_canonical: dict[str, tuple[dict[str, object], dict[str, object]]] = {}
+    for outcome in outcomes:
+        prediction = predictions_by_id.get(str(outcome.get("prediction_id")))
+        if prediction is None:
+            continue
+        key = str(prediction.get("canonical_prediction_id") or canonical_prediction_id(prediction))
+        if key in canonical and key not in matched_by_canonical:
+            matched_by_canonical[key] = (canonical[key], outcome)
+    matched = list(matched_by_canonical.values())
     if not matched:
         return {
             "status": "NO_MATURED_OUTCOMES",
-            "row_level_n": len(outcomes),
+            "raw_prediction_rows": len(raw_predictions),
+            "canonical_predictions": len(canonical),
+            "matured_canonical_predictions": 0,
+            "row_level_n": 0,
+            "effective_sample_size": 0,
             "decision_date_n": 0,
             "production_influence": 0,
             "promotion_status": "NOT_ELIGIBLE",
@@ -300,11 +551,11 @@ def evaluate_forward_probability(
         float(
             cast(
                 "float | int | str | None",
-                cast("dict[str, object]", pred).get("calibrated_probability"),
+                pred.get("calibrated_probability"),
             )
             or cast(
                 "float | int | str | None",
-                cast("dict[str, object]", pred).get("raw_probability"),
+                pred.get("raw_probability"),
             )
             or 0.5
         )
@@ -320,8 +571,12 @@ def evaluate_forward_probability(
     )
     report: dict[str, object] = {
         "status": "FORWARD_EVIDENCE_AVAILABLE",
+        "raw_prediction_rows": len(raw_predictions),
+        "canonical_predictions": len(canonical),
+        "matured_canonical_predictions": len(matched),
         "row_level_n": len(matched),
         "decision_date_n": len(decision_dates),
+        "effective_sample_size": len(matched),
         "effective_sample_size_hint": len(decision_dates),
         "bootstrap": "decision-date clustered",
         "brier_score": _brier(probabilities, labels),

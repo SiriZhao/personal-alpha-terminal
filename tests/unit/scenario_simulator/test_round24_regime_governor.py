@@ -43,7 +43,7 @@ def test_regime_risk_on() -> None:
         as_of_date=date(2026, 8, 13),
     )
     assert verdict.regime == "RISK_ON"
-    assert verdict.model_status == "RESEARCH_ONLY"
+    assert verdict.model_status == "OBSERVATION_ONLY"
 
 
 def test_regime_stress() -> None:

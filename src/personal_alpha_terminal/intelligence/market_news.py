@@ -31,6 +31,14 @@ class NewsTimeClass(StrEnum):
     POST_EXECUTION_CONTEXT = "POST_EXECUTION_CONTEXT"
 
 
+class NewsFreshnessBucket(StrEnum):
+    LAST_24H = "LAST_24H"
+    LAST_72H = "LAST_72H"
+    LAST_7D = "LAST_7D"
+    LAST_30D = "LAST_30D"
+    HISTORICAL_CONTEXT = "HISTORICAL_CONTEXT"
+
+
 class NewsSourceTier(StrEnum):
     TIER1_OFFICIAL = "TIER1_OFFICIAL"
     TIER2_PROFESSIONAL_API = "TIER2_PROFESSIONAL_API"
@@ -62,6 +70,29 @@ def classify_news_time(
     if execution_boundary is not None and available_at > execution_boundary:
         return NewsTimeClass.POST_EXECUTION_CONTEXT
     return NewsTimeClass.POST_DECISION_PRE_EXECUTION
+
+
+def classify_news_freshness(
+    *,
+    published_at: datetime,
+    reference_time: datetime,
+) -> NewsFreshnessBucket:
+    """Classify a news item by publication age relative to the current run."""
+
+    if published_at.tzinfo is None or reference_time.tzinfo is None:
+        raise ValueError("news timestamps must be timezone-aware")
+    delta = (reference_time - published_at).total_seconds()
+    if delta < 0:
+        return NewsFreshnessBucket.HISTORICAL_CONTEXT
+    if delta <= 24 * 3600:
+        return NewsFreshnessBucket.LAST_24H
+    if delta <= 72 * 3600:
+        return NewsFreshnessBucket.LAST_72H
+    if delta <= 7 * 24 * 3600:
+        return NewsFreshnessBucket.LAST_7D
+    if delta <= 30 * 24 * 3600:
+        return NewsFreshnessBucket.LAST_30D
+    return NewsFreshnessBucket.HISTORICAL_CONTEXT
 
 
 # ---------------------------------------------------------------------------
@@ -169,6 +200,172 @@ def cluster_news(items: tuple[NewsItem, ...]) -> tuple[NewsCluster, ...]:
         )
         clusters[index] = merged
     return tuple(clusters)
+
+
+def news_item_from_document(row: dict[str, object]) -> NewsItem | None:
+    """Parse a persisted document without guessing missing timing fields."""
+    try:
+        timestamps: dict[str, datetime] = {}
+        for name in ("published_at", "retrieved_at", "available_at"):
+            raw = row.get(name)
+            if not isinstance(raw, str):
+                return None
+            value = datetime.fromisoformat(raw)
+            timestamps[name] = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+        required = ("news_id", "source", "source_tier", "headline", "url_hash", "content_hash")
+        if any(not isinstance(row.get(name), str) or not row.get(name) for name in required):
+            return None
+        raw_symbols = row.get("symbols")
+        raw_topics = row.get("topics")
+        symbols = raw_symbols if isinstance(raw_symbols, (list, tuple)) else ()
+        topics = raw_topics if isinstance(raw_topics, (list, tuple)) else ()
+        return NewsItem(
+            news_id=str(row["news_id"]), source=str(row["source"]),
+            source_tier=str(row["source_tier"]), headline=str(row["headline"]),
+            summary=str(row.get("summary") or ""), published_at=timestamps["published_at"],
+            retrieved_at=timestamps["retrieved_at"], available_at=timestamps["available_at"],
+            url_hash=str(row["url_hash"]), content_hash=str(row["content_hash"]),
+            symbols=tuple(str(item) for item in symbols),
+            topics=tuple(str(item) for item in topics),
+            country=str(row.get("country") or "US"),
+            language=str(row.get("language") or "en"),
+            revision_id=str(row.get("revision_id") or ""),
+            supersedes_id=str(row.get("supersedes_id") or ""),
+            evidence_state=str(row.get("evidence_state") or "RAW_UNVERIFIED"),
+        )
+    except (TypeError, ValueError):
+        return None
+
+
+def materialize_news_facts(
+    *,
+    rows: tuple[dict[str, object], ...],
+    decision_as_of: datetime,
+    formal_symbols: tuple[str, ...] = (),
+    execution_boundary: datetime | None = None,
+    limit: int = 12,
+    reference_time: datetime | None = None,
+) -> dict[str, object]:
+    """PIT-classify, deterministically rank, and materialize displayable news.
+
+    The LLM receives only decision-safe complete clusters.  Post-decision rows
+    are counted for pre-execution review but never used to rewrite the formal
+    decision.  Rows without usable timestamps remain visible only in the
+    explicit unknown count.
+    """
+    runtime = reference_time or datetime.now(UTC)
+    parsed: list[NewsItem] = []
+    unknown_timestamps = 0
+    for row in rows:
+        item = news_item_from_document(row)
+        if item is None:
+            unknown_timestamps += 1
+        else:
+            parsed.append(item)
+    counts = {
+        "pre_decision_news_count": 0,
+        "post_decision_pre_execution_count": 0,
+        "post_execution_count": 0,
+        "unknown_timestamp_count": unknown_timestamps,
+    }
+    freshness_counts = {bucket.value: 0 for bucket in NewsFreshnessBucket}
+    classes: dict[str, NewsTimeClass] = {}
+    for item in parsed:
+        time_class = classify_news_time(
+            available_at=item.available_at,
+            decision_as_of=decision_as_of,
+            execution_boundary=execution_boundary,
+        )
+        classes[item.news_id] = time_class
+        if time_class is NewsTimeClass.DECISION_SAFE:
+            counts["pre_decision_news_count"] += 1
+        elif time_class is NewsTimeClass.POST_DECISION_PRE_EXECUTION:
+            counts["post_decision_pre_execution_count"] += 1
+        else:
+            counts["post_execution_count"] += 1
+        bucket = classify_news_freshness(
+            published_at=item.published_at,
+            reference_time=runtime,
+        )
+        freshness_counts[bucket.value] += 1
+    by_id = {item.news_id: item for item in parsed}
+    visible: list[dict[str, object]] = []
+    for cluster in cluster_news(tuple(parsed)):
+        members = [by_id[item_id] for item_id in cluster.member_ids if item_id in by_id]
+        decision_safe = [
+            item
+            for item in members
+            if classes.get(item.news_id) is NewsTimeClass.DECISION_SAFE
+        ]
+        if not decision_safe:
+            continue
+        primary = max(decision_safe, key=lambda item: item.available_at)
+        # A cluster is visible only if all user-facing identity fields exist.
+        if not primary.headline or not primary.source or primary.published_at is None:
+            continue
+        topics = tuple(dict.fromkeys(topic for item in members for topic in item.topics))
+        symbols = tuple(dict.fromkeys(symbol for item in members for symbol in item.symbols))
+        tier_score = 30 if primary.source_tier == NewsSourceTier.TIER1_OFFICIAL.value else 15
+        relation = "ticker" if set(symbols) & set(formal_symbols) else "market"
+        relevance = (
+            tier_score
+            + (25 if relation == "ticker" else 0)
+            + (15 if "MACRO" in topics else 0)
+        )
+        visible.append(
+            {
+                "event_cluster_id": cluster.event_cluster_id,
+                "evidence_ref": cluster.event_cluster_id,
+                "title": primary.headline,
+                "canonical_headline": primary.headline,
+                "source": primary.source,
+                "source_tier": primary.source_tier,
+                "source_count": len({item.source for item in members}) or "UNKNOWN",
+                "published_at": primary.published_at.isoformat(),
+                "event_time": primary.published_at.isoformat(),
+                "published_time": primary.published_at.isoformat(),
+                "ingested_time": primary.retrieved_at.isoformat(),
+                "available_at": primary.available_at.isoformat(),
+                "decision_cutoff_relation": "PRE_DECISION",
+                "freshness_bucket": classify_news_freshness(
+                    published_at=primary.published_at,
+                    reference_time=runtime,
+                ).value,
+                "event_type": "/".join(topics) or "UNKNOWN",
+                "decision_eligible": True,
+                "relation": relation,
+                "symbols": list(symbols),
+                "topics": list(topics),
+                "member_ids": list(cluster.member_ids),
+                "relevance_score": relevance,
+                "evidence_strength": primary.source_tier,
+            }
+        )
+    visible.sort(
+        key=lambda item: (-int(str(item["relevance_score"])), str(item["available_at"])),
+        reverse=False,
+    )
+    historical_context = [
+        item
+        for item in visible
+        if item.get("freshness_bucket") == NewsFreshnessBucket.HISTORICAL_CONTEXT.value
+    ]
+    fresh_visible = [
+        item
+        for item in visible
+        if item.get("freshness_bucket") != NewsFreshnessBucket.HISTORICAL_CONTEXT.value
+    ]
+    return {
+        "raw_news_rows": len(rows),
+        "normalized_news_rows": len(parsed),
+        "clusters": fresh_visible[:limit],
+        "historical_context": historical_context,
+        "cluster_count": len(cluster_news(tuple(parsed))),
+        "terminal_displayed_rows": len(fresh_visible[:limit]),
+        "ai_used_rows": len(fresh_visible[:limit]),
+        "freshness_counts": freshness_counts,
+        **counts,
+    }
 
 
 # ---------------------------------------------------------------------------

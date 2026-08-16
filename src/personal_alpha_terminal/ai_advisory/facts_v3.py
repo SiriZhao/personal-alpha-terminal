@@ -55,6 +55,36 @@ def build_facts_v3(
         for item in formal
         if isinstance(item, dict)
     )
+    total_estimated_value = sum(
+        float(item.get("estimated_value") or 0.0)
+        for item in formal
+        if isinstance(item, dict)
+    )
+    ranked_by_weight = sorted(
+        (item for item in formal if isinstance(item, dict)),
+        key=lambda item: float(item.get("target_weight") or 0.0),
+        reverse=True,
+    )
+    top5_weight = sum(
+        float(item.get("target_weight") or 0.0) for item in ranked_by_weight[:5]
+    )
+    ranked_by_risk = sorted(
+        (item for item in formal if isinstance(item, dict)),
+        key=lambda item: float(item.get("risk_contribution") or 0.0),
+        reverse=True,
+    )
+    top5_risk_contribution = sum(
+        float(item.get("risk_contribution") or 0.0)
+        for item in ranked_by_risk[:5]
+    )
+    cost_pct_of_gross: float | None = None
+    if (
+        isinstance(total_value, (int, float))
+        and total_value
+        and isinstance(gross, (int, float))
+        and gross > 0
+    ):
+        cost_pct_of_gross = total_estimated_cost / (float(total_value) * gross)
 
     run_identity = {
         "run_id": facts_v2.get("run_id"),
@@ -78,6 +108,17 @@ def build_facts_v3(
         "total_estimated_cost": _fact(
             "portfolio", "total_estimated_cost", total_estimated_cost, unit="USD"
         ),
+        "total_estimated_value": _fact(
+            "portfolio", "total_estimated_value", total_estimated_value, unit="USD"
+        ),
+        "turnover": _fact("portfolio", "turnover", portfolio.get("turnover")),
+        "top5_weight": _fact("portfolio", "top5_weight", top5_weight, unit="PERCENT"),
+        "top5_risk_contribution": _fact(
+            "portfolio", "top5_risk_contribution", top5_risk_contribution, unit="PERCENT"
+        ),
+        "cost_pct_of_gross": _fact(
+            "portfolio", "cost_pct_of_gross", cost_pct_of_gross, unit="PERCENT"
+        ),
     }
     formal_actions: list[dict[str, Any]] = []
     for item in formal:
@@ -100,6 +141,14 @@ def build_facts_v3(
                 "estimated_cost": _fact(
                     "formal_action", f"{item.get('symbol')}.estimated_cost",
                     item.get("estimated_cost"), unit="USD",
+                ),
+                "estimated_value": _fact(
+                    "formal_action", f"{item.get('symbol')}.estimated_value",
+                    item.get("estimated_value"), unit="USD",
+                ),
+                "estimated_quantity": _fact(
+                    "formal_action", f"{item.get('symbol')}.estimated_quantity",
+                    item.get("estimated_quantity"),
                 ),
             }
         )
@@ -147,4 +196,14 @@ def build_facts_v3(
         "LIMITATIONS": list(facts_v2.get("data_gaps") or []),
         "EVIDENCE_REFERENCES": list(facts_v2.get("evidence_refs") or []),
         "AUTHORITY_BLOCK": authority_block,
+        "FORMAL_FACT_PACKET": {
+            "packet_type": "FORMAL_FACT_PACKET",
+            "immutable": True,
+            "llm_mutable": False,
+            "source": "DETERMINISTIC_QUANT_RUNTIME",
+        },
+        "COMPANY_DOSSIERS": facts_v2.get("company_dossiers") or {},
+        "AI_ACTION_COMMENTARIES": facts_v2.get("action_commentaries") or [],
+        "AI_PORTFOLIO_REVIEW": facts_v2.get("portfolio_review") or {},
+        "AI_DEVILS_ADVOCATE": facts_v2.get("devils_advocate") or [],
     }

@@ -20,6 +20,8 @@ from personal_alpha_terminal.ai_advisory import (
     build_quant_facts,
 )
 from personal_alpha_terminal.application.current_exposure import (
+    acquire_current_sec_sic,
+    acquire_current_size_observations,
     build_current_sector_exposure,
     build_current_size_exposure,
 )
@@ -84,7 +86,12 @@ from personal_alpha_terminal.intelligence.llm_runtime import (
     DEFAULT_LLM_RUNTIME_STATUS_PATH,
     llm_runtime_status,
 )
-from personal_alpha_terminal.intelligence.market_news import NewsIntelligenceService
+from personal_alpha_terminal.intelligence.market_news import (
+    NewsIntelligenceService,
+    NewsLedger,
+    materialize_news_facts,
+    news_item_from_document,
+)
 from personal_alpha_terminal.intelligence.storage import IntelligenceRepository
 from personal_alpha_terminal.models import Portfolio, Price, SecurityMaster
 from personal_alpha_terminal.models.intelligence import (
@@ -378,6 +385,7 @@ class DailyQuantOrchestrator:
                 portfolio_id=resolved_portfolio,
                 decision_time=effective_decision_time,
                 analysis_date=analysis_date,
+                run_identity=run_identity,
             )
         quant_duration = perf_counter() - stage_started
         self._merge_quant_stages(stages, workflow_result, quant_duration)
@@ -400,6 +408,11 @@ class DailyQuantOrchestrator:
             analysis_date=analysis_date,
             workflow_result=workflow_result,
         )
+        current_exposure = self._build_current_exposure(
+            workflow_result=workflow_result,
+            decision_as_of=effective_decision_time,
+        )
+        current_exposure = current_exposure or {}
         stage_started = perf_counter()
         ai_brief = self._add_ai_brief_stage(
             stages,
@@ -413,15 +426,17 @@ class DailyQuantOrchestrator:
                 "targets": list(etf_targets),
                 "composition": etf_composition,
             },
+            current_exposure=current_exposure,
         )
         self._record_probability_predictions(
             workflow_result=workflow_result,
             run_identity=run_identity,
-            decision_as_of=effective_decision_time,
-        )
-        current_exposure = self._build_current_exposure(
-            workflow_result=workflow_result,
-            decision_as_of=effective_decision_time,
+            # The frozen decision cutoff is a property of the certified
+            # analysis inputs, never the wall-clock time a report was
+            # regenerated.  Using the latter would fabricate a new OOS
+            # observation on every same-day rerun.
+            decision_as_of=workflow_result.data_cutoff or effective_decision_time,
+            trade_date=trade_date,
         )
         stage_started = perf_counter()
         pre_execution = self._add_pre_execution_stage(
@@ -461,6 +476,27 @@ class DailyQuantOrchestrator:
             run_identity=run_identity,
             current_exposure=current_exposure,
         )
+        if result.decision_manifest is not None:
+            try:
+                from personal_alpha_terminal.application.run_bundle import (
+                    RunBundleStore,
+                    finalize_run_bundle,
+                )
+
+                sealed = finalize_run_bundle(
+                    store=RunBundleStore(
+                        self._effective_config.report_dir / "evidence-bundles"
+                    ),
+                    run_id=run_id,
+                    decision_manifest=result.decision_manifest,
+                )
+                if isinstance(result.decision_provenance, dict):
+                    result.decision_provenance["evidence_bundle"] = sealed
+            except (FileNotFoundError, RuntimeError, ValueError):
+                # The staged bundle is sealed lazily; a missing or invalid stage
+                # is surfaced through the certificate provenance below rather
+                # than aborting an already-computed decision.
+                pass
         return self._persist_result(result)
 
     def _record_probability_predictions(
@@ -469,6 +505,7 @@ class DailyQuantOrchestrator:
         workflow_result: TodayResult,
         run_identity: RunIdentity | None,
         decision_as_of: datetime,
+        trade_date: date,
     ) -> None:
         """ROUND26 P0: immutable forward probability predictions.
 
@@ -481,11 +518,35 @@ class DailyQuantOrchestrator:
 
         if run_identity is None or not workflow_result.recommendations:
             return
+        market_data_semantic_hash = fingerprint(
+            {
+                "schema": "forward-prediction-market-input-v1",
+                "decision_cutoff": decision_as_of,
+                "analysis_factors": [
+                    {
+                        "symbol": item.symbol,
+                        "components": item.components,
+                        "raw_values": item.raw_values,
+                        "winsorized_values": item.winsorized_values,
+                        "neutralized_values": item.neutralized_values,
+                        "expected_alpha": item.expected_alpha,
+                    }
+                    for item in sorted(workflow_result.factors, key=lambda item: item.symbol)
+                ],
+                "benchmark": workflow_result.benchmark_symbol,
+            }
+        )
         overlay = {
             item.symbol: item
             for item in workflow_result.probability_overlay_effects
         }
-        ledger = ProbabilityForwardLedger()
+        # Keep forward evidence alongside the active run root.  Production's
+        # default ``reports/daily-runs`` resolves to ``var/probability-forward``;
+        # isolated/replay/test snapshot roots cannot contaminate that live
+        # append-only ledger.
+        ledger = ProbabilityForwardLedger(
+            self._snapshot_root.parent.parent / "var" / "probability-forward"
+        )
         try:
             for rank, recommendation in enumerate(
                 sorted(
@@ -533,6 +594,17 @@ class DailyQuantOrchestrator:
                             if workflow_result.probability_overlay_active
                             else "CLASSICAL_FALLBACK"
                         ),
+                        trade_date=trade_date.isoformat(),
+                        market_data_semantic_hash=market_data_semantic_hash,
+                        universe_semantic_hash=str(
+                            (workflow_result.universe_evidence or {}).get(
+                                "universe_hash", workflow_result.universe_snapshot_id
+                            )
+                        ),
+                        portfolio_predecision_hash=str(
+                            workflow_result.portfolio_snapshot_id
+                        ),
+                        run_type="PRODUCTION_DECISION",
                     )
                 )
         except (OSError, ValueError):
@@ -554,12 +626,24 @@ class DailyQuantOrchestrator:
         if not symbols:
             return None
         try:
+            current_observations, size_acquisition = acquire_current_size_observations(
+                symbols=symbols, as_of=decision_as_of
+            )
             with self._factory.begin() as session:
                 size = build_current_size_exposure(
                     session,
                     as_of=decision_as_of,
                     target_symbols=symbols,
+                    current_observations=current_observations,
                 )
+                security_types = {
+                    str(symbol): str(asset_type)
+                    for symbol, asset_type in session.execute(
+                        select(SecurityMaster.symbol, SecurityMaster.asset_type).where(
+                            SecurityMaster.symbol.in_(symbols)
+                        )
+                    ).all()
+                }
         except (OSError, SQLAlchemyError, ValueError):
             size = {
                 "exposure_kind": "CURRENT_OPERATIONAL",
@@ -569,11 +653,13 @@ class DailyQuantOrchestrator:
                 "missing_never_assumed_large_cap": True,
                 "detail": "size evidence unavailable; honest degraded status",
             }
-        # Sector: no verifiable full-universe issuer SIC feed is available in
-        # this environment; the classification stays honestly UNKNOWN rather
-        # than fabricated.
+            size_acquisition = {"status": "UNAVAILABLE"}
+            security_types = {symbol: "UNKNOWN" for symbol in symbols}
+        sector_rows, sector_acquisition = acquire_current_sec_sic(
+            symbols=symbols, security_types=security_types
+        )
         sector = build_current_sector_exposure(
-            sector_rows={symbol: None for symbol in symbols},
+            sector_rows=sector_rows,
             target_symbols=symbols,
             classification_source="SEC_SIC",
         )
@@ -582,6 +668,8 @@ class DailyQuantOrchestrator:
             "sector_exposure": sector,
             "exposure_kind": "CURRENT_OPERATIONAL",
             "historical_pit_boundary": "CURRENT DATA NEVER USED FOR HISTORICAL NEUTRALIZATION",
+            "size_acquisition": size_acquisition,
+            "sector_acquisition": sector_acquisition,
         }
 
     def _add_etf_sleeve_stage(
@@ -721,6 +809,7 @@ class DailyQuantOrchestrator:
         run_identity: RunIdentity | None = None,
         workflow_result: TodayResult,
         etf_evidence: dict[str, object],
+        current_exposure: dict[str, object],
     ) -> dict[str, object] | None:
         """ROUND24 AI Chinese advisory brief stage (B1-B9)."""
 
@@ -858,6 +947,7 @@ class DailyQuantOrchestrator:
                 decision_as_of=as_of,
             )
             facts["data_gaps"] = data_gaps
+            facts["current_exposure"] = current_exposure
             provider_factory = None
             if configured:
                 provider_factory = lambda: DeepSeekProvider(  # noqa: E731
@@ -880,21 +970,44 @@ class DailyQuantOrchestrator:
             except (OSError, SQLAlchemyError, ValueError):
                 market_state_doc = None
             news_doc: dict[str, object] | None = None
+            news_network_seconds = 0.0
             try:
                 from personal_alpha_terminal.intelligence.macro_news import (
                     OfficialMacroAcquisition,
                 )
 
+                news_started = perf_counter()
                 macro = OfficialMacroAcquisition().acquire()
-                macro_items = macro.get("items") or []
+                news_network_seconds = perf_counter() - news_started
+                raw_macro_items = macro.get("items")
+                macro_rows = raw_macro_items if isinstance(raw_macro_items, list) else []
+                macro_items = tuple(
+                    item
+                    for row in macro_rows
+                    if isinstance(row, dict)
+                    for item in [news_item_from_document(row)]
+                    if item is not None
+                )
+                ledger = NewsLedger()
+                ledger.append_items(macro_items)
                 general = NewsIntelligenceService().acquire(
                     decision_as_of=as_of,
                     providers={},
                 ).document()
+                formal_symbols = tuple(
+                    str(item.get("symbol"))
+                    for item in (facts.get("formal_actions") or [])
+                    if isinstance(item, dict) and item.get("symbol")
+                )
+                news_facts = materialize_news_facts(
+                    rows=ledger.load_items(),
+                    decision_as_of=as_of,
+                    formal_symbols=formal_symbols,
+                )
                 news_doc = {
-                    "macro_news": macro_items,
+                    "macro_news": [item.document() for item in macro_items],
                     "general_status": general.get("status"),
-                    "clusters": macro_items,
+                    **news_facts,
                     "provider_statuses": macro.get("provider_statuses"),
                     "fabricated": False,
                 }
@@ -904,6 +1017,39 @@ class DailyQuantOrchestrator:
                     "status": "OFFICIAL_MACRO_NEWS_UNAVAILABLE",
                     "fabricated": False,
                 }
+            from personal_alpha_terminal.ai_advisory.action_commentary import (
+                build_deterministic_action_commentaries,
+                build_deterministic_devils_advocate,
+                build_deterministic_portfolio_review,
+            )
+            from personal_alpha_terminal.intelligence.company_dossier import (
+                build_company_dossiers,
+            )
+
+            dossiers = build_company_dossiers(
+                symbols=tuple(
+                    str(item.get("symbol"))
+                    for item in (facts.get("formal_actions") or [])
+                    if isinstance(item, dict) and item.get("symbol")
+                ),
+                current_exposure=current_exposure,
+                as_of=as_of,
+            )
+            dossier_map = {item.ticker: item.document() for item in dossiers}
+            facts["company_dossiers"] = dossier_map
+            facts["action_commentaries"] = build_deterministic_action_commentaries(
+                facts=facts,
+                dossiers=dossier_map,
+                news=news_doc,
+            )
+            facts["portfolio_review"] = build_deterministic_portfolio_review(
+                facts=facts,
+                dossiers=dossier_map,
+            )
+            facts["devils_advocate"] = build_deterministic_devils_advocate(
+                facts=facts,
+                news=news_doc,
+            )
             from personal_alpha_terminal.ai_advisory.brief_v2 import AiBriefV2Service
 
             v2_service = AiBriefV2Service()
@@ -945,6 +1091,35 @@ class DailyQuantOrchestrator:
                         brief_result.semantic_grounding_status
                     ),
                     "section_report": brief_result.section_report,
+                    "ai_status": brief_result.ai_status,
+                    "deepseek_sections_used": brief_result.document().get(
+                        "deepseek_sections_used", 0
+                    ),
+                    "deepseek_sections_total": brief_result.document().get(
+                        "deepseek_sections_total", 5
+                    ),
+                    "fallback_sections": brief_result.document().get(
+                        "fallback_sections", []
+                    ),
+                    "news": {
+                        key: (news_doc or {}).get(key, 0)
+                        for key in (
+                            "raw_news_rows",
+                            "normalized_news_rows",
+                            "cluster_count",
+                            "pre_decision_news_count",
+                            "post_decision_pre_execution_count",
+                            "post_execution_count",
+                            "unknown_timestamp_count",
+                            "ai_used_rows",
+                            "terminal_displayed_rows",
+                        )
+                    },
+                    "news_network_seconds": round(news_network_seconds, 4),
+                    "llm_network_seconds": round(
+                        float(brief_result.usage.get("latency_ms", 0)) / 1000.0,
+                        4,
+                    ),
                     "production_influence": PRODUCTION_INFLUENCE,
                     "trade_authority": "NONE",
                     "target_weight_authority": "NONE",
@@ -1718,6 +1893,16 @@ class DailyQuantOrchestrator:
                 decision_manifest = manifest.document()
             except (AttributeError, ImportError, ValueError):
                 decision_manifest = None
+        decision_provenance = self._decision_provenance(
+            run_id=run_id,
+            workflow=workflow,
+            factors=factors,
+            decisions=decisions,
+            target_weights=target_weights,
+            current_weights=current,
+            current_exposure=current_exposure,
+            decision_manifest=decision_manifest,
+        )
         return DailyQuantResult(
             run_id,
             __version__,
@@ -1879,7 +2064,242 @@ class DailyQuantOrchestrator:
             pre_execution=pre_execution,
             decision_manifest=decision_manifest,
             current_exposure=current_exposure,
+            decision_provenance=decision_provenance,
         )
+
+    def _decision_provenance(
+        self,
+        *,
+        run_id: str,
+        workflow: TodayResult,
+        factors: tuple[FactorRow, ...],
+        decisions: tuple[DecisionRow, ...],
+        target_weights: dict[str, float],
+        current_weights: dict[str, float],
+        current_exposure: dict[str, object] | None,
+        decision_manifest: dict[str, object] | None,
+    ) -> dict[str, object]:
+        """ROUND28 P0: immutable per-decision provenance for the exact run.
+
+        Every field is copied from already-computed deterministic evidence.
+        Nothing here recomputes a target or changes an action.
+        """
+        decision_by_symbol = {item.symbol: item for item in decisions}
+        probability_by_symbol = {
+            item.symbol: item for item in workflow.probability_overlay_effects
+        }
+        risk = workflow.risk
+        optimizer_provenance = (
+            workflow.target.optimizer_provenance if workflow.target is not None else None
+        )
+        raw_targets = (
+            workflow.target.raw_target_weights if workflow.target is not None else None
+        )
+        size_observations = {}
+        sector_statuses = {}
+        if isinstance(current_exposure, dict):
+            observations = current_exposure.get("market_cap_observations")
+            if isinstance(observations, dict):
+                size_observations = observations
+            acquisition = current_exposure.get("sector_acquisition")
+            if isinstance(acquisition, dict) and isinstance(
+                acquisition.get("symbol_status"), dict
+            ):
+                sector_statuses = acquisition["symbol_status"]
+        manifest_hash = (
+            str(decision_manifest.get("semantic_hash") or "UNAVAILABLE")
+            if isinstance(decision_manifest, dict)
+            else "UNAVAILABLE"
+        )
+        records: dict[str, object] = {}
+        for factor in factors:
+            symbol = factor.symbol
+            decision = decision_by_symbol.get(symbol)
+            probability = probability_by_symbol.get(symbol)
+            risk_specific: dict[str, object] = {}
+            if risk is not None:
+                risk_specific = {
+                    "annualized_volatility": risk.annualized_volatility.get(symbol),
+                    "beta": risk.beta.get(symbol),
+                    "sector": risk.sectors.get(symbol),
+                    "average_daily_dollar_volume": (
+                        risk.average_daily_dollar_volume.get(symbol)
+                    ),
+                    "size_score": risk.size_scores.get(symbol),
+                    "market_cap": risk.market_caps.get(symbol),
+                    "covariance_contribution": (
+                        decision.risk_contribution if decision is not None else None
+                    ),
+                }
+            liquidity_cap = None
+            position_cap = None
+            if risk is not None and workflow.portfolio_value:
+                adv = risk.average_daily_dollar_volume.get(symbol)
+                if adv is not None:
+                    liquidity_cap = (
+                        adv
+                        * self._effective_config.transaction_cost.maximum_adv_participation
+                        / workflow.portfolio_value
+                    )
+                position_cap = (
+                    self._effective_config.portfolio_constraints.maximum_position_weight
+                )
+            records[symbol] = {
+                "ticker": symbol,
+                "security_identity": (
+                    decision.recommendation_id if decision is not None else symbol
+                ),
+                "factor_inputs": {
+                    "raw_values": factor.raw_values,
+                    "winsorized_values": factor.winsorized_values,
+                    "normalized_values": factor.neutralized_values or factor.components,
+                    "neutralized_values": factor.neutralized_values,
+                    "components": factor.components,
+                    "composite": factor.composite,
+                    "factor_rank": factor.rank,
+                    "factor_status": factor.status,
+                },
+                "raw_expected_alpha": factor.expected_alpha,
+                "alpha_model_identity": workflow.strategy_version,
+                "signal_eligibility": {
+                    "factor_status": factor.status,
+                    "signal_authorization_class": workflow.signal_authorization_class,
+                    "research_certification_state": workflow.research_certification_state,
+                },
+                "probability": {
+                    "model_identity": workflow.probability_artifact_id,
+                    "state": workflow.probability_overlay_state,
+                    "reason": workflow.probability_overlay_reason,
+                    "estimate": (
+                        probability.posterior_probability
+                        if probability is not None
+                        else None
+                    ),
+                    "adjustment": (
+                        probability.probability_adjustment
+                        if probability is not None
+                        else 0.0
+                    ),
+                    "production_weight": 0.0,
+                },
+                "risk": risk_specific,
+                "liquidity_and_cost": {
+                    "adv": risk_specific.get("average_daily_dollar_volume"),
+                    "liquidity_cap_weight": liquidity_cap,
+                    "position_cap_weight": position_cap,
+                    "estimated_spread_bps": (
+                        self._effective_config.transaction_cost.spread_bps
+                    ),
+                    "estimated_impact_bps": (
+                        self._effective_config.transaction_cost.impact_coefficient_bps
+                    ),
+                    "estimated_cost_usd": (
+                        decision.estimated_cost if decision is not None else None
+                    ),
+                    "turnover_penalty": (
+                        self._effective_config.portfolio_constraints.turnover_penalty
+                    ),
+                },
+                "current_only_exposure": {
+                    "size": size_observations.get(symbol, "UNAVAILABLE"),
+                    "sector_status": sector_statuses.get(symbol, "UNAVAILABLE"),
+                    "boundary": "CURRENT_ONLY_NEVER_HISTORICAL_PIT",
+                },
+                "optimizer": {
+                    "raw_target_weight": (
+                        raw_targets.get(symbol) if raw_targets is not None else None
+                    ),
+                    "constrained_target_weight": target_weights.get(symbol),
+                    "final_target_weight": (
+                        decision.target_weight if decision is not None else None
+                    ),
+                    "current_weight": current_weights.get(symbol, 0.0),
+                    "delta_weight": (
+                        decision.delta_weight if decision is not None else None
+                    ),
+                    "portfolio_expected_alpha": (
+                        workflow.target.expected_alpha
+                        if workflow.target is not None
+                        else None
+                    ),
+                    "portfolio_expected_volatility": (
+                        workflow.target.expected_volatility
+                        if workflow.target is not None
+                        else None
+                    ),
+                    "portfolio_turnover": (
+                        workflow.target.turnover if workflow.target is not None else None
+                    ),
+                    "portfolio_estimated_transaction_cost": (
+                        workflow.target.estimated_transaction_cost
+                        if workflow.target is not None
+                        else None
+                    ),
+                    "portfolio_gross_weight": (
+                        sum(workflow.target.target_weights.values())
+                        if workflow.target is not None
+                        else None
+                    ),
+                    "portfolio_cash_weight": (
+                        workflow.target.cash_weight
+                        if workflow.target is not None
+                        else None
+                    ),
+                    "portfolio_provenance": optimizer_provenance,
+                },
+                "execution": {
+                    "final_action": decision.action if decision is not None else "NO_ACTION",
+                    "estimated_notional": (
+                        decision.estimated_value if decision is not None else None
+                    ),
+                    "estimated_quantity": (
+                        decision.estimated_quantity if decision is not None else None
+                    ),
+                    "rounding": "floor_to_whole_share",
+                },
+                "decision_reasons": (
+                    [decision.reason]
+                    if decision is not None and decision.reason
+                    else ["UNAVAILABLE"]
+                ),
+                "vetoes_considered": {
+                    "risk_reductions": (
+                        list(workflow.target.risk_reductions)
+                        if workflow.target is not None
+                        else []
+                    ),
+                    "blockers": list(workflow.blockers),
+                    "warnings": list(workflow.warnings),
+                },
+                "active_gates": {
+                    "automatic_execution": "DISABLED",
+                    "broker_api": "DISABLED",
+                    "manual_confirmation_required": True,
+                    "operational_policy_id": workflow.operational_policy_id,
+                    "operational_policy_decision": workflow.operational_policy_decision,
+                    "probability_overlay_state": workflow.probability_overlay_state,
+                },
+                "hashes": {
+                    "decision_manifest_semantic_hash": manifest_hash,
+                    "config_hash": workflow.config_hash,
+                    "data_hash": workflow.data_hash,
+                    "model_hash": workflow.model_hash,
+                    "strategy_version": workflow.strategy_version,
+                    "data_snapshot_id": workflow.data_hash,
+                    "universe_snapshot_id": workflow.universe_snapshot_id,
+                    "portfolio_snapshot_id": workflow.portfolio_snapshot_id,
+                    "probability_model_id": workflow.probability_artifact_id,
+                    "operational_policy_id": workflow.operational_policy_id,
+                    "identity_hashes": dict(workflow.identity_hashes or {}),
+                },
+            }
+        return {
+            "schema_version": "round28-decision-provenance-v1",
+            "run_id": run_id,
+            "decision_id": f"decision-{run_id}",
+            "optimizer_provenance": optimizer_provenance,
+            "decisions": records,
+        }
 
     @staticmethod
     def _candidate_symbols(universe_evidence: dict[str, object]) -> tuple[str, ...]:

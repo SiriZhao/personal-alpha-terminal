@@ -13,8 +13,12 @@ and are never silently reclassified.
 
 from __future__ import annotations
 
+import json
+import urllib.request
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import UTC, datetime
+from time import perf_counter
+from typing import Any
 
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
@@ -64,11 +68,138 @@ class CurrentCompanySizeObservation:
         return asdict(self)
 
 
+def acquire_current_size_observations(
+    *, symbols: tuple[str, ...], as_of: datetime
+) -> tuple[tuple[CurrentCompanySizeObservation, ...], dict[str, object]]:
+    """Acquire current-only market-cap evidence without touching PIT tables.
+
+    Provider-reported cap is preferred.  We intentionally do not infer shares
+    from volume or backfill an unknown value.  Every successful observation is
+    labelled CURRENT_ONLY and is limited to next-trade operational risk.
+    """
+    started = perf_counter()
+    observations: list[CurrentCompanySizeObservation] = []
+    failures: dict[str, str] = {}
+    acquired_at = datetime.now(UTC)
+    try:
+        import yfinance as yf
+    except ImportError:
+        return (), {"provider": "YAHOO_FINANCE", "status": "UNAVAILABLE", "reason": "IMPORT_ERROR"}
+    for symbol in symbols:
+        try:
+            fast_info: Any = yf.Ticker(symbol).fast_info
+            # yfinance fast_info is a provider payload rather than our own
+            # schema.  It currently exposes camelCase keys, while older
+            # provider versions used snake_case.  Accept both explicitly;
+            # no value is inferred when neither is present.
+            market_cap_raw = fast_info.get("marketCap", fast_info.get("market_cap"))
+            price_raw = fast_info.get("lastPrice", fast_info.get("last_price"))
+            shares_raw = fast_info.get("shares")
+            market_cap = (
+                float(market_cap_raw)
+                if market_cap_raw and float(market_cap_raw) > 0
+                else None
+            )
+            price = float(price_raw) if price_raw and float(price_raw) > 0 else None
+            shares = float(shares_raw) if shares_raw and float(shares_raw) > 0 else None
+            calculation = "PROVIDER_REPORTED_MARKET_CAP"
+            if market_cap is None and shares is not None and price is not None:
+                market_cap = shares * price
+                calculation = "VERIFIED_CURRENT_SHARES_X_CURRENT_PRICE"
+            elif market_cap is None:
+                calculation = "UNKNOWN"
+            observations.append(
+                CurrentCompanySizeObservation(
+                    ticker=symbol,
+                    issuer_id=None,
+                    shares_outstanding=shares,
+                    shares_timestamp=acquired_at.isoformat() if shares is not None else None,
+                    shares_source="YAHOO_FAST_INFO_CURRENT" if shares is not None else None,
+                    decision_price=price,
+                    price_timestamp=acquired_at.isoformat() if price is not None else None,
+                    price_source="YAHOO_FAST_INFO_CURRENT" if price is not None else None,
+                    market_cap=market_cap,
+                    market_cap_calculation=calculation,
+                    acquired_at=acquired_at.isoformat(),
+                    available_at=acquired_at.isoformat(),
+                    source_quality="CURRENT_ONLY",
+                )
+            )
+        except (KeyError, OSError, RuntimeError, TypeError, ValueError) as error:
+            failures[symbol] = type(error).__name__
+    return tuple(observations), {
+        "provider": "YAHOO_FINANCE",
+        "status": "CURRENT_ONLY",
+        "requested": len(symbols),
+        "returned": len(observations),
+        "failures": failures,
+        "wall_seconds": round(perf_counter() - started, 4),
+        "decision_time_boundary": as_of.isoformat(),
+    }
+
+
+def acquire_current_sec_sic(
+    *, symbols: tuple[str, ...], security_types: dict[str, str]
+) -> tuple[dict[str, str | None], dict[str, object]]:
+    """Fetch current SEC SIC classifications for US common stocks only.
+
+    ETFs, funds and non-US/ADR-like symbols without an unambiguous SEC ticker
+    identity remain UNKNOWN.  This is current operational classification, not
+    historical sector membership.
+    """
+    started = perf_counter()
+    result: dict[str, str | None] = {symbol: None for symbol in symbols}
+    statuses: dict[str, str] = {}
+    try:
+        request = urllib.request.Request(
+            "https://www.sec.gov/files/company_tickers.json",
+            headers={"User-Agent": "personal-alpha-terminal/1.0 contact local"},
+        )
+        with urllib.request.urlopen(request, timeout=15.0) as response:  # noqa: S310
+            directory = json.loads(response.read().decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        return result, {"provider": "SEC", "status": "UNAVAILABLE", "reason": type(error).__name__}
+    ticker_to_cik = {
+        str(row.get("ticker", "")).upper(): int(row["cik_str"])
+        for row in directory.values()
+        if isinstance(row, dict) and row.get("ticker") and row.get("cik_str")
+    }
+    for symbol in symbols:
+        if security_types.get(symbol) != "stock":
+            statuses[symbol] = "NON_OPERATING_SECURITY_UNKNOWN"
+            continue
+        cik = ticker_to_cik.get(symbol.upper())
+        if cik is None:
+            statuses[symbol] = "SEC_IDENTITY_UNAVAILABLE"
+            continue
+        try:
+            request = urllib.request.Request(
+                f"https://data.sec.gov/submissions/CIK{cik:010d}.json",
+                headers={"User-Agent": "personal-alpha-terminal/1.0 contact local"},
+            )
+            with urllib.request.urlopen(request, timeout=15.0) as response:  # noqa: S310
+                submission = json.loads(response.read().decode("utf-8"))
+            sic = submission.get("sic")
+            result[symbol] = str(sic) if isinstance(sic, int | str) and str(sic).isdigit() else None
+            statuses[symbol] = "SEC_SIC_CURRENT_ONLY" if result[symbol] else "SEC_SIC_UNAVAILABLE"
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as error:
+            statuses[symbol] = type(error).__name__.upper()
+    return result, {
+        "provider": "SEC",
+        "status": "CURRENT_ONLY",
+        "requested": len(symbols),
+        "classified": sum(value is not None for value in result.values()),
+        "symbol_status": statuses,
+        "wall_seconds": round(perf_counter() - started, 4),
+    }
+
+
 def build_current_size_exposure(
     session: Session,
     *,
     as_of: datetime,
     target_symbols: tuple[str, ...] = (),
+    current_observations: tuple[CurrentCompanySizeObservation, ...] = (),
 ) -> dict[str, object]:
     """Read current operational size evidence with honest coverage."""
 
@@ -91,6 +222,11 @@ def build_current_size_exposure(
     for symbol, market_cap in membership_rows:
         if market_cap is not None and float(market_cap) > 0:
             covered[str(symbol)] = float(market_cap)
+    provenance: dict[str, dict[str, object]] = {}
+    for observation in current_observations:
+        if observation.market_cap is not None and observation.market_cap > 0:
+            covered[observation.ticker] = observation.market_cap
+        provenance[observation.ticker] = observation.document()
     target_weights: dict[str, float] = {}
     if target_symbols:
         weight = 1.0 / len(target_symbols) if target_symbols else 0.0
@@ -132,6 +268,8 @@ def build_current_size_exposure(
         "portfolio_weighted_market_cap": weighted_cap,
         "smallest_holding_market_cap": min(caps) if caps else None,
         "source": "UniverseMembership.market_cap (PIT-visible membership evidence)",
+        "market_cap_observations": provenance,
+        "current_only_observations": len(current_observations),
         "missing_never_assumed_large_cap": True,
     }
 

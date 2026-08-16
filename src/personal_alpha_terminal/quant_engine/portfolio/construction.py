@@ -90,6 +90,54 @@ class AlphaContribution:
 
 
 @dataclass(frozen=True, slots=True)
+class OptimizerCardinalityProvenance:
+    """ROUND28: exact optimizer -> no-trade -> target cardinality trace.
+
+    This is evidence, not a new policy.  It records how many symbols entered
+    the solver, how many non-zero weights the solver produced, and how many
+    were subsequently zeroed by each deterministic no-trade / minimum-size
+    rule.  There is deliberately no ``maximum_positions`` field anywhere in
+    this path.
+    """
+
+    optimizer_input_count: int
+    raw_nonzero_count: int
+    dropped_by_no_trade_band: int
+    dropped_by_minimum_rebalance_weight: int
+    dropped_by_minimum_trade_value: int
+    post_filter_nonzero_count: int
+    final_target_count: int
+    minimum_positive_raw_weight: float | None
+    minimum_positive_final_weight: float | None
+    maximum_raw_weight: float
+    maximum_final_weight: float
+    gross_raw: float
+    gross_final: float
+    explicit_position_cap: float | None
+    pre_optimizer_top_n: int | None
+
+    def document(self) -> dict[str, object]:
+        return {
+            "optimizer_input_count": self.optimizer_input_count,
+            "raw_nonzero_count": self.raw_nonzero_count,
+            "dropped_by_no_trade_band": self.dropped_by_no_trade_band,
+            "dropped_by_minimum_rebalance_weight": self.dropped_by_minimum_rebalance_weight,
+            "dropped_by_minimum_trade_value": self.dropped_by_minimum_trade_value,
+            "post_filter_nonzero_count": self.post_filter_nonzero_count,
+            "final_target_count": self.final_target_count,
+            "minimum_positive_raw_weight": self.minimum_positive_raw_weight,
+            "minimum_positive_final_weight": self.minimum_positive_final_weight,
+            "maximum_raw_weight": self.maximum_raw_weight,
+            "maximum_final_weight": self.maximum_final_weight,
+            "gross_raw": self.gross_raw,
+            "gross_final": self.gross_final,
+            "explicit_position_cap": self.explicit_position_cap,
+            "pre_optimizer_top_n": self.pre_optimizer_top_n,
+            "holding_cap_policy": "NO_FIXED_CARDINALITY_CAP",
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class PortfolioTarget:
     status: PortfolioConstructionStatus
     as_of: datetime
@@ -112,6 +160,8 @@ class PortfolioTarget:
     data_version: str
     model_validation_id: str
     target_holding_count: int = 0
+    optimizer_provenance: dict[str, object] | None = None
+    raw_target_weights: dict[str, float] | None = None
 
     @property
     def production_approved(self) -> bool:
@@ -392,6 +442,53 @@ class PortfolioConstructionEngine:
             for index, symbol in enumerate(symbols)
             if weights[index] > 1e-12
         }
+        raw_weights = np.asarray(result.x, dtype=float)
+        raw_nonzero = {
+            symbol: float(raw_weights[index])
+            for index, symbol in enumerate(symbols)
+            if raw_weights[index] > 1e-12
+        }
+        raw_nonzero_count = len(raw_nonzero)
+        dropped_no_trade = 0
+        dropped_minimum_weight = 0
+        dropped_minimum_value = 0
+        for index, _symbol in enumerate(symbols):
+            proposed = float(raw_weights[index])
+            current_value = float(current[index])
+            delta = proposed - current_value
+            if abs(delta) < 1e-12:
+                continue
+            if abs(delta) < self.constraints.no_trade_band:
+                dropped_no_trade += 1
+            elif abs(delta) < self.constraints.minimum_rebalance_weight:
+                dropped_minimum_weight += 1
+            elif abs(delta) * portfolio_value < self.constraints.minimum_trade_value:
+                dropped_minimum_value += 1
+        positive_raw = [value for value in raw_nonzero.values() if value > 0]
+        positive_final = [
+            value for value in target.values() if value > 0
+        ]
+        provenance = OptimizerCardinalityProvenance(
+            optimizer_input_count=len(symbols),
+            raw_nonzero_count=raw_nonzero_count,
+            dropped_by_no_trade_band=dropped_no_trade,
+            dropped_by_minimum_rebalance_weight=dropped_minimum_weight,
+            dropped_by_minimum_trade_value=dropped_minimum_value,
+            post_filter_nonzero_count=len(target),
+            final_target_count=len(target),
+            minimum_positive_raw_weight=(
+                min(positive_raw) if positive_raw else None
+            ),
+            minimum_positive_final_weight=(
+                min(positive_final) if positive_final else None
+            ),
+            maximum_raw_weight=float(raw_weights.max(initial=0.0)),
+            maximum_final_weight=float(weights.max(initial=0.0)),
+            gross_raw=float(raw_weights.sum()),
+            gross_final=float(weights.sum()),
+            explicit_position_cap=position_limit,
+            pre_optimizer_top_n=None,
+        )
         turnover = float(np.sum(np.abs(weights - current)))
         estimated_cost = 0.0
         try:
@@ -458,6 +555,8 @@ class PortfolioConstructionEngine:
             data_version=next(iter(versions)),
             model_validation_id=self.constraints.model_validation_id,
             target_holding_count=len(target),
+            optimizer_provenance=provenance.document(),
+            raw_target_weights=raw_nonzero,
         )
 
     def _blocked(
