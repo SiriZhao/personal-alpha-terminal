@@ -14,10 +14,15 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from personal_alpha_terminal import __version__
-from personal_alpha_terminal.agents.llm.providers import DeepSeekProvider
+from personal_alpha_terminal.agents.llm.factory import build_llm_provider
+from personal_alpha_terminal.agents.llm.providers import DeepSeekProvider, LLMProvider
 from personal_alpha_terminal.ai_advisory import (
     PRODUCTION_INFLUENCE,
     build_quant_facts,
+)
+from personal_alpha_terminal.application.agentic_shadow_service import (
+    AgenticShadowEvidence,
+    load_agentic_shadow_evidence,
 )
 from personal_alpha_terminal.application.current_exposure import (
     acquire_current_sec_sic,
@@ -145,6 +150,7 @@ class DailyQuantOrchestrator:
         snapshot_root: Path | None = None,
         sync_runner: SyncRunner | None = None,
         llm_runtime_status_path: Path = DEFAULT_LLM_RUNTIME_STATUS_PATH,
+        shadow_llm_provider_factory: Callable[[], LLMProvider] | None = None,
     ) -> None:
         self._factory = session_factory
         if isinstance(effective_config, Settings):
@@ -154,6 +160,7 @@ class DailyQuantOrchestrator:
         self._snapshot_root = snapshot_root or (effective_config.report_dir / "daily-runs")
         self._sync_runner = sync_runner
         self._llm_runtime_status_path = llm_runtime_status_path
+        self._shadow_llm_provider_factory = shadow_llm_provider_factory
         self._calendar = MarketSessionCalendar(
             nasdaq_23h_enabled=effective_config.nasdaq_23h_enabled,
             nasdaq_23h_effective_date=effective_config.nasdaq_23h_effective_date,
@@ -432,10 +439,76 @@ class DailyQuantOrchestrator:
             build_shadow_hybrid_document,
         )
 
-        hybrid_intelligence = build_shadow_hybrid_document(
-            workflow=workflow_result,
-            llm_stage=stages.get("LLM_INTELLIGENCE"),
-        )
+        try:
+            with self._factory.begin() as session:
+                pit_events = IntelligenceRepository(session).visible_events(
+                    effective_decision_time
+                )
+                shadow_evidence = load_agentic_shadow_evidence(
+                    session,
+                    events=pit_events,
+                    eligible_symbols=tuple(
+                        item.symbol for item in workflow_result.factors
+                    ),
+                    decision_time=effective_decision_time,
+                )
+            provider_name, _, configured, _ = self._configured_llm_identity()
+            shadow_provider = (
+                self._shadow_llm_provider_factory()
+                if self._shadow_llm_provider_factory is not None
+                else build_llm_provider(
+                    self._settings.model_copy(
+                        update={"llm_provider": provider_name}
+                    )
+                )
+                if configured
+                else None
+            )
+            hybrid_intelligence = build_shadow_hybrid_document(
+                workflow=workflow_result,
+                llm_stage=stages.get("LLM_INTELLIGENCE"),
+                evidence=shadow_evidence,
+                provider=shadow_provider,
+                effective_config=self._effective_config,
+            )
+        except Exception as error:
+            warnings.append(
+                "Agentic Shadow degraded "
+                f"({type(error).__name__}); Quant production output is unchanged"
+            )
+            hybrid_intelligence = build_shadow_hybrid_document(
+                workflow=workflow_result,
+                llm_stage=stages.get("LLM_INTELLIGENCE"),
+                evidence=AgenticShadowEvidence(companies={}),
+                provider=None,
+                effective_config=self._effective_config,
+            )
+            degradation = hybrid_intelligence.get("degradation")
+            if isinstance(degradation, dict):
+                degradation["pipeline_failure"] = type(error).__name__
+        llm_stage = stages.get("LLM_INTELLIGENCE")
+        if llm_stage is not None:
+            counts = hybrid_intelligence.get("counts")
+            metrics = counts if isinstance(counts, dict) else {}
+            raw_inferences = hybrid_intelligence.get("llm_inferences")
+            inference_count = len(raw_inferences) if isinstance(raw_inferences, list) else 0
+            stages["LLM_INTELLIGENCE"] = replace(
+                llm_stage,
+                metadata={
+                    **llm_stage.metadata,
+                    "shadow_thesis_calls": inference_count,
+                    "real_structured_theses": self._metadata_count(
+                        metrics, "real_structured_theses"
+                    ),
+                    "real_shadow_llm_decisions": self._metadata_count(
+                        metrics, "real_shadow_llm_decisions"
+                    ),
+                    "hybrid_counterfactual_executed": self._metadata_count(
+                        metrics, "hybrid_counterfactual_executed"
+                    ),
+                    "production_influence": False,
+                },
+            )
         self._record_probability_predictions(
             workflow_result=workflow_result,
             run_identity=run_identity,

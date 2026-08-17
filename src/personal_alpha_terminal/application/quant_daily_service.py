@@ -55,6 +55,7 @@ from personal_alpha_terminal.quant_engine.portfolio.construction import (
 from personal_alpha_terminal.quant_engine.portfolio.trades import TradeAction, TradeProposal
 from personal_alpha_terminal.quant_engine.probability_overlay import ProbabilityOverlayEffect
 from personal_alpha_terminal.quant_engine.production_pipeline import (
+    DailyQuantInput,
     DailyQuantOutput,
     DailyQuantPipeline,
     PipelineStage,
@@ -100,6 +101,15 @@ class TodayRecommendation:
     reason: str = ""
     data_quality: str = "UNAVAILABLE"
     confidence_source: str = "NOT_CALIBRATED"
+
+
+@dataclass(frozen=True, slots=True)
+class ShadowQuantContext:
+    """Exact deterministic inputs/config identity used for a shadow rerun."""
+
+    inputs: DailyQuantInput
+    validation_id: str | None
+    operational_mode: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,6 +190,42 @@ class TodayResult:
     # ROUND32: immutable production run bundle receipt (inputs staged; the
     # orchestrator seals it with the DecisionManifest semantic hash).
     run_bundle: dict[str, object] | None = None
+    # ROUND55: exact input snapshot for a non-authoritative counterfactual rerun.
+    shadow_context: ShadowQuantContext | None = None
+
+
+def build_daily_quant_pipeline(
+    effective_config: EffectiveRuntimeConfig,
+    validation_id: str | None,
+    *,
+    operational_mode: bool = False,
+) -> DailyQuantPipeline:
+    """Build the one canonical deterministic optimizer/risk pipeline."""
+
+    costs = TransactionCostModel(effective_config.transaction_cost)
+    construction = PortfolioConstructionEngine(
+        constraints=replace(
+            effective_config.portfolio_constraints,
+            model_validation_id=validation_id,
+        ),
+        cost_model=costs,
+        operational_mode=operational_mode,
+    )
+    stress_config = StressRiskConfig(
+        **{
+            **asdict(effective_config.stress_risk),
+            "production_validated": validation_id is not None and not operational_mode,
+            "validation_id": validation_id,
+            "provisional_operational": operational_mode,
+        }
+    )
+    return DailyQuantPipeline(
+        risk_model=PortfolioRiskModel(effective_config.risk_model),
+        construction=construction,
+        cost_model=costs,
+        stress_config=stress_config,
+        operational_mode=operational_mode,
+    )
 
 
 class ProductionDailyWorkflow:
@@ -211,28 +257,9 @@ class ProductionDailyWorkflow:
         *,
         operational_mode: bool = False,
     ) -> DailyQuantPipeline:
-        costs = TransactionCostModel(self.effective_config.transaction_cost)
-        construction = PortfolioConstructionEngine(
-            constraints=replace(
-                self.effective_config.portfolio_constraints,
-                model_validation_id=validation_id,
-            ),
-            cost_model=costs,
-            operational_mode=operational_mode,
-        )
-        stress_config = StressRiskConfig(
-            **{
-                **asdict(self.effective_config.stress_risk),
-                "production_validated": validation_id is not None and not operational_mode,
-                "validation_id": validation_id,
-                "provisional_operational": operational_mode,
-            }
-        )
-        return DailyQuantPipeline(
-            risk_model=PortfolioRiskModel(self.effective_config.risk_model),
-            construction=construction,
-            cost_model=costs,
-            stress_config=stress_config,
+        return build_daily_quant_pipeline(
+            self.effective_config,
+            validation_id,
             operational_mode=operational_mode,
         )
 
@@ -1276,6 +1303,19 @@ class ProductionDailyWorkflow:
             lifecycle=lifecycle,
             lifecycle_blocked_symbols=lifecycle_blocked_symbols,
             run_bundle=run_bundle,
+            shadow_context=(
+                ShadowQuantContext(
+                    inputs=assembled.inputs,
+                    validation_id=(
+                        output.target.model_validation_id
+                        if output is not None and output.target is not None
+                        else None
+                    ),
+                    operational_mode=assembled.operational_policy_effective,
+                )
+                if assembled is not None and output is not None
+                else None
+            ),
         )
 
     def _lifecycle_and_blocked(

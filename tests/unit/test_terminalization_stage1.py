@@ -10,6 +10,8 @@ import numpy as np
 import pandas as pd
 from sqlalchemy.orm import Session, sessionmaker
 
+from personal_alpha_terminal.agents.llm.providers import LLMProviderError
+from personal_alpha_terminal.agents.llm.schemas import LLMRequest, LLMResponse
 from personal_alpha_terminal.application.daily_orchestrator import DailyQuantOrchestrator
 from personal_alpha_terminal.application.daily_result import (
     DecisionReadiness,
@@ -17,6 +19,7 @@ from personal_alpha_terminal.application.daily_result import (
 )
 from personal_alpha_terminal.application.data_certification import DailyDataCertification
 from personal_alpha_terminal.application.quant_daily_service import (
+    ShadowQuantContext,
     TodayRecommendation,
     TodayResult,
 )
@@ -26,10 +29,20 @@ from personal_alpha_terminal.data.market_data.schemas import (
     DailyUpdateReport,
     InstrumentUpdateResult,
 )
+from personal_alpha_terminal.intelligence.schemas import (
+    BacktestSafety,
+    EventDirection,
+    EventEvidence,
+    EventType,
+    RawInformation,
+    UnifiedEvent,
+)
+from personal_alpha_terminal.intelligence.storage import IntelligenceRepository
 from personal_alpha_terminal.models import (
     DataSnapshotManifest,
     MarketUniverseMember,
     Portfolio,
+    Stock,
 )
 from personal_alpha_terminal.quant_engine.alpha import (
     AlphaDataQuality,
@@ -102,7 +115,7 @@ def _authorization():
     return ResearchDataGate().authorize(request, evidence, evaluated_at=NOW)
 
 
-def _actual_quant_output():
+def _actual_quant_case():
     rng = np.random.default_rng(11)
     market = rng.normal(0.0003, 0.009, 180)
     returns = pd.DataFrame(
@@ -170,27 +183,30 @@ def _actual_quant_output():
             maximum_sector_loss=0.20,
         ),
     )
-    return pipeline.run(
-        DailyQuantInput(
-            _authorization(),
-            NOW,
-            signals,
-            returns,
-            benchmark,
-            metadata,
-            {},
-            1_000_000,
-            PortfolioRiskState(-0.01, 0.12, 0.0, 0.0, 0.25, 0.25),
-            None,
-            True,
-            "universe-v1",
-            "CERTIFIED",
-        )
+    inputs = DailyQuantInput(
+        _authorization(),
+        NOW,
+        signals,
+        returns,
+        benchmark,
+        metadata,
+        {},
+        1_000_000,
+        PortfolioRiskState(-0.01, 0.12, 0.0, 0.0, 0.25, 0.25),
+        None,
+        True,
+        "universe-v1",
+        "CERTIFIED",
     )
+    return pipeline.run(inputs), inputs
+
+
+def _actual_quant_output():
+    return _actual_quant_case()[0]
 
 
 def _workflow_result() -> TodayResult:
-    output = _actual_quant_output()
+    output, inputs = _actual_quant_case()
     assert output.target is not None
     execution = NOW + timedelta(days=2)
     recommendations = tuple(
@@ -263,6 +279,11 @@ def _workflow_result() -> TodayResult:
         180,
         0.12,
         0.18,
+        shadow_context=ShadowQuantContext(
+            inputs=inputs,
+            validation_id=output.target.model_validation_id,
+            operational_mode=False,
+        ),
     )
 
 
@@ -352,6 +373,194 @@ def _settings(tmp_path: Path) -> Settings:
         llm_provider="disabled",
         DEEPSEEK_API_KEY=None,
     )
+
+
+def _seed_agentic_event(session: Session) -> None:
+    published = NOW - timedelta(hours=3)
+    observed = NOW - timedelta(hours=2, minutes=55)
+    ingested = NOW - timedelta(hours=2, minutes=54)
+    session.add(
+        Stock(
+            canonical_code="PERM:A",
+            symbol="A",
+            name="A Corporation",
+            market="US",
+            exchange="XNAS",
+            asset_type="stock",
+            currency="USD",
+            timezone="America/New_York",
+            is_active=True,
+            source="fixture",
+            provider="fixture",
+            available_time=NOW - timedelta(days=30),
+            ingested_time=NOW - timedelta(days=30),
+        )
+    )
+    raw = RawInformation(
+        raw_id="raw-agentic-a",
+        source="fixture-news",
+        source_identifier="fixture://agentic-a",
+        title="A Corporation raises guidance",
+        body="A Corporation published higher full-year guidance.",
+        issuer_id="company-a",
+        issuer_name="A Corporation",
+        permanent_security_id="PERM:A",
+        ticker_as_of="A",
+        issuer_resolution_status="RESOLVED",
+        security_mapping_status="MAPPED",
+        published_at=published,
+        observed_at=observed,
+        ingested_at=ingested,
+        available_at=observed,
+        processed_at=ingested,
+        data_cutoff=observed,
+    )
+    event = UnifiedEvent(
+        event_id="event-agentic-a",
+        symbol="A",
+        entity="A Corporation",
+        event_type=EventType.GUIDANCE,
+        title=raw.title,
+        summary="Management raised its public full-year guidance.",
+        published_at=published,
+        observed_at=observed,
+        effective_at=published,
+        ingested_at=ingested,
+        source=raw.source,
+        source_identifier=raw.source_identifier,
+        source_hash=raw.source_hash or "",
+        direction=EventDirection.POSITIVE,
+        magnitude=0.7,
+        surprise=0.6,
+        relevance=1.0,
+        novelty=0.8,
+        confidence=0.9,
+        expected_horizon=10,
+        evidence=(
+            EventEvidence(
+                evidence_id="evidence-agentic-a",
+                source=raw.source,
+                source_identifier=raw.source_identifier,
+                source_hash=raw.source_hash or "",
+                published_at=published,
+                observed_at=observed,
+                available_at=observed,
+                reference=raw.source_identifier,
+                extraction_confidence=0.9,
+            ),
+        ),
+        model_version="fixture-extractor-v1",
+        prompt_version="fixture-extraction-v1",
+        data_cutoff=observed,
+        created_at=ingested,
+        backtest_safety=BacktestSafety.BACKTEST_SAFE,
+        canonical_cluster_id="cluster-agentic-a",
+    )
+    repository = IntelligenceRepository(session)
+    repository.upsert_raw(raw)
+    repository.upsert_event(event)
+
+
+class _StructuredThesisProvider:
+    name = "fixture-external"
+    model = "fixture-thesis-v1"
+
+    def __init__(self, *, fail: bool = False) -> None:
+        self.fail = fail
+        self.requests: list[LLMRequest] = []
+
+    def generate(self, request: LLMRequest) -> LLMResponse:
+        self.requests.append(request)
+        if self.fail:
+            raise LLMProviderError("timeout", category="TIMEOUT")
+        user_data = json.loads(request.user_prompt)["USER_DATA"]
+        security = user_data["security"]
+        event_id = user_data["events"][0]["event_id"]
+        return LLMResponse(
+            content=json.dumps(
+                {
+                    "symbol": security["symbol"],
+                    "security": security,
+                    "stance": "BULLISH",
+                    "confidence": 0.8,
+                    "event_direction": 0.8,
+                    "event_magnitude": 0.7,
+                    "market_surprise": 0.6,
+                    "novelty": 0.8,
+                    "company_relevance": 1.0,
+                    "expected_horizon_sessions": 10,
+                    "bull_case": "The supplied guidance event supports upside.",
+                    "bear_case": "The guidance increase may not persist.",
+                    "key_catalysts": ["PUBLIC_GUIDANCE_INCREASE"],
+                    "invalidation_conditions": ["GUIDANCE_WITHDRAWN"],
+                    "risk_flags": ["EXECUTION_RISK"],
+                    "evidence_event_ids": [event_id],
+                    "concise_rationale": "The supplied event is positive and material.",
+                    "unsupported_claims": [],
+                    "source_conflict": False,
+                }
+            ),
+            provider=self.name,
+            model=self.model,
+            is_mock=False,
+            request_id="fixture-request-1",
+        )
+
+
+def test_daily_agentic_shadow_executes_and_provider_failure_preserves_quant(
+    session_factory: sessionmaker[Session], tmp_path: Path, monkeypatch
+) -> None:
+    with session_factory.begin() as session:
+        session.add(Portfolio(name="Agentic Ledger", cash_balance=1_000_000))
+        _seed_agentic_event(session)
+    workflow = _workflow_result()
+    monkeypatch.setattr(
+        "personal_alpha_terminal.application.daily_orchestrator.DataService",
+        _SafeDataService,
+    )
+    monkeypatch.setattr(
+        "personal_alpha_terminal.application.daily_orchestrator.ProductionDailyWorkflow.run",
+        lambda _self, **_kwargs: workflow,
+    )
+
+    provider = _StructuredThesisProvider()
+    success = DailyQuantOrchestrator(
+        session_factory,
+        _settings(tmp_path),
+        snapshot_root=tmp_path / "success-runs",
+        shadow_llm_provider_factory=lambda: provider,
+    ).run(decision_time=NOW, refresh=False)
+    assert provider.requests
+    assert success.hybrid_intelligence is not None
+    assert success.hybrid_intelligence["counts"]["real_structured_theses"] == 1
+    assert success.hybrid_intelligence["counts"]["real_shadow_llm_decisions"] == 1
+    assert success.hybrid_intelligence["counts"]["hybrid_counterfactual_executed"] == 1
+    assert success.hybrid_intelligence["invariants"]["production_lambda"] == 0.0
+    assert success.hybrid_intelligence["shadow_pipeline"]["deterministic_risk_evaluated"] is True
+    assert [(item.symbol, item.action) for item in success.final_decisions] == [
+        (item.symbol, item.action) for item in workflow.recommendations
+    ]
+    outbound = json.loads(provider.requests[0].user_prompt)["USER_DATA"]
+    serialized = json.dumps(outbound, sort_keys=True)
+    assert "cash_balance" not in serialized
+    assert "account_id" not in serialized
+    assert "order_history" not in serialized
+
+    failing_provider = _StructuredThesisProvider(fail=True)
+    degraded = DailyQuantOrchestrator(
+        session_factory,
+        _settings(tmp_path),
+        snapshot_root=tmp_path / "degraded-runs",
+        shadow_llm_provider_factory=lambda: failing_provider,
+    ).run(decision_time=NOW, refresh=False)
+    assert failing_provider.requests
+    assert degraded.hybrid_intelligence is not None
+    assert degraded.hybrid_intelligence["degradation"]["by_symbol"]["A"] == ["TIMEOUT"]
+    assert degraded.hybrid_intelligence["counts"]["real_shadow_llm_decisions"] == 0
+    assert degraded.hybrid_intelligence["invariants"]["production_lambda"] == 0.0
+    assert [(item.symbol, item.action) for item in degraded.final_decisions] == [
+        (item.symbol, item.action) for item in workflow.recommendations
+    ]
 
 
 def test_actual_quant_pipeline_flows_to_terminal_without_recalculation(

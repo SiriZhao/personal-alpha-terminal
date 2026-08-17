@@ -7,6 +7,7 @@ import pytest
 
 from personal_alpha_terminal.agents.llm.providers import LLMProviderError
 from personal_alpha_terminal.intelligence.agentic_engine import (
+    CompanyThesisAnalyzer,
     CounterfactualPortfolioLedger,
     EventAnalysisCache,
     EventAnalyzer,
@@ -16,6 +17,7 @@ from personal_alpha_terminal.intelligence.agentic_engine import (
     PITViolation,
     SemanticAlphaCalibrator,
     bounded_rankings,
+    build_company_thesis_prompt,
     build_event_prompt,
     build_market_intelligence,
     debate_quant_and_events,
@@ -298,6 +300,132 @@ def test_company_thesis_is_source_grounded_and_unavailable_claims_are_marked() -
     )
     assert "UNSUPPORTED_CLAIM" in no_source.unsupported_claims
     assert no_source.confidence == 0.25
+
+
+def test_company_thesis_outbound_payload_is_allowlisted_and_pit_bound() -> None:
+    quant = QuantThesis(
+        symbol="AAA",
+        security=security(),
+        quant_rank=0.8,
+        expected_alpha=0.05,
+        factor_contributions={"momentum": 0.2},
+        probability_evidence=0.61,
+        risk_flags=("LOW_LIQUIDITY_WARNING",),
+        uncertainty=0.1,
+    )
+    request = build_company_thesis_prompt(
+        quant=quant,
+        events=(event("e1"),),
+        decision_time=NOW,
+    )
+    payload = json.loads(request.user_prompt)
+    user_data = payload["USER_DATA"]
+    assert set(user_data) == {
+        "security",
+        "decision_timestamp",
+        "information_cutoff",
+        "quant_evidence",
+        "events",
+    }
+    assert set(user_data["security"]) == {
+        "permanent_security_id",
+        "company_id",
+        "symbol",
+        "symbol_as_of_time",
+    }
+    assert set(user_data["quant_evidence"]) == {
+        "quant_rank",
+        "expected_alpha_value",
+        "expected_alpha_semantics",
+        "factor_contributions",
+        "probability_evidence",
+        "uncertainty",
+        "risk_flags",
+    }
+    assert set(user_data["events"][0]) == {
+        "event_id",
+        "event_type",
+        "title",
+        "summary",
+        "published_at",
+        "available_at",
+        "source_id",
+        "source_name",
+        "content_hash",
+    }
+    serialized = json.dumps(user_data, sort_keys=True)
+    for forbidden in (
+        "account_id",
+        "broker",
+        "cash_balance",
+        "cost_basis",
+        "order_history",
+        "raw_payload_reference",
+        "ingested_at",
+        "source_hash",
+    ):
+        assert forbidden not in serialized
+
+    with pytest.raises(PITViolation):
+        build_company_thesis_prompt(
+            quant=quant,
+            events=(event("future", available_at=NOW + timedelta(seconds=1)),),
+            decision_time=NOW,
+        )
+    with pytest.raises(GroundingViolation):
+        build_company_thesis_prompt(
+            quant=quant,
+            events=(event("wrong", symbol="BBB"),),
+            decision_time=NOW,
+        )
+
+
+def test_company_thesis_analyzer_runs_real_structured_path_and_degrades_closed() -> None:
+    quant = QuantThesis(
+        symbol="AAA",
+        security=security(),
+        quant_rank=0.8,
+        expected_alpha=0.05,
+        factor_contributions={"momentum": 0.2},
+        uncertainty=0.1,
+    )
+    thesis = LLMCompanyThesis(
+        symbol="AAA",
+        security=security(),
+        stance=Stance.BULLISH,
+        confidence=0.8,
+        event_direction=0.7,
+        event_magnitude=0.5,
+        market_surprise=0.2,
+        novelty=0.5,
+        company_relevance=0.9,
+        expected_horizon_sessions=5,
+        bull_case="The supplied event supports upside.",
+        bear_case="The supplied event may not persist.",
+        concise_rationale="e1 is the only supplied evidence.",
+        evidence_event_ids=("e1",),
+    )
+    provider = Provider(thesis.model_dump_json())
+    result = CompanyThesisAnalyzer(provider).analyze(
+        quant=quant,
+        events=(event("e1"),),
+        decision_time=NOW,
+        now=NOW,
+    )
+    assert result.status == "AVAILABLE"
+    assert result.thesis is not None
+    assert result.inference.status == "VALID"
+    assert provider.request is not None
+
+    fallback = CompanyThesisAnalyzer(Provider("{")).analyze(
+        quant=quant,
+        events=(event("e1"),),
+        decision_time=NOW,
+        now=NOW,
+    )
+    assert fallback.status == "DEGRADED"
+    assert fallback.thesis is None
+    assert fallback.fallback_reason == "GroundingViolation"
 
 
 def test_company_thesis_rejects_hallucinated_or_wrong_security_identity() -> None:

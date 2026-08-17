@@ -207,8 +207,9 @@ class EventRecord(AgenticStrictModel):
                 raise ValueError("event symbol does not match canonical security identity")
             if self.company_id != self.security.company_id:
                 raise ValueError("event company_id does not match canonical security identity")
-            if self.security.symbol_as_of_time > self.available_at:
-                raise ValueError("event symbol identity is newer than event availability")
+            identity_cutoff = self.decision_cutoff or self.available_at
+            if self.security.symbol_as_of_time > identity_cutoff:
+                raise ValueError("event symbol identity is newer than decision cutoff")
         return self
 
     def visible_at(self, decision_time: datetime) -> bool:
@@ -260,6 +261,7 @@ class LLMInferenceRecord(AgenticStrictModel):
     token_usage: dict[str, int] | None = None
     status: str
     error_code: str | None = None
+    provider_request_id: str | None = None
     event_ids: tuple[str, ...] = ()
     parsed_output: dict[str, Any] | None = None
     concise_rationale: str | None = None
@@ -445,6 +447,108 @@ class CompanyInformationPack(AgenticStrictModel):
         }
         if any(str(key).casefold() in forbidden for key in self.sector_data):
             raise ValueError("information pack contains future outcome data")
+        return self
+
+
+class OutboundQuantEvidence(AgenticStrictModel):
+    """Allowlisted Quant context for one external Shadow thesis call."""
+
+    quant_rank: float
+    expected_alpha_value: float
+    expected_alpha_semantics: str = "DETERMINISTIC_QUANT_ENGINE_ESTIMATE"
+    factor_contributions: dict[str, float] = Field(default_factory=dict)
+    probability_evidence: float | None = None
+    uncertainty: float = Field(ge=0, le=1)
+    risk_flags: tuple[str, ...] = ()
+
+    @field_validator(
+        "quant_rank",
+        "expected_alpha_value",
+        "probability_evidence",
+        mode="before",
+    )
+    @classmethod
+    def outbound_quant_values_finite(
+        cls,
+        value: float | None,
+        info: Any,
+    ) -> float | None:
+        if value is not None and not math.isfinite(float(value)):
+            raise ValueError(f"{info.field_name} must be finite")
+        return value
+
+    @model_validator(mode="after")
+    def validate_factor_values(self) -> OutboundQuantEvidence:
+        if any(
+            not name.strip() or not math.isfinite(value)
+            for name, value in self.factor_contributions.items()
+        ):
+            raise ValueError("outbound factor contributions must be named and finite")
+        return self
+
+
+class OutboundEventEvidence(AgenticStrictModel):
+    """Minimal public event fields allowed to leave the local process."""
+
+    event_id: str
+    event_type: str
+    title: str
+    summary: str
+    published_at: datetime
+    available_at: datetime
+    source_id: str
+    source_name: str
+    content_hash: str
+
+    @field_validator(
+        "event_id",
+        "event_type",
+        "title",
+        "summary",
+        "source_id",
+        "source_name",
+        "content_hash",
+    )
+    @classmethod
+    def outbound_event_text_required(cls, value: str, info: Any) -> str:
+        return _required(value, info.field_name)
+
+    @field_validator("published_at", "available_at")
+    @classmethod
+    def outbound_event_times_aware(cls, value: datetime, info: Any) -> datetime:
+        return _aware(value, info.field_name)
+
+    @model_validator(mode="after")
+    def validate_outbound_event_time(self) -> OutboundEventEvidence:
+        if self.available_at < self.published_at:
+            raise ValueError("outbound event cannot be available before publication")
+        return self
+
+
+class CompanyThesisOutboundPayload(AgenticStrictModel):
+    """The complete and exclusive external-data boundary for a thesis call."""
+
+    security: SecurityIdentity
+    decision_timestamp: datetime
+    information_cutoff: datetime
+    quant_evidence: OutboundQuantEvidence
+    events: tuple[OutboundEventEvidence, ...]
+
+    @field_validator("decision_timestamp", "information_cutoff")
+    @classmethod
+    def outbound_times_aware(cls, value: datetime, info: Any) -> datetime:
+        return _aware(value, info.field_name)
+
+    @model_validator(mode="after")
+    def validate_outbound_boundary(self) -> CompanyThesisOutboundPayload:
+        if self.information_cutoff > self.decision_timestamp:
+            raise ValueError("information cutoff cannot follow decision timestamp")
+        if self.security.symbol_as_of_time > self.information_cutoff:
+            raise ValueError("security identity is newer than information cutoff")
+        if not self.events:
+            raise ValueError("outbound thesis payload requires PIT event evidence")
+        if any(event.available_at > self.information_cutoff for event in self.events):
+            raise ValueError("outbound thesis payload contains future event evidence")
         return self
 
 
