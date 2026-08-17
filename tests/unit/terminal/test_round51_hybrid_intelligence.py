@@ -115,6 +115,7 @@ def test_round51_renderer_shows_counterfactual_and_risk_wall() -> None:
     output = stream.getvalue()
     assert "Formal Economic Influence" in output
     assert "0.00%" in output
+    assert "Probability" in output
     assert "Quant-only" in output
     assert "Final Risk-adjusted" in output
     assert "Optimizer + Risk Engine" in output

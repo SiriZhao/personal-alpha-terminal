@@ -4,9 +4,10 @@
 - Engineering status: PASS
 - Production contribution: 0%
 
-Implemented the auditable multiplicative raw event score, linear/ridge/bucket
-calibration candidates, prediction/outcome separation, strict outcome time
-attachment, walk-forward ordering, event/date cluster aggregation and
-serialization-ready versioned contracts.
+Implemented the auditable multiplicative raw event score,
+linear/ridge/robust/isotonic/bucket calibration candidates,
+prediction/outcome separation, strict outcome time attachment, walk-forward
+ordering, event/date cluster aggregation and versioned calibration
+serialization.
 
 Historical LLM replay is diagnostic and not promotion eligible.

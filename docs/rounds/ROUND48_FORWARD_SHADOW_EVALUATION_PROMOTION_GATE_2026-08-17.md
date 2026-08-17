@@ -6,7 +6,8 @@
 
 Implemented configurable observation/session/symbol/event thresholds,
 transaction-cost-aware incremental alpha, cluster-aware bootstrap CI,
-score monotonicity, subperiod stability, leakage blocking and explicit
-promotion reason states.
+benchmark-adjusted performance, counterfactual turnover/drawdown,
+directional/confidence calibration, score monotonicity, subperiod stability,
+leakage blocking and explicit promotion reason states.
 
 No simulated result is used to satisfy the production gate.

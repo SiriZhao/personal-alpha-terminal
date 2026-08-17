@@ -124,6 +124,7 @@ def _securities(console: Console, securities: tuple[HybridSecurityView, ...]) ->
     table.add_column("公司 / 主营")
     table.add_column("Quant Rank", justify="right")
     table.add_column("Base Alpha", justify="right")
+    table.add_column("Probability", justify="right")
     table.add_column("Semantic", justify="right")
     table.add_column("Applied", justify="right")
     table.add_column("Final Alpha", justify="right")
@@ -136,6 +137,11 @@ def _securities(console: Console, securities: tuple[HybridSecurityView, ...]) ->
             company,
             f"{item.quant_rank:.4f}",
             f"{item.base_expected_alpha:.2%}",
+            (
+                f"{item.probability_contribution:.2%}"
+                if item.probability_contribution is not None
+                else "N/A"
+            ),
             f"{item.semantic_event_alpha:.2%}",
             f"{item.applied_llm_adjustment:.2%}",
             f"{item.final_expected_alpha:.2%}",

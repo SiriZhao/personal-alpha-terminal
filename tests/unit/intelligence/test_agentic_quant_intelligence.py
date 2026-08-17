@@ -7,6 +7,8 @@ import pytest
 
 from personal_alpha_terminal.agents.llm.providers import LLMProviderError
 from personal_alpha_terminal.intelligence.agentic_engine import (
+    CounterfactualPortfolioLedger,
+    EventAnalysisCache,
     EventAnalyzer,
     EventLedger,
     ForwardOutcomeLedger,
@@ -18,14 +20,17 @@ from personal_alpha_terminal.intelligence.agentic_engine import (
     build_market_intelligence,
     debate_quant_and_events,
     evaluate_promotion,
+    event_analysis_cache_key,
     fuse_alpha,
     parse_company_thesis,
     portfolio_semantic_risk,
     raw_event_score,
+    requires_pro_analysis,
     revoke_if_deteriorated,
     walk_forward_split,
 )
 from personal_alpha_terminal.intelligence.agentic_models import (
+    CounterfactualPortfolioSnapshot,
     DebateDecision,
     EventIntelligenceFeatures,
     EventRecord,
@@ -191,6 +196,34 @@ def test_event_analyzer_rejects_unsupported_event_citation() -> None:
     assert result.features.evidence_event_ids == ()
 
 
+def test_event_cache_identity_and_flash_pro_routing_are_auditable() -> None:
+    record = event("e1")
+    key = event_analysis_cache_key(
+        record,
+        prompt_version="event-intelligence-v1",
+        provider="fixture",
+        model="fixture-v1",
+        schema_version="event-features-v1",
+    )
+    assert key == event_analysis_cache_key(
+        record,
+        prompt_version="event-intelligence-v1",
+        provider="fixture",
+        model="fixture-v1",
+        schema_version="event-features-v1",
+    )
+    analysis = EventAnalyzer(Provider(valid_features())).analyze(record, now=NOW)
+    cache = EventAnalysisCache()
+    cache.put(key, analysis)
+    assert cache.get(key) == analysis
+    with pytest.raises(ValueError, match="immutable"):
+        cache.put(key, EventAnalyzer(None).analyze(record, now=NOW))
+    assert requires_pro_analysis((record,)) is True
+    ordinary = record.model_copy(update={"event_type": EventType.OTHER})
+    assert requires_pro_analysis((ordinary,), uncertainty=0.2) is False
+    assert requires_pro_analysis((ordinary,), source_conflict=True) is True
+
+
 def test_company_thesis_is_source_grounded_and_unavailable_claims_are_marked() -> None:
     thesis = LLMCompanyThesis(
         symbol="AAA",
@@ -308,6 +341,30 @@ def test_forward_outcome_ledger_separates_prediction_and_outcome_time() -> None:
     assert len(outcomes) == 1
 
 
+def test_counterfactual_portfolio_ledger_is_append_only_and_time_ordered() -> None:
+    ledger = CounterfactualPortfolioLedger()
+    first = CounterfactualPortfolioSnapshot(
+        session=NOW,
+        quant_gross_return=0.01,
+        quant_net_return=0.009,
+        quant_cost=0.001,
+        quant_turnover=0.02,
+        quant_drawdown=0.01,
+        hybrid_gross_return=0.011,
+        hybrid_net_return=0.0095,
+        hybrid_cost=0.0015,
+        hybrid_turnover=0.021,
+        hybrid_drawdown=0.011,
+        benchmark_return=0.005,
+    )
+    ledger.append(first)
+    with pytest.raises(ValueError, match="already exists"):
+        ledger.append(first)
+    metrics = ledger.metrics()
+    assert metrics is not None
+    assert metrics["incremental_turnover"] == pytest.approx(0.001)
+
+
 def test_walk_forward_split_preserves_strict_time_order() -> None:
     predictions = tuple(
         ForwardPrediction(
@@ -326,6 +383,38 @@ def test_walk_forward_split_preserves_strict_time_order() -> None:
     assert len(forward) == 2
     assert train[-1].prediction_time < validation[0].prediction_time
     assert validation[-1].prediction_time < forward[0].prediction_time
+
+
+@pytest.mark.parametrize("model", ["robust", "isotonic", "bucket"])
+def test_calibration_candidates_serialize_without_future_data(
+    model: str,
+) -> None:
+    predictions = tuple(
+        ForwardPrediction(
+            prediction_id=f"p{index}",
+            symbol="AAA",
+            prediction_time=NOW + timedelta(days=index),
+            raw_event_score=float(index) / 10,
+            delta_mu_event=0.01,
+            status=SemanticAlphaStatus.SHADOW,
+            confidence=0.8,
+        )
+        for index in range(4)
+    )
+    outcomes = tuple(
+        ForwardOutcome(
+            prediction_id=f"p{index}",
+            outcome_time=NOW + timedelta(days=index + 5),
+            horizons={"T+5": 5},
+            excess_returns={"T+5": 0.001 * (index + 1)},
+        )
+        for index in range(4)
+    )
+    calibrator = SemanticAlphaCalibrator(model=model)
+    assert calibrator.fit(predictions, outcomes) is SemanticAlphaStatus.CALIBRATING
+    document = calibrator.state_document()
+    restored = SemanticAlphaCalibrator.from_document(document)
+    assert restored.predict(0.2) == pytest.approx(calibrator.predict(0.2))
 
 
 def test_promotion_is_sample_blocked_and_lambda_is_fail_closed() -> None:
@@ -378,6 +467,89 @@ def test_promotion_is_sample_blocked_and_lambda_is_fail_closed() -> None:
     )
     assert revoked.level is LLMInfluenceLevel.LEVEL_1_SHADOW_ALPHA
     assert revoked.enabled is False
+
+
+def test_promotion_uses_counterfactual_cost_risk_and_calibration_metrics() -> None:
+    predictions = tuple(
+        ForwardPrediction(
+            prediction_id=f"pass-{index}",
+            symbol=("AAA" if index % 2 == 0 else "BBB"),
+            prediction_time=NOW + timedelta(days=index),
+            raw_event_score=float(index + 1) / 10,
+            delta_mu_event=0.01,
+            status=SemanticAlphaStatus.SHADOW,
+            event_ids=(f"event-{index}",),
+            event_cluster_ids=(f"cluster-{index}",),
+            confidence=1.0,
+        )
+        for index in range(6)
+    )
+    outcomes = tuple(
+        ForwardOutcome(
+            prediction_id=f"pass-{index}",
+            outcome_time=NOW + timedelta(days=index + 5),
+            horizons={"T+5": 5},
+            excess_returns={"T+5": 0.001 * (index + 1)},
+            transaction_cost_aware_returns={"T+5": 0.0008 * (index + 1)},
+            event_cluster_id=f"cluster-{index}",
+        )
+        for index in range(6)
+    )
+    snapshots = tuple(
+        CounterfactualPortfolioSnapshot(
+            session=NOW + timedelta(days=index),
+            quant_gross_return=0.001,
+            quant_net_return=0.0008,
+            quant_cost=0.0002,
+            quant_turnover=0.01,
+            quant_drawdown=0.01,
+            hybrid_gross_return=0.0015,
+            hybrid_net_return=0.0012,
+            hybrid_cost=0.0003,
+            hybrid_turnover=0.011,
+            hybrid_drawdown=0.011,
+            benchmark_return=0.0,
+        )
+        for index in range(6)
+    )
+    promotion = evaluate_promotion(
+        predictions=predictions,
+        outcomes=outcomes,
+        portfolio_snapshots=snapshots,
+        policy=LLMPromotionPolicy(
+            minimum_forward_observations=6,
+            minimum_unique_symbols=2,
+            minimum_unique_sessions=6,
+            minimum_unique_events=6,
+            maximum_incremental_turnover=0.01,
+            maximum_hybrid_drawdown_increase=0.01,
+            minimum_directional_accuracy=1.0,
+            maximum_confidence_calibration_error=0.0,
+        ),
+    )
+    assert promotion.status is PromotionStatus.PROMOTION_PASS
+    assert promotion.directional_accuracy == 1.0
+    assert promotion.confidence_calibration_error == 0.0
+    attribution = fuse_alpha(
+        symbol="AAA",
+        mu_quant=0.02,
+        delta_mu_event=0.1,
+        policy=LLMInfluencePolicy(
+            level=LLMInfluenceLevel.LEVEL_3_BOUNDED_ALPHA_OVERLAY,
+            enabled=True,
+            max_semantic_alpha_contribution=0.05,
+            max_relative_alpha_adjustment=0.1,
+            max_absolute_alpha_adjustment=0.03,
+        ),
+        promotion=promotion,
+        weight_quant_counterfactual=0.03,
+        weight_hybrid=0.031,
+        recommendation_quant="HOLD",
+        recommendation_hybrid="BUY",
+    )
+    assert attribution.delta_mu_semantic_applied == pytest.approx(0.002)
+    assert attribution.weight_quant_counterfactual == 0.03
+    assert attribution.recommendation_hybrid == "BUY"
 
 
 def test_rank_shift_is_bounded_without_removing_optimizer_eligibility() -> None:

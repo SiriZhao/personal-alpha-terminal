@@ -315,6 +315,7 @@ class ForwardPrediction(AgenticStrictModel):
     event_ids: tuple[str, ...] = ()
     event_cluster_ids: tuple[str, ...] = ()
     historical_llm_replay: bool = False
+    confidence: float = Field(default=0.0, ge=0, le=1)
 
     @field_validator("prediction_time")
     @classmethod
@@ -337,6 +338,29 @@ class ForwardOutcome(AgenticStrictModel):
         return _aware(value, "outcome_time")
 
 
+class CounterfactualPortfolioSnapshot(AgenticStrictModel):
+    schema_version: str = "counterfactual-portfolio-v1"
+    session: datetime
+    quant_gross_return: float
+    quant_net_return: float
+    quant_cost: float = Field(ge=0)
+    quant_turnover: float = Field(ge=0)
+    quant_drawdown: float = Field(ge=0)
+    hybrid_gross_return: float
+    hybrid_net_return: float
+    hybrid_cost: float = Field(ge=0)
+    hybrid_turnover: float = Field(ge=0)
+    hybrid_drawdown: float = Field(ge=0)
+    benchmark_return: float
+    quant_exposures: dict[str, float] = {}
+    hybrid_exposures: dict[str, float] = {}
+
+    @field_validator("session")
+    @classmethod
+    def session_time_aware(cls, value: datetime) -> datetime:
+        return _aware(value, "session")
+
+
 class PromotionEvaluation(AgenticStrictModel):
     schema_version: str = "promotion-evaluation-v1"
     status: PromotionStatus
@@ -347,6 +371,11 @@ class PromotionEvaluation(AgenticStrictModel):
     incremental_net_alpha: float | None = None
     bootstrap_ci_low: float | None = None
     bootstrap_ci_high: float | None = None
+    benchmark_adjusted_alpha: float | None = None
+    incremental_turnover: float | None = None
+    hybrid_drawdown_increase: float | None = None
+    directional_accuracy: float | None = None
+    confidence_calibration_error: float | None = None
     reasons: tuple[str, ...] = ()
 
 
@@ -360,6 +389,10 @@ class LLMPromotionPolicy(AgenticStrictModel):
     require_ci_low_non_negative: bool = True
     require_monotonicity: bool = True
     require_subperiod_stability: bool = True
+    maximum_incremental_turnover: float = Field(default=0.05, ge=0)
+    maximum_hybrid_drawdown_increase: float = Field(default=0.02, ge=0)
+    minimum_directional_accuracy: float = Field(default=0.5, ge=0, le=1)
+    maximum_confidence_calibration_error: float = Field(default=0.2, ge=0, le=1)
 
 
 class LLMInfluencePolicy(AgenticStrictModel):
@@ -392,6 +425,10 @@ class AlphaAttribution(AgenticStrictModel):
     delta_mu_semantic_applied: float
     mu_final: float
     production_influence: float
+    weight_quant_counterfactual: float | None = None
+    weight_hybrid: float | None = None
+    recommendation_quant: str | None = None
+    recommendation_hybrid: str | None = None
 
 
 class DecisionAttribution(AgenticStrictModel):

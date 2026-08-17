@@ -14,7 +14,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from hashlib import sha256
-from statistics import mean
+from statistics import mean, median
 from typing import Any, Protocol
 
 from pydantic import ValidationError
@@ -23,6 +23,7 @@ from personal_alpha_terminal.agents.llm.providers import LLMProviderError
 from personal_alpha_terminal.agents.llm.schemas import LLMRequest
 from personal_alpha_terminal.intelligence.agentic_models import (
     AlphaAttribution,
+    CounterfactualPortfolioSnapshot,
     DebateDecision,
     DecisionAttribution,
     EventIntelligenceFeatures,
@@ -59,6 +60,12 @@ class StructuredEventProvider(Protocol):
     model: str
 
     def generate(self, request: LLMRequest) -> Any: ...
+
+
+class EventSource(Protocol):
+    name: str
+
+    def fetch(self, *, as_of: datetime) -> tuple[EventRecord, ...]: ...
 
 
 def _aware(value: datetime, name: str) -> datetime:
@@ -178,6 +185,39 @@ def build_event_prompt(event: EventRecord) -> LLMRequest:
         max_tokens=512,
         thinking="disabled",
     )
+
+
+def event_analysis_cache_key(
+    event: EventRecord,
+    *,
+    prompt_version: str,
+    provider: str,
+    model: str,
+    schema_version: str,
+) -> str:
+    return _digest(
+        {
+            "event_content_hash": event.content_hash,
+            "prompt_version": prompt_version,
+            "provider": provider,
+            "model": model,
+            "schema_version": schema_version,
+        }
+    )
+
+
+@dataclass
+class EventAnalysisCache:
+    records: dict[str, EventAnalysis] = field(default_factory=dict)
+
+    def get(self, key: str) -> EventAnalysis | None:
+        return self.records.get(key)
+
+    def put(self, key: str, value: EventAnalysis) -> None:
+        existing = self.records.get(key)
+        if existing is not None and existing != value:
+            raise ValueError("event analysis cache entries are immutable")
+        self.records[key] = value
 
 
 @dataclass(frozen=True)
@@ -347,6 +387,28 @@ def parse_company_thesis(
     return validate_grounded_thesis(thesis, allowed_event_ids)
 
 
+def requires_pro_analysis(
+    events: tuple[EventRecord, ...],
+    *,
+    source_conflict: bool = False,
+    uncertainty: float = 0.0,
+    portfolio_impact: float = 0.0,
+) -> bool:
+    material_types = {
+        "earnings",
+        "m_and_a",
+        "regulatory",
+        "litigation",
+        "capital_raise",
+    }
+    return (
+        source_conflict
+        or uncertainty >= 0.7
+        or portfolio_impact >= 0.1
+        or any(event.event_type.value in material_types for event in events)
+    )
+
+
 def debate_quant_and_events(
     quant: QuantThesis,
     events: tuple[EventRecord, ...],
@@ -474,14 +536,17 @@ class SemanticAlphaCalibrator:
     """Small, explicit calibration candidate with temporal and cluster guards."""
 
     def __init__(self, model: str = "ridge", ridge: float = 1e-6) -> None:
-        if model not in {"linear", "ridge", "bucket"}:
-            raise ValueError("model must be linear, ridge, or bucket")
+        if model not in {"linear", "ridge", "robust", "isotonic", "bucket"}:
+            raise ValueError(
+                "model must be linear, ridge, robust, isotonic, or bucket"
+            )
         self.model = model
         self.ridge = ridge
         self.status = SemanticAlphaStatus.UNCALIBRATED
         self._slope = 0.0
         self._intercept = 0.0
         self._buckets: dict[int, float] = {}
+        self._isotonic: tuple[tuple[float, float], ...] = ()
 
     def fit(
         self,
@@ -509,7 +574,8 @@ class SemanticAlphaCalibrator:
         ys = [value for _, value in rows]
         if self.model in {"linear", "ridge"}:
             x_bar, y_bar = mean(xs), mean(ys)
-            denom = sum((x - x_bar) ** 2 for x in xs) + self.ridge
+            penalty = self.ridge if self.model == "ridge" else 0.0
+            denom = sum((x - x_bar) ** 2 for x in xs) + penalty
             self._slope = (
                 sum(
                     (x - x_bar) * (y - y_bar)
@@ -518,6 +584,19 @@ class SemanticAlphaCalibrator:
                 / denom
             )
             self._intercept = y_bar - self._slope * x_bar
+        elif self.model == "robust":
+            slopes = [
+                (ys[right] - ys[left]) / (xs[right] - xs[left])
+                for left in range(len(xs))
+                for right in range(left + 1, len(xs))
+                if xs[right] != xs[left]
+            ]
+            self._slope = median(slopes) if slopes else 0.0
+            self._intercept = median(
+                y - self._slope * x for x, y in zip(xs, ys, strict=True)
+            )
+        elif self.model == "isotonic":
+            self._isotonic = _fit_isotonic(xs, ys)
         else:
             buckets: dict[int, list[float]] = defaultdict(list)
             for x, y in zip(xs, ys, strict=True):
@@ -527,12 +606,97 @@ class SemanticAlphaCalibrator:
         return self.status
 
     def predict(self, score: float) -> float:
-        if self.model in {"linear", "ridge"}:
+        if self.model in {"linear", "ridge", "robust"}:
             return self._intercept + self._slope * score
+        if self.model == "isotonic":
+            if not self._isotonic:
+                return 0.0
+            for upper, value in self._isotonic:
+                if score <= upper:
+                    return value
+            return self._isotonic[-1][1]
         if not self._buckets:
             return 0.0
         key = min(self._buckets, key=lambda candidate: abs(candidate / 4 - score))
         return self._buckets[key]
+
+    def state_document(self) -> dict[str, object]:
+        return {
+            "schema_version": "semantic-alpha-calibrator-v1",
+            "model": self.model,
+            "ridge": self.ridge,
+            "status": self.status.value,
+            "slope": self._slope,
+            "intercept": self._intercept,
+            "buckets": {str(key): value for key, value in self._buckets.items()},
+            "isotonic": [list(item) for item in self._isotonic],
+        }
+
+    @classmethod
+    def from_document(cls, document: dict[str, object]) -> SemanticAlphaCalibrator:
+        if document.get("schema_version") != "semantic-alpha-calibrator-v1":
+            raise ValueError("unsupported semantic alpha calibrator schema")
+        model = document.get("model")
+        ridge = document.get("ridge")
+        if not isinstance(model, str) or not isinstance(ridge, (int, float)):
+            raise ValueError("invalid semantic alpha calibrator identity")
+        calibrator = cls(model=model, ridge=float(ridge))
+        status = document.get("status")
+        if not isinstance(status, str):
+            raise ValueError("invalid semantic alpha calibrator status")
+        calibrator.status = SemanticAlphaStatus(status)
+        for name in ("slope", "intercept"):
+            value = document.get(name)
+            if not isinstance(value, (int, float)):
+                raise ValueError(f"invalid calibrator {name}")
+            setattr(calibrator, f"_{name}", float(value))
+        raw_buckets = document.get("buckets")
+        if not isinstance(raw_buckets, dict):
+            raise ValueError("invalid calibrator buckets")
+        calibrator._buckets = {
+            int(key): float(value)
+            for key, value in raw_buckets.items()
+            if isinstance(key, str) and isinstance(value, (int, float))
+        }
+        raw_isotonic = document.get("isotonic")
+        if not isinstance(raw_isotonic, list):
+            raise ValueError("invalid calibrator isotonic state")
+        isotonic: list[tuple[float, float]] = []
+        for item in raw_isotonic:
+            if (
+                not isinstance(item, list)
+                or len(item) != 2
+                or not all(isinstance(value, (int, float)) for value in item)
+            ):
+                raise ValueError("invalid isotonic calibration point")
+            isotonic.append((float(item[0]), float(item[1])))
+        calibrator._isotonic = tuple(isotonic)
+        return calibrator
+
+
+def _fit_isotonic(
+    xs: list[float],
+    ys: list[float],
+) -> tuple[tuple[float, float], ...]:
+    ordered = sorted(zip(xs, ys, strict=True), key=lambda item: item[0])
+    blocks: list[dict[str, float]] = []
+    for x, y in ordered:
+        blocks.append({"upper": x, "sum": y, "count": 1.0})
+        while len(blocks) >= 2:
+            left = blocks[-2]
+            right = blocks[-1]
+            if left["sum"] / left["count"] <= right["sum"] / right["count"]:
+                break
+            blocks[-2:] = [
+                {
+                    "upper": right["upper"],
+                    "sum": left["sum"] + right["sum"],
+                    "count": left["count"] + right["count"],
+                }
+            ]
+    return tuple(
+        (block["upper"], block["sum"] / block["count"]) for block in blocks
+    )
 
 
 @dataclass
@@ -569,6 +733,39 @@ class ForwardOutcomeLedger:
             if item.prediction_id in self.outcomes
         )
         return predictions, outcomes
+
+
+@dataclass
+class CounterfactualPortfolioLedger:
+    """Append-only daily quant-only versus hybrid portfolio evidence."""
+
+    snapshots: list[CounterfactualPortfolioSnapshot] = field(default_factory=list)
+
+    def append(self, snapshot: CounterfactualPortfolioSnapshot) -> None:
+        if any(item.session == snapshot.session for item in self.snapshots):
+            raise ValueError(f"counterfactual session already exists: {snapshot.session}")
+        if self.snapshots and snapshot.session <= self.snapshots[-1].session:
+            raise PITViolation("counterfactual snapshots must be appended in time order")
+        self.snapshots.append(snapshot)
+
+    def metrics(self) -> dict[str, float] | None:
+        if not self.snapshots:
+            return None
+        return {
+            "quant_net_return": mean(item.quant_net_return for item in self.snapshots),
+            "hybrid_net_return": mean(item.hybrid_net_return for item in self.snapshots),
+            "incremental_turnover": mean(
+                item.hybrid_turnover - item.quant_turnover for item in self.snapshots
+            ),
+            "hybrid_drawdown_increase": max(
+                item.hybrid_drawdown for item in self.snapshots
+            )
+            - max(item.quant_drawdown for item in self.snapshots),
+            "benchmark_adjusted_alpha": mean(
+                item.hybrid_net_return - item.benchmark_return
+                for item in self.snapshots
+            ),
+        }
 
 
 def walk_forward_split(
@@ -658,6 +855,7 @@ def evaluate_promotion(
     predictions: tuple[ForwardPrediction, ...],
     outcomes: tuple[ForwardOutcome, ...],
     policy: LLMPromotionPolicy,
+    portfolio_snapshots: tuple[CounterfactualPortfolioSnapshot, ...] = (),
 ) -> PromotionEvaluation:
     outcomes_by_id = {outcome.prediction_id: outcome for outcome in outcomes}
     contaminated = [
@@ -708,6 +906,48 @@ def evaluate_promotion(
         )
     values = _clustered_returns(valid)
     alpha = mean(values)
+    benchmark_values: list[float] = []
+    for _, outcome in valid:
+        value = outcome.excess_returns.get("T+5")
+        if value is not None:
+            benchmark_values.append(float(value))
+    benchmark_adjusted = (
+        mean(benchmark_values) if benchmark_values else None
+    )
+    directional_rows = [
+        (
+            prediction.delta_mu_event > 0,
+            outcome.excess_returns.get("T+5", 0.0) > 0,
+            prediction.confidence,
+        )
+        for prediction, outcome in valid
+        if prediction.delta_mu_event != 0
+    ]
+    directional_accuracy = (
+        mean(predicted == realized for predicted, realized, _ in directional_rows)
+        if directional_rows
+        else None
+    )
+    confidence_error = (
+        mean(
+            abs(confidence - float(predicted == realized))
+            for predicted, realized, confidence in directional_rows
+        )
+        if directional_rows
+        else None
+    )
+    counterfactual_ledger = CounterfactualPortfolioLedger()
+    for snapshot in portfolio_snapshots:
+        counterfactual_ledger.append(snapshot)
+    counterfactual = counterfactual_ledger.metrics()
+    incremental_turnover = (
+        counterfactual["incremental_turnover"] if counterfactual is not None else None
+    )
+    drawdown_increase = (
+        counterfactual["hybrid_drawdown_increase"]
+        if counterfactual is not None
+        else None
+    )
     random_generator = random.Random(17)
     bootstrap: list[float] = []
     for _ in range(400):
@@ -718,9 +958,39 @@ def evaluate_promotion(
     monotonic = _score_monotonicity(valid)
     stable = _subperiod_stability(valid)
     reasons: tuple[str, ...]
-    if alpha < policy.minimum_incremental_net_alpha:
+    if counterfactual is None:
+        status = PromotionStatus.PROMOTION_BLOCKED_STABILITY
+        reasons = ("COUNTERFACTUAL_PORTFOLIO_EVIDENCE_MISSING",)
+    elif alpha < policy.minimum_incremental_net_alpha:
         status = PromotionStatus.PROMOTION_BLOCKED_PERFORMANCE
         reasons = ("INCREMENTAL_NET_ALPHA_BELOW_POLICY",)
+    elif benchmark_adjusted is None or benchmark_adjusted < 0:
+        status = PromotionStatus.PROMOTION_BLOCKED_PERFORMANCE
+        reasons = ("BENCHMARK_ADJUSTED_ALPHA_NOT_POSITIVE",)
+    elif (
+        incremental_turnover is None
+        or incremental_turnover > policy.maximum_incremental_turnover
+    ):
+        status = PromotionStatus.PROMOTION_BLOCKED_PERFORMANCE
+        reasons = ("INCREMENTAL_TURNOVER_ABOVE_POLICY",)
+    elif (
+        drawdown_increase is None
+        or drawdown_increase > policy.maximum_hybrid_drawdown_increase
+    ):
+        status = PromotionStatus.PROMOTION_BLOCKED_STABILITY
+        reasons = ("HYBRID_DRAWDOWN_INCREASE_ABOVE_POLICY",)
+    elif (
+        directional_accuracy is None
+        or directional_accuracy < policy.minimum_directional_accuracy
+    ):
+        status = PromotionStatus.PROMOTION_BLOCKED_CALIBRATION
+        reasons = ("DIRECTIONAL_CALIBRATION_BELOW_POLICY",)
+    elif (
+        confidence_error is None
+        or confidence_error > policy.maximum_confidence_calibration_error
+    ):
+        status = PromotionStatus.PROMOTION_BLOCKED_CALIBRATION
+        reasons = ("CONFIDENCE_CALIBRATION_BELOW_POLICY",)
     elif policy.require_monotonicity and not monotonic:
         status = PromotionStatus.PROMOTION_BLOCKED_CALIBRATION
         reasons = ("SCORE_MONOTONICITY_NOT_ESTABLISHED",)
@@ -742,6 +1012,11 @@ def evaluate_promotion(
         incremental_net_alpha=alpha,
         bootstrap_ci_low=low,
         bootstrap_ci_high=high,
+        benchmark_adjusted_alpha=benchmark_adjusted,
+        incremental_turnover=incremental_turnover,
+        hybrid_drawdown_increase=drawdown_increase,
+        directional_accuracy=directional_accuracy,
+        confidence_calibration_error=confidence_error,
         reasons=reasons,
     )
 
@@ -771,17 +1046,19 @@ def fuse_alpha(
     delta_mu_event: float,
     policy: LLMInfluencePolicy,
     promotion: PromotionEvaluation,
+    weight_quant_counterfactual: float | None = None,
+    weight_hybrid: float | None = None,
+    recommendation_quant: str | None = None,
+    recommendation_hybrid: str | None = None,
 ) -> AlphaAttribution:
     effective_lambda = policy.formal_lambda(promotion)
-    bounded = max(
-        -policy.max_semantic_alpha_contribution,
-        min(policy.max_semantic_alpha_contribution, delta_mu_event),
-    )
-    if policy.max_absolute_alpha_adjustment:
-        bounded = max(
-            -policy.max_absolute_alpha_adjustment,
-            min(policy.max_absolute_alpha_adjustment, bounded),
-        )
+    caps = [policy.max_semantic_alpha_contribution]
+    if policy.max_absolute_alpha_adjustment > 0:
+        caps.append(policy.max_absolute_alpha_adjustment)
+    if policy.max_relative_alpha_adjustment > 0:
+        caps.append(abs(mu_quant) * policy.max_relative_alpha_adjustment)
+    cap = min(caps)
+    bounded = max(-cap, min(cap, delta_mu_event))
     applied = effective_lambda * bounded
     return AlphaAttribution(
         symbol=symbol,
@@ -791,6 +1068,10 @@ def fuse_alpha(
         delta_mu_semantic_applied=applied,
         mu_final=mu_quant + applied,
         production_influence=abs(applied),
+        weight_quant_counterfactual=weight_quant_counterfactual,
+        weight_hybrid=weight_hybrid,
+        recommendation_quant=recommendation_quant,
+        recommendation_hybrid=recommendation_hybrid,
     )
 
 
