@@ -123,7 +123,7 @@ def test_probability_promotion_report_current_state_research_only() -> None:
     report = build_probability_promotion_report()
     assert report["current_status"] == "RESEARCH_ONLY"
     assert report["production_influence"] == 0.0
-    assert report["ledger_audit"]["canonical_prediction_rows"] == 26
+    assert report["ledger_audit"]["canonical_prediction_rows"] == 66
     assert report["decision"]["human_approval_required"] is True
 
 

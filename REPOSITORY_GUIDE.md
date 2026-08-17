@@ -17,7 +17,7 @@ src/personal_alpha_terminal/    Production package
 tests/                          Test suite
 scripts/                        Operational/research scripts and secret scanner
 migrations/                     Alembic schema history (immutable once committed)
-docs/                           Current + historical documentation
+docs/                           Current documentation
 artifacts/latest/               Small machine-readable certification snapshots
 config/                         Extra research contracts (SEC EDGAR source contract)
 data/                           Local market/research data (git-ignored except contracts)

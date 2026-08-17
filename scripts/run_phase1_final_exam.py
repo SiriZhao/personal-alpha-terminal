@@ -72,11 +72,14 @@ def main() -> int:
     root = arguments.root.resolve()
     default_output = root / "docs" / "reports" / "validation" / "phase1_exam"
     output = (arguments.output or default_output).resolve()
-    certification = json.loads(
-        (root / "docs" / "development" / "DATA_CERTIFICATION_STATUS.json").read_text(
-            encoding="utf-8"
+    certification_path = root / "docs" / "development" / "DATA_CERTIFICATION_STATUS.json"
+    if not certification_path.exists():
+        print(
+            "PHASE1_EXAM_BLOCKED: DATA_CERTIFICATION_STATUS.json is not retained "
+            "after stage cleanup."
         )
-    )
+        return 2
+    certification = json.loads(certification_path.read_text(encoding="utf-8"))
     # The final exam *creates* locked-OOS evidence; it must not require that result
     # as an input. Parameters are frozen by the ExperimentRegistry/source lock.
     required = ("pit_universe", "pit_corporate_actions", "pit_total_return")
