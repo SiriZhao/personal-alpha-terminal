@@ -2,7 +2,7 @@
 
 Baseline SHA: `4ed801c34f77a4cf61953429194d2f950892dea9`
 
-Final implementation SHA: `8cea5aae1a5395e49445d7b511e38db56fcd969b`
+Final implementation SHA: `fa3c962b9bf9d6429daab0684114a526ca4a7230`
 
 Current verdict: `READY_FOR_FORWARD_HYBRID_VALIDATION`
 
@@ -43,7 +43,7 @@ FIXED HOLDINGS CAP: null
 
 LOOK-AHEAD CHECK: PASS
 PIT CHECK: PASS
-FULL PYTEST: PASS (1272 passed)
+FULL PYTEST: PASS (1279 passed)
 RUFF: PASS
 MYPY: PASS (492 source files)
 QUANT REGRESSION: PASS (6 quant-critical tests)
