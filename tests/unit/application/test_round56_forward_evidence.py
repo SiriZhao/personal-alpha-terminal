@@ -15,7 +15,7 @@ from personal_alpha_terminal.application.forward_evidence import (
     evaluate_runtime_promotion,
 )
 
-NOW = datetime(2026, 8, 17, 12, tzinfo=UTC)
+NOW = datetime(2026, 1, 5, 12, tzinfo=UTC)
 
 
 def prediction() -> SemanticForwardPredictionRecord:
@@ -39,6 +39,10 @@ def prediction() -> SemanticForwardPredictionRecord:
         llm_model="fixture-v1",
         llm_schema_version="company-thesis-v1",
         prompt_version="company-thesis-v2",
+        llm_inference_status="VALID",
+        llm_request_hash="request-hash-1",
+        llm_response_hash="response-hash-1",
+        llm_provider_request_id="provider-request-1",
         structured_thesis={"symbol": "AAA"},
         debate_result={"decision": "AGREE"},
         semantic_score=0.7,
@@ -64,7 +68,7 @@ def counterfactuals() -> tuple[QuantCounterfactualRecord, HybridCounterfactualRe
         "information_cutoff": NOW,
         "security_ids": ("PERM:AAA",),
         "universe_identity": "universe-1",
-        "evaluation_horizon": "1d|5d|10d|20d",
+        "evaluation_horizon": "5d",
         "execution_assumptions_hash": "execution-1",
         "transaction_cost_model": "cost-1",
         "slippage_model": "slippage-1",
@@ -121,11 +125,19 @@ def test_outcome_requires_existing_identity_bound_prediction(session_factory) ->
         outcome_id="outcome-1",
         prediction_id="prediction-1",
         observation_id="observation-1",
+        counterfactual_observation_id="portfolio-observation-1",
         decision_timestamp=NOW,
+        information_cutoff=NOW,
         outcome_timestamp=NOW + timedelta(days=5),
         evaluation_horizon="5d",
         security_id="PERM:AAA",
         symbol_as_of_time=NOW - timedelta(minutes=1),
+        universe_identity="universe-1",
+        execution_assumptions_hash="execution-1",
+        transaction_cost_model="cost-1",
+        slippage_model="slippage-1",
+        benchmark_convention="SPY",
+        data_version="data-1",
         quant_net_return=0.01,
         hybrid_net_return=0.012,
         benchmark_return=0.004,
@@ -145,8 +157,38 @@ def test_outcome_requires_existing_identity_bound_prediction(session_factory) ->
         with pytest.raises(ValueError, match="unknown prediction"):
             ledger.append_outcome(outcome)
         ledger.append_prediction(prediction())
+        quant, hybrid = counterfactuals()
+        ledger.append_quant_counterfactual(quant)
+        ledger.append_hybrid_counterfactual(hybrid)
+        with pytest.raises(ValueError, match="counterfactual pair"):
+            ledger.append_outcome(
+                outcome.model_copy(
+                    update={
+                        "outcome_id": "outcome-wrong-assumptions",
+                        "execution_assumptions_hash": "wrong-execution",
+                    }
+                )
+            )
+        with pytest.raises(ValueError, match="cannot be in the future"):
+            ledger.append_outcome(
+                outcome.model_copy(
+                    update={
+                        "outcome_id": "outcome-future",
+                        "outcome_timestamp": datetime(
+                            2026,
+                            8,
+                            18,
+                            12,
+                            tzinfo=UTC,
+                        ),
+                    }
+                )
+            )
         assert ledger.append_outcome(outcome) is True
         assert ledger.append_outcome(outcome) is False
+        assert ledger.append_outcome(
+            outcome.model_copy(update={"outcome_id": "outcome-rerun"})
+        ) is False
         assert len(ledger.records("SEMANTIC_FORWARD_OUTCOME")) == 1
 
         with pytest.raises(ValueError, match="identity"):
@@ -167,28 +209,38 @@ def _seed_promotion_rows(
     hybrid_return: float,
     quant_return: float,
     turnover_delta: float = 0.001,
+    drawdown_delta: float = 0.001,
+    cost_delta: float = 0.0001,
     model_suffix: str = "v1",
     origin: str = "REAL_FORWARD",
     prefix: str = "promote",
+    same_decision_time: bool = False,
 ) -> None:
-    quant, hybrid = counterfactuals()
-    portfolio_observation = f"portfolio-observation-{prefix}"
-    quant = quant.model_copy(
-        update={
-            "counterfactual_id": f"quant-counterfactual-{prefix}",
-            "observation_id": portfolio_observation,
-        }
-    )
-    hybrid = hybrid.model_copy(
-        update={
-            "counterfactual_id": f"hybrid-counterfactual-{prefix}",
-            "observation_id": portfolio_observation,
-        }
-    )
-    ledger.append_quant_counterfactual(quant)
-    ledger.append_hybrid_counterfactual(hybrid)
     for index in range(count):
-        decision_timestamp = NOW + timedelta(days=index)
+        decision_timestamp = (
+            NOW if same_decision_time else NOW + timedelta(days=index)
+        )
+        portfolio_observation = f"portfolio-observation-{prefix}-{index}"
+        quant, hybrid = counterfactuals()
+        pair_updates = {
+            "observation_id": portfolio_observation,
+            "decision_timestamp": decision_timestamp,
+            "information_cutoff": decision_timestamp,
+        }
+        quant = quant.model_copy(
+            update={
+                **pair_updates,
+                "counterfactual_id": f"quant-counterfactual-{prefix}-{index}",
+            }
+        )
+        hybrid = hybrid.model_copy(
+            update={
+                **pair_updates,
+                "counterfactual_id": f"hybrid-counterfactual-{prefix}-{index}",
+            }
+        )
+        ledger.append_quant_counterfactual(quant)
+        ledger.append_hybrid_counterfactual(hybrid)
         base_prediction = prediction()
         current = base_prediction.model_copy(
             update={
@@ -207,20 +259,28 @@ def _seed_promotion_rows(
             outcome_id=f"outcome-{prefix}-{index}",
             prediction_id=current.prediction_id,
             observation_id=current.observation_id,
+            counterfactual_observation_id=portfolio_observation,
             decision_timestamp=decision_timestamp,
+            information_cutoff=decision_timestamp,
             outcome_timestamp=decision_timestamp + timedelta(days=5),
             evaluation_horizon="5d",
             security_id="PERM:AAA",
             symbol_as_of_time=NOW - timedelta(minutes=1),
+            universe_identity=quant.universe_identity,
+            execution_assumptions_hash=quant.execution_assumptions_hash,
+            transaction_cost_model=quant.transaction_cost_model,
+            slippage_model=quant.slippage_model,
+            benchmark_convention=quant.benchmark_convention,
+            data_version=quant.data_version,
             quant_net_return=quant_return,
             hybrid_net_return=hybrid_return,
             benchmark_return=0.001,
             quant_cost=0.001,
-            hybrid_cost=0.0011,
+            hybrid_cost=0.001 + cost_delta,
             quant_turnover=0.02,
             hybrid_turnover=0.02 + turnover_delta,
             quant_drawdown=0.01,
-            hybrid_drawdown=0.011,
+            hybrid_drawdown=0.01 + drawdown_delta,
             data_snapshot_identity={"market_data_hash": f"future-{index}"},
             source_identity="forward-bars-provider-v1",
             regime="RISK_ON" if index < count // 2 else "RISK_OFF",
@@ -256,6 +316,30 @@ def test_runtime_promotion_is_dynamic_and_fail_closed(session_factory) -> None:
         assert contaminated.reason_codes == (PromotionReason.DATA_CONTAMINATION.value,)
         assert contaminated.real_forward_n == 0
         assert contaminated.production_lambda == 0.0
+
+
+def test_runtime_promotion_requires_independent_sessions(session_factory) -> None:
+    with session_factory.begin() as session:
+        ledger = AgenticForwardEvidenceLedger(session)
+        _seed_promotion_rows(
+            ledger,
+            count=120,
+            hybrid_return=0.021,
+            quant_return=0.01,
+            prefix="same-session",
+            same_decision_time=True,
+        )
+        evaluation = evaluate_runtime_promotion(
+            ledger,
+            evaluated_at=NOW + timedelta(days=10),
+            evaluation_id="promotion-same-session",
+        )
+        assert evaluation.paired_sample_n == 120
+        assert evaluation.unique_session_n == 1
+        assert evaluation.reason_codes == (
+            PromotionReason.INSUFFICIENT_SAMPLE.value,
+        )
+        assert evaluation.production_lambda == 0.0
 
 
 def test_runtime_promotion_blocks_negative_samples(session_factory) -> None:
@@ -299,6 +383,28 @@ def test_runtime_promotion_blocks_high_turnover_samples(session_factory) -> None
         assert turnover.production_lambda == 0.0
 
 
+def test_runtime_promotion_separates_cost_failure_from_negative_alpha(
+    session_factory,
+) -> None:
+    with session_factory.begin() as session:
+        ledger = AgenticForwardEvidenceLedger(session)
+        _seed_promotion_rows(
+            ledger,
+            count=120,
+            hybrid_return=0.009,
+            quant_return=0.01,
+            cost_delta=0.002,
+            prefix="cost",
+        )
+        evaluation = evaluate_runtime_promotion(
+            ledger,
+            evaluated_at=NOW + timedelta(days=130),
+            evaluation_id="promotion-cost",
+        )
+        assert evaluation.reason_codes == (PromotionReason.COST_FAILURE.value,)
+        assert evaluation.production_lambda == 0.0
+
+
 def test_runtime_promotion_can_only_reach_human_review_eligibility(
     session_factory,
 ) -> None:
@@ -329,3 +435,49 @@ def test_runtime_promotion_can_only_reach_human_review_eligibility(
         assert evaluation.confidence_interval is not None
         assert evaluation.confidence_interval[0] > 0
         assert evaluation.production_lambda == 0.0
+
+
+def test_runtime_promotion_blocks_worse_drawdown_and_model_drift(session_factory) -> None:
+    with session_factory.begin() as session:
+        ledger = AgenticForwardEvidenceLedger(session)
+        _seed_promotion_rows(
+            ledger,
+            count=120,
+            hybrid_return=0.021,
+            quant_return=0.01,
+            drawdown_delta=0.03,
+            prefix="drawdown",
+        )
+        evaluation = evaluate_runtime_promotion(
+            ledger,
+            evaluated_at=NOW + timedelta(days=130),
+            evaluation_id="promotion-drawdown",
+        )
+        assert evaluation.reason_codes == (PromotionReason.DRAWDOWN_FAILURE.value,)
+
+    with session_factory.begin() as session:
+        ledger = AgenticForwardEvidenceLedger(session)
+        _seed_promotion_rows(
+            ledger,
+            count=60,
+            hybrid_return=0.021,
+            quant_return=0.01,
+            prefix="model-v1",
+            model_suffix="v1",
+        )
+        _seed_promotion_rows(
+            ledger,
+            count=60,
+            hybrid_return=0.021,
+            quant_return=0.01,
+            prefix="model-v2",
+            model_suffix="v2",
+        )
+        evaluation = evaluate_runtime_promotion(
+            ledger,
+            evaluated_at=NOW + timedelta(days=130),
+            evaluation_id="promotion-model-drift",
+        )
+        assert evaluation.reason_codes == (
+            PromotionReason.MODEL_VERSION_INCONSISTENT.value,
+        )

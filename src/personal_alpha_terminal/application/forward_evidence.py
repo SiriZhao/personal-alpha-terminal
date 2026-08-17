@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import math
 import random
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from hashlib import sha256
@@ -37,6 +37,8 @@ QUANT_COUNTERFACTUAL_TYPE = "QUANT_COUNTERFACTUAL"
 HYBRID_COUNTERFACTUAL_TYPE = "HYBRID_COUNTERFACTUAL"
 PROMOTION_EVALUATION_TYPE = "AGENTIC_PROMOTION_EVALUATION"
 REAL_FORWARD_ORIGIN = "REAL_FORWARD"
+SUPPORTED_EVALUATION_HORIZONS = ("1d", "5d", "10d", "20d")
+FORWARD_EVIDENCE_SCHEMA_VERSION = "agentic-forward-evidence-v2"
 EvidenceOrigin = Literal[
     "REAL_FORWARD",
     "NON_PRODUCTION",
@@ -110,6 +112,10 @@ class SemanticForwardPredictionRecord(AgenticStrictModel):
     llm_model: str
     llm_schema_version: str
     prompt_version: str
+    llm_inference_status: str
+    llm_request_hash: str
+    llm_response_hash: str | None = None
+    llm_provider_request_id: str | None = None
     structured_thesis: dict[str, object] | None = None
     debate_result: dict[str, object] = Field(default_factory=dict)
     semantic_score: float
@@ -121,7 +127,7 @@ class SemanticForwardPredictionRecord(AgenticStrictModel):
     hybrid_risk_result: dict[str, object] = Field(default_factory=dict)
     data_snapshot_identity: dict[str, str]
     code_model_version: str = __version__
-    evaluation_horizons: tuple[str, ...] = ("1d", "5d", "10d", "20d")
+    evaluation_horizons: tuple[str, ...] = SUPPORTED_EVALUATION_HORIZONS
     evidence_origin: EvidenceOrigin
     status: Literal["SHADOW", "DEGRADED"]
     failure_reason: str | None = None
@@ -138,6 +144,8 @@ class SemanticForwardPredictionRecord(AgenticStrictModel):
         "llm_model",
         "llm_schema_version",
         "prompt_version",
+        "llm_inference_status",
+        "llm_request_hash",
         "code_model_version",
     )
     @classmethod
@@ -173,6 +181,15 @@ class SemanticForwardPredictionRecord(AgenticStrictModel):
             raise ValueError("quant_probability must be between 0 and 1")
         if not self.data_snapshot_identity:
             raise ValueError("data_snapshot_identity is required")
+        if (
+            not self.evaluation_horizons
+            or len(set(self.evaluation_horizons)) != len(self.evaluation_horizons)
+            or any(
+                horizon not in SUPPORTED_EVALUATION_HORIZONS
+                for horizon in self.evaluation_horizons
+            )
+        ):
+            raise ValueError("evaluation_horizons must be unique supported horizons")
         return self
 
 
@@ -180,11 +197,19 @@ class SemanticForwardOutcomeRecord(AgenticStrictModel):
     outcome_id: str
     prediction_id: str
     observation_id: str
+    counterfactual_observation_id: str
     decision_timestamp: datetime
+    information_cutoff: datetime
     outcome_timestamp: datetime
     evaluation_horizon: str
     security_id: str
     symbol_as_of_time: datetime
+    universe_identity: str
+    execution_assumptions_hash: str
+    transaction_cost_model: str
+    slippage_model: str
+    benchmark_convention: str
+    data_version: str
     quant_net_return: float
     hybrid_net_return: float
     benchmark_return: float
@@ -203,8 +228,15 @@ class SemanticForwardOutcomeRecord(AgenticStrictModel):
         "outcome_id",
         "prediction_id",
         "observation_id",
+        "counterfactual_observation_id",
         "evaluation_horizon",
         "security_id",
+        "universe_identity",
+        "execution_assumptions_hash",
+        "transaction_cost_model",
+        "slippage_model",
+        "benchmark_convention",
+        "data_version",
         "source_identity",
         "regime",
     )
@@ -212,7 +244,12 @@ class SemanticForwardOutcomeRecord(AgenticStrictModel):
     def outcome_text(cls, value: str, info: Any) -> str:
         return _required(value, info.field_name)
 
-    @field_validator("decision_timestamp", "outcome_timestamp", "symbol_as_of_time")
+    @field_validator(
+        "decision_timestamp",
+        "information_cutoff",
+        "outcome_timestamp",
+        "symbol_as_of_time",
+    )
     @classmethod
     def outcome_time(cls, value: datetime, info: Any) -> datetime:
         return _aware(value, info.field_name)
@@ -236,6 +273,26 @@ class SemanticForwardOutcomeRecord(AgenticStrictModel):
     def validate_outcome_time(self) -> SemanticForwardOutcomeRecord:
         if self.outcome_timestamp <= self.decision_timestamp:
             raise ValueError("outcome must be appended after decision_timestamp")
+        if self.information_cutoff > self.decision_timestamp:
+            raise ValueError("outcome information cutoff cannot follow decision")
+        if self.symbol_as_of_time > self.information_cutoff:
+            raise ValueError("outcome symbol identity is newer than information cutoff")
+        if self.evaluation_horizon not in SUPPORTED_EVALUATION_HORIZONS:
+            raise ValueError("outcome evaluation_horizon is unsupported")
+        if any(
+            value < 0
+            for value in (
+                self.quant_cost,
+                self.hybrid_cost,
+                self.quant_turnover,
+                self.hybrid_turnover,
+                self.quant_drawdown,
+                self.hybrid_drawdown,
+            )
+        ):
+            raise ValueError("outcome cost, turnover, and drawdown must be non-negative")
+        if not self.data_snapshot_identity:
+            raise ValueError("outcome data_snapshot_identity is required")
         return self
 
 
@@ -291,6 +348,10 @@ class _CounterfactualRecord(AgenticStrictModel):
             raise ValueError("counterfactual cutoff cannot follow decision")
         if not self.security_ids:
             raise ValueError("counterfactual security_ids cannot be empty")
+        if len(set(self.security_ids)) != len(self.security_ids):
+            raise ValueError("counterfactual security_ids must be unique")
+        if self.evaluation_horizon not in SUPPORTED_EVALUATION_HORIZONS:
+            raise ValueError("counterfactual evaluation_horizon is unsupported")
         if set(self.target_weights) - set(self.security_ids):
             raise ValueError("target weights contain an unpaired security")
         return self
@@ -312,7 +373,12 @@ class PromotionEvaluationRecord(AgenticStrictModel):
     reason_codes: tuple[str, ...]
     real_forward_n: int
     minimum_required_n: int
+    minimum_unique_session_n: int
     paired_sample_n: int
+    realized_security_outcome_n: int = 0
+    unique_session_n: int = 0
+    unique_security_n: int = 0
+    unpaired_n: int = 0
     incremental_alpha: float | None = None
     median_incremental_alpha: float | None = None
     confidence_interval: tuple[float, float] | None = None
@@ -354,6 +420,7 @@ class PromotionEvaluationRecord(AgenticStrictModel):
 
 class RuntimePromotionPolicy(AgenticStrictModel):
     minimum_required_n: int = Field(default=120, ge=120)
+    minimum_unique_sessions: int = Field(default=40, ge=40)
     minimum_incremental_alpha: float = Field(default=0.0, ge=0.0)
     maximum_calibration_error: float = Field(default=0.2, ge=0, le=0.2)
     maximum_turnover_delta: float = Field(default=0.05, ge=0, le=0.05)
@@ -387,18 +454,56 @@ class AgenticForwardEvidenceLedger:
         )
 
     def append_outcome(self, record: SemanticForwardOutcomeRecord) -> bool:
+        if record.outcome_timestamp > datetime.now(UTC):
+            raise ValueError("outcome_timestamp cannot be in the future")
         prediction = self._find_result(PREDICTION_TYPE, record.prediction_id)
         if prediction is None:
             raise ValueError("outcome references unknown prediction")
         prediction_payload = prediction.payload
         outcome_payload = record.model_dump(mode="json")
+        raw_horizons = prediction_payload.get("evaluation_horizons", ())
+        prediction_horizons = (
+            tuple(str(item) for item in raw_horizons)
+            if isinstance(raw_horizons, (list, tuple))
+            else ()
+        )
         if (
             prediction_payload.get("observation_id") != record.observation_id
             or prediction_payload.get("security_id") != record.security_id
             or prediction_payload.get("decision_timestamp")
             != outcome_payload.get("decision_timestamp")
+            or prediction_payload.get("information_cutoff")
+            != outcome_payload.get("information_cutoff")
+            or prediction_payload.get("counterfactual_observation_id")
+            != record.counterfactual_observation_id
+            or record.evaluation_horizon not in prediction_horizons
         ):
             raise ValueError("outcome identity does not match immutable prediction")
+        quant = self._counterfactual_by_pair(
+            QUANT_COUNTERFACTUAL_TYPE,
+            record.counterfactual_observation_id,
+            record.evaluation_horizon,
+        )
+        hybrid = self._counterfactual_by_pair(
+            HYBRID_COUNTERFACTUAL_TYPE,
+            record.counterfactual_observation_id,
+            record.evaluation_horizon,
+        )
+        if (
+            quant is None
+            or hybrid is None
+            or not _counterfactuals_match(quant, hybrid)
+            or not _outcome_matches_counterfactual(record, quant)
+        ):
+            raise ValueError("outcome does not match an immutable counterfactual pair")
+        existing = self._outcome_by_prediction_horizon(
+            record.prediction_id,
+            record.evaluation_horizon,
+        )
+        if existing is not None:
+            if _outcome_semantics(existing) != _outcome_semantics(outcome_payload):
+                raise ValueError("prediction outcome identity is immutable")
+            return False
         return self._append(
             result_id=record.outcome_id,
             result_type=OUTCOME_TYPE,
@@ -439,6 +544,18 @@ class AgenticForwardEvidenceLedger:
         record: QuantCounterfactualRecord | HybridCounterfactualRecord,
         result_type: str,
     ) -> bool:
+        payload = record.model_dump(mode="json")
+        existing = self._counterfactual_payload_by_pair(
+            result_type,
+            record.observation_id,
+            record.evaluation_horizon,
+        )
+        if existing is not None:
+            if _counterfactual_semantics(existing) != _counterfactual_semantics(
+                payload
+            ):
+                raise ValueError("counterfactual observation identity is immutable")
+            return False
         return self._append(
             result_id=record.counterfactual_id,
             result_type=result_type,
@@ -446,7 +563,7 @@ class AgenticForwardEvidenceLedger:
             prompt_version="agentic-counterfactual-v1",
             data_cutoff=record.information_cutoff,
             status=record.strategy,
-            payload=record.model_dump(mode="json"),
+            payload=payload,
         )
 
     def _append(
@@ -468,7 +585,7 @@ class AgenticForwardEvidenceLedger:
         self.repository.add_result(
             result_id=result_id,
             result_type=result_type,
-            schema_version="agentic-forward-evidence-v1",
+            schema_version=FORWARD_EVIDENCE_SCHEMA_VERSION,
             model_version=model_version,
             prompt_version=prompt_version,
             data_cutoff=_aware(data_cutoff, "data_cutoff"),
@@ -495,15 +612,56 @@ class AgenticForwardEvidenceLedger:
         result_type: str,
         observation_id: str,
     ) -> dict[str, object] | None:
-        row = self.session.scalar(
-            select(IntelligenceResearchResult)
-            .where(IntelligenceResearchResult.result_type == result_type)
-            .order_by(IntelligenceResearchResult.data_cutoff)
-        )
         for candidate in self.records(result_type):
             if candidate.get("observation_id") == observation_id:
                 return candidate
-        del row
+        return None
+
+    def _counterfactual_payload_by_pair(
+        self,
+        result_type: str,
+        observation_id: str,
+        evaluation_horizon: str,
+    ) -> dict[str, object] | None:
+        for candidate in self.records(result_type):
+            if (
+                candidate.get("observation_id") == observation_id
+                and candidate.get("evaluation_horizon") == evaluation_horizon
+            ):
+                return candidate
+        return None
+
+    def _counterfactual_by_pair(
+        self,
+        result_type: str,
+        observation_id: str,
+        evaluation_horizon: str,
+    ) -> QuantCounterfactualRecord | HybridCounterfactualRecord | None:
+        payload = self._counterfactual_payload_by_pair(
+            result_type,
+            observation_id,
+            evaluation_horizon,
+        )
+        if payload is None:
+            return None
+        model = (
+            QuantCounterfactualRecord
+            if result_type == QUANT_COUNTERFACTUAL_TYPE
+            else HybridCounterfactualRecord
+        )
+        return model.model_validate(payload)
+
+    def _outcome_by_prediction_horizon(
+        self,
+        prediction_id: str,
+        evaluation_horizon: str,
+    ) -> dict[str, object] | None:
+        for candidate in self.records(OUTCOME_TYPE):
+            if (
+                candidate.get("prediction_id") == prediction_id
+                and candidate.get("evaluation_horizon") == evaluation_horizon
+            ):
+                return candidate
         return None
 
 
@@ -566,8 +724,12 @@ def append_daily_shadow_evidence(
     if not factors_with_identity:
         return {"predictions": 0, "counterfactuals": 0}
     security_ids = tuple(
-        company.security.permanent_security_id
-        for company in factors_with_identity
+        sorted(
+            {
+                company.security.permanent_security_id
+                for company in factors_with_identity
+            }
+        )
     )
     portfolio_observation = _identity(
         "portfolio",
@@ -627,6 +789,18 @@ def append_daily_shadow_evidence(
                 inference.get("schema_version_used", "company-thesis-v1")
             ),
             prompt_version=str(inference.get("prompt_version", "company-thesis-v2")),
+            llm_inference_status=str(inference.get("status", "UNAVAILABLE")),
+            llm_request_hash=str(inference.get("input_hash", "UNAVAILABLE")),
+            llm_response_hash=(
+                str(inference["output_hash"])
+                if inference.get("output_hash") is not None
+                else None
+            ),
+            llm_provider_request_id=(
+                str(inference["provider_request_id"])
+                if inference.get("provider_request_id") is not None
+                else None
+            ),
             structured_thesis=thesis if isinstance(thesis, dict) else None,
             debate_result=debate if isinstance(debate, dict) else {},
             semantic_score=_number(ranking.get("semantic_score")) or 0.0,
@@ -679,47 +853,85 @@ def append_daily_shadow_evidence(
         if workflow.target is not None
         else {}
     )
-    hybrid_targets = {
+    action_targets = {
+        security_id_by_symbol[str(item.get("symbol"))]: float(
+            item.get("final_risk_adjusted_target", 0.0)
+        )
+        for item in action_rows
+        if isinstance(item, dict)
+        and str(item.get("symbol")) in security_id_by_symbol
+    }
+    hybrid_targets = action_targets or {
         security_id_by_symbol[symbol]: float(weight)
         for symbol, weight in pipeline.get("target_weights", {}).items()
         if symbol in security_id_by_symbol
     }
-    common = {
-        "observation_id": portfolio_observation,
-        "decision_timestamp": workflow.decision_time,
-        "information_cutoff": workflow.data_cutoff or workflow.decision_time,
-        "security_ids": security_ids,
-        "universe_identity": workflow.universe_snapshot_id,
-        "evaluation_horizon": "1d|5d|10d|20d",
-        **assumptions,
-        "current_weights": {
-            security_id_by_symbol[symbol]: float(weight)
-            for symbol, weight in (workflow.current_weights or {}).items()
-            if symbol in security_id_by_symbol
-        },
-        "risk_result": _safe_dict(pipeline),
-        "optimizer_result": {
-            "target_weights": quant_targets,
-            "shadow_target_weights": hybrid_targets,
-            "pipeline_status": pipeline.get("status", "NOT_RUN"),
-        },
+    current_targets = {
+        security_id_by_symbol[symbol]: float(weight)
+        for symbol, weight in (workflow.current_weights or {}).items()
+        if symbol in security_id_by_symbol
     }
-    quant_record = QuantCounterfactualRecord(
-        counterfactual_id=_identity("quant-counterfactual", portfolio_observation),
-        target_weights=quant_targets,
-        **common,
-    )
-    hybrid_record = HybridCounterfactualRecord(
-        counterfactual_id=_identity("hybrid-counterfactual", portfolio_observation),
-        target_weights=hybrid_targets,
-        **common,
-    )
-    quant_added = ledger.append_quant_counterfactual(quant_record)
-    hybrid_added = ledger.append_hybrid_counterfactual(hybrid_record)
+    quant_risk = _safe_dict(workflow.risk)
+    quant_optimizer = {
+        "target_weights": quant_targets,
+        "current_weights": current_targets,
+        "pipeline_status": "QUANT_PRODUCTION_OUTPUT",
+    }
+    hybrid_risk = _safe_dict(pipeline)
+    hybrid_optimizer = {
+        "target_weights": hybrid_targets,
+        "current_weights": current_targets,
+        "pipeline_status": pipeline.get("status", "NOT_RUN"),
+    }
+    quant_added = 0
+    hybrid_added = 0
+    for horizon in SUPPORTED_EVALUATION_HORIZONS:
+        common = {
+            "observation_id": portfolio_observation,
+            "decision_timestamp": workflow.decision_time,
+            "information_cutoff": workflow.data_cutoff or workflow.decision_time,
+            "security_ids": security_ids,
+            "universe_identity": workflow.universe_snapshot_id,
+            "evaluation_horizon": horizon,
+            **assumptions,
+            "current_weights": current_targets,
+        }
+        quant_record = QuantCounterfactualRecord(
+            counterfactual_id=_identity(
+                "quant-counterfactual", portfolio_observation, horizon
+            ),
+            target_weights=quant_targets,
+            risk_result=quant_risk,
+            optimizer_result=quant_optimizer,
+            **common,
+        )
+        hybrid_record = HybridCounterfactualRecord(
+            counterfactual_id=_identity(
+                "hybrid-counterfactual", portfolio_observation, horizon
+            ),
+            target_weights=hybrid_targets,
+            risk_result=hybrid_risk,
+            optimizer_result=hybrid_optimizer,
+            **common,
+        )
+        quant_added += int(ledger.append_quant_counterfactual(quant_record))
+        hybrid_added += int(ledger.append_hybrid_counterfactual(hybrid_record))
     return {
         "predictions": prediction_count,
-        "counterfactuals": int(quant_added) + int(hybrid_added),
+        "counterfactuals": quant_added + hybrid_added,
     }
+
+
+@dataclass(frozen=True, slots=True)
+class _PairedForwardObservation:
+    predictions: tuple[SemanticForwardPredictionRecord, ...]
+    outcome: SemanticForwardOutcomeRecord
+    quant: QuantCounterfactualRecord
+    hybrid: HybridCounterfactualRecord
+
+    @property
+    def semantic_score(self) -> float:
+        return mean(prediction.semantic_score for prediction in self.predictions)
 
 
 def evaluate_runtime_promotion(
@@ -768,28 +980,87 @@ def evaluate_runtime_promotion(
             contaminated += 1
             continue
         outcomes.append(outcome)
-    quant_pairs = _counterfactuals_by_observation(quant_rows, "QUANT")
-    hybrid_pairs = _counterfactuals_by_observation(hybrid_rows, "HYBRID")
+    quant_pairs, invalid_quant = _counterfactuals_by_observation(
+        quant_rows, "QUANT"
+    )
+    hybrid_pairs, invalid_hybrid = _counterfactuals_by_observation(
+        hybrid_rows, "HYBRID"
+    )
+    contaminated += invalid_quant + invalid_hybrid
     real_matches: list[
         tuple[SemanticForwardPredictionRecord, SemanticForwardOutcomeRecord]
     ] = []
-    paired: list[
-        tuple[SemanticForwardPredictionRecord, SemanticForwardOutcomeRecord]
-    ] = []
+    grouped: dict[
+        tuple[str, str],
+        list[tuple[SemanticForwardPredictionRecord, SemanticForwardOutcomeRecord]],
+    ] = {}
+    unpaired = 0
     for outcome in outcomes:
         matched_prediction = predictions.get(outcome.prediction_id)
         if matched_prediction is None:
             contaminated += 1
             continue
         real_matches.append((matched_prediction, outcome))
-        quant = quant_pairs.get(matched_prediction.counterfactual_observation_id)
-        hybrid = hybrid_pairs.get(matched_prediction.counterfactual_observation_id)
-        if quant is None or hybrid is None or not _counterfactuals_match(quant, hybrid):
+        key = (
+            matched_prediction.counterfactual_observation_id,
+            outcome.evaluation_horizon,
+        )
+        quant = quant_pairs.get(key)
+        hybrid = hybrid_pairs.get(key)
+        if quant is None or hybrid is None:
+            unpaired += 1
             continue
-        paired.append((matched_prediction, outcome))
+        if (
+            not _counterfactuals_match(quant, hybrid)
+            or not _outcome_matches_counterfactual(outcome, quant)
+        ):
+            contaminated += 1
+            continue
+        grouped.setdefault(key, []).append((matched_prediction, outcome))
 
-    real_forward_n = len(real_matches)
+    paired: list[_PairedForwardObservation] = []
+    for key, rows in sorted(grouped.items()):
+        signatures = {_outcome_economic_signature(outcome) for _, outcome in rows}
+        if len(signatures) != 1:
+            contaminated += 1
+            continue
+        quant = quant_pairs[key]
+        hybrid = hybrid_pairs[key]
+        paired.append(
+            _PairedForwardObservation(
+                predictions=tuple(
+                    prediction
+                    for prediction, _ in sorted(
+                        rows,
+                        key=lambda item: item[0].security_id,
+                    )
+                ),
+                outcome=rows[0][1],
+                quant=cast(QuantCounterfactualRecord, quant),
+                hybrid=cast(HybridCounterfactualRecord, hybrid),
+            )
+        )
+
+    real_forward_n = len(
+        {
+            (
+                prediction.counterfactual_observation_id,
+                outcome.evaluation_horizon,
+            )
+            for prediction, outcome in real_matches
+        }
+    )
     paired_sample_n = len(paired)
+    unique_session_n = len(
+        {observation.outcome.decision_timestamp.date() for observation in paired}
+    )
+    unique_security_n = len(
+        {
+            prediction.security_id
+            for observation in paired
+            for prediction in observation.predictions
+        }
+    )
     model_versions = tuple(
         sorted(
             {
@@ -801,24 +1072,33 @@ def evaluate_runtime_promotion(
                         prediction.code_model_version,
                     )
                 )
-                for prediction, _ in paired
+                for observation in paired
+                for prediction in observation.predictions
             }
         )
     )
     increments = [
-        outcome.hybrid_net_return - outcome.quant_net_return
-        for _, outcome in paired
+        observation.outcome.hybrid_net_return
+        - observation.outcome.quant_net_return
+        for observation in paired
     ]
     cost_deltas = [
-        outcome.hybrid_cost - outcome.quant_cost for _, outcome in paired
+        observation.outcome.hybrid_cost - observation.outcome.quant_cost
+        for observation in paired
     ]
     turnover_deltas = [
-        outcome.hybrid_turnover - outcome.quant_turnover for _, outcome in paired
+        observation.outcome.hybrid_turnover
+        - observation.outcome.quant_turnover
+        for observation in paired
     ]
     drawdown_deltas = [
-        outcome.hybrid_drawdown - outcome.quant_drawdown for _, outcome in paired
+        observation.outcome.hybrid_drawdown
+        - observation.outcome.quant_drawdown
+        for observation in paired
     ]
-    regime_coverage = tuple(sorted({outcome.regime for _, outcome in paired}))
+    regime_coverage = tuple(
+        sorted({observation.outcome.regime for observation in paired})
+    )
     incremental_alpha = mean(increments) if increments else None
     median_incremental = median(increments) if increments else None
     hit_rate = (
@@ -837,10 +1117,16 @@ def evaluate_runtime_promotion(
     calibration_error = (
         mean(
             abs(
-                max(0.0, min(1.0, (prediction.semantic_score + 1.0) / 2.0))
-                - float(outcome.hybrid_net_return > outcome.quant_net_return)
+                max(
+                    0.0,
+                    min(1.0, (observation.semantic_score + 1.0) / 2.0),
+                )
+                - float(
+                    observation.outcome.hybrid_net_return
+                    > observation.outcome.quant_net_return
+                )
             )
-            for prediction, outcome in paired
+            for observation in paired
         )
         if paired
         else None
@@ -856,6 +1142,7 @@ def evaluate_runtime_promotion(
     reason = _promotion_reason(
         real_forward_n=real_forward_n,
         paired_sample_n=paired_sample_n,
+        unique_session_n=unique_session_n,
         contaminated=contaminated,
         model_versions=model_versions,
         increments=increments,
@@ -886,7 +1173,12 @@ def evaluate_runtime_promotion(
         reason_codes=(reason.value,),
         real_forward_n=real_forward_n,
         minimum_required_n=active_policy.minimum_required_n,
+        minimum_unique_session_n=active_policy.minimum_unique_sessions,
         paired_sample_n=paired_sample_n,
+        realized_security_outcome_n=len(real_matches),
+        unique_session_n=unique_session_n,
+        unique_security_n=unique_security_n,
+        unpaired_n=unpaired,
         incremental_alpha=incremental_alpha,
         median_incremental_alpha=median_incremental,
         confidence_interval=confidence_interval,
@@ -907,6 +1199,7 @@ def _promotion_reason(
     *,
     real_forward_n: int,
     paired_sample_n: int,
+    unique_session_n: int,
     contaminated: int,
     model_versions: tuple[str, ...],
     increments: list[float],
@@ -917,14 +1210,17 @@ def _promotion_reason(
     turnover_delta: float | None,
     drawdown_delta: float | None,
     regime_coverage: tuple[str, ...],
-    paired: list[tuple[SemanticForwardPredictionRecord, SemanticForwardOutcomeRecord]],
+    paired: list[_PairedForwardObservation],
     policy: RuntimePromotionPolicy,
 ) -> PromotionReason:
     if not real_forward_n and not contaminated:
         return PromotionReason.NO_FORWARD_EVIDENCE
     if contaminated:
         return PromotionReason.DATA_CONTAMINATION
-    if paired_sample_n < policy.minimum_required_n:
+    if (
+        paired_sample_n < policy.minimum_required_n
+        or unique_session_n < policy.minimum_unique_sessions
+    ):
         return PromotionReason.INSUFFICIENT_SAMPLE
     if len(model_versions) != 1:
         return PromotionReason.MODEL_VERSION_INCONSISTENT
@@ -948,9 +1244,10 @@ def _promotion_reason(
         return PromotionReason.TURNOVER_FAILURE
     regime_means = {
         regime: mean(
-            outcome.hybrid_net_return - outcome.quant_net_return
-            for _, outcome in paired
-            if outcome.regime == regime
+            observation.outcome.hybrid_net_return
+            - observation.outcome.quant_net_return
+            for observation in paired
+            if observation.outcome.regime == regime
         )
         for regime in regime_coverage
     }
@@ -965,16 +1262,32 @@ def _promotion_reason(
 def _counterfactuals_by_observation(
     rows: tuple[dict[str, object], ...],
     strategy: Literal["QUANT", "HYBRID"],
-) -> dict[str, QuantCounterfactualRecord | HybridCounterfactualRecord]:
-    result: dict[str, QuantCounterfactualRecord | HybridCounterfactualRecord] = {}
+) -> tuple[
+    dict[
+        tuple[str, str],
+        QuantCounterfactualRecord | HybridCounterfactualRecord,
+    ],
+    int,
+]:
+    result: dict[
+        tuple[str, str],
+        QuantCounterfactualRecord | HybridCounterfactualRecord,
+    ] = {}
+    invalid = 0
     model = QuantCounterfactualRecord if strategy == "QUANT" else HybridCounterfactualRecord
     for row in rows:
         try:
             record = model.model_validate(row)
         except ValueError:
+            invalid += 1
             continue
-        result.setdefault(record.observation_id, record)
-    return result
+        key = (record.observation_id, record.evaluation_horizon)
+        existing = result.get(key)
+        if existing is not None and existing != record:
+            invalid += 1
+            continue
+        result.setdefault(key, record)
+    return result, invalid
 
 
 def _counterfactuals_match(
@@ -997,13 +1310,71 @@ def _counterfactuals_match(
     return all(getattr(quant, field) == getattr(hybrid, field) for field in fields)
 
 
+def _outcome_matches_counterfactual(
+    outcome: SemanticForwardOutcomeRecord,
+    counterfactual: QuantCounterfactualRecord | HybridCounterfactualRecord,
+) -> bool:
+    return (
+        outcome.counterfactual_observation_id == counterfactual.observation_id
+        and outcome.decision_timestamp == counterfactual.decision_timestamp
+        and outcome.information_cutoff == counterfactual.information_cutoff
+        and outcome.security_id in counterfactual.security_ids
+        and outcome.universe_identity == counterfactual.universe_identity
+        and outcome.evaluation_horizon == counterfactual.evaluation_horizon
+        and (
+            outcome.execution_assumptions_hash
+            == counterfactual.execution_assumptions_hash
+        )
+        and outcome.transaction_cost_model == counterfactual.transaction_cost_model
+        and outcome.slippage_model == counterfactual.slippage_model
+        and outcome.benchmark_convention == counterfactual.benchmark_convention
+        and outcome.data_version == counterfactual.data_version
+    )
+
+
+def _outcome_economic_signature(
+    outcome: SemanticForwardOutcomeRecord,
+) -> tuple[object, ...]:
+    return (
+        outcome.counterfactual_observation_id,
+        outcome.decision_timestamp,
+        outcome.information_cutoff,
+        outcome.outcome_timestamp,
+        outcome.evaluation_horizon,
+        outcome.universe_identity,
+        outcome.execution_assumptions_hash,
+        outcome.transaction_cost_model,
+        outcome.slippage_model,
+        outcome.benchmark_convention,
+        outcome.data_version,
+        outcome.quant_net_return,
+        outcome.hybrid_net_return,
+        outcome.benchmark_return,
+        outcome.quant_cost,
+        outcome.hybrid_cost,
+        outcome.quant_turnover,
+        outcome.hybrid_turnover,
+        outcome.quant_drawdown,
+        outcome.hybrid_drawdown,
+        json.dumps(
+            outcome.data_snapshot_identity,
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+        outcome.source_identity,
+        outcome.regime,
+        outcome.evidence_origin,
+    )
+
+
 def _cluster_bootstrap_interval(
-    paired: list[tuple[SemanticForwardPredictionRecord, SemanticForwardOutcomeRecord]],
+    paired: list[_PairedForwardObservation],
     draws: int,
 ) -> tuple[float, float]:
     by_session: dict[str, list[float]] = {}
-    for prediction, outcome in paired:
-        key = prediction.decision_timestamp.date().isoformat()
+    for observation in paired:
+        outcome = observation.outcome
+        key = outcome.decision_timestamp.date().isoformat()
         by_session.setdefault(key, []).append(
             outcome.hybrid_net_return - outcome.quant_net_return
         )
@@ -1027,6 +1398,16 @@ def _identity(prefix: str, *parts: str) -> str:
 
 def _prediction_semantics(payload: dict[str, object]) -> dict[str, object]:
     return {key: value for key, value in payload.items() if key != "prediction_id"}
+
+
+def _outcome_semantics(payload: dict[str, object]) -> dict[str, object]:
+    return {key: value for key, value in payload.items() if key != "outcome_id"}
+
+
+def _counterfactual_semantics(payload: dict[str, object]) -> dict[str, object]:
+    return {
+        key: value for key, value in payload.items() if key != "counterfactual_id"
+    }
 
 
 def _number(value: object) -> float | None:

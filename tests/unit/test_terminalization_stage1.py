@@ -541,7 +541,7 @@ def test_daily_agentic_shadow_executes_and_provider_failure_preserves_quant(
     assert success.hybrid_intelligence["invariants"]["production_lambda"] == 0.0
     assert success.hybrid_intelligence["forward_evidence_persistence"] == {
         "predictions": 1,
-        "counterfactuals": 2,
+        "counterfactuals": 8,
         "promotion_evaluations": 1,
     }
     assert success.hybrid_intelligence["promotion"]["real_forward_n"] == 0
@@ -549,8 +549,8 @@ def test_daily_agentic_shadow_executes_and_provider_failure_preserves_quant(
     with session_factory() as session:
         ledger = AgenticForwardEvidenceLedger(session)
         assert len(ledger.records("SEMANTIC_FORWARD_PREDICTION")) == 1
-        assert len(ledger.records("QUANT_COUNTERFACTUAL")) == 1
-        assert len(ledger.records("HYBRID_COUNTERFACTUAL")) == 1
+        assert len(ledger.records("QUANT_COUNTERFACTUAL")) == 4
+        assert len(ledger.records("HYBRID_COUNTERFACTUAL")) == 4
     assert success.hybrid_intelligence["shadow_pipeline"]["deterministic_risk_evaluated"] is True
     assert [(item.symbol, item.action) for item in success.final_decisions] == [
         (item.symbol, item.action) for item in workflow.recommendations

@@ -297,6 +297,26 @@ def build_agentic_shadow_document(
             raw_adjustments[factor.symbol] = 0.0
             applied_adjustments[factor.symbol] = 0.0
             continue
+        available_analyses = tuple(
+            analysis
+            for analysis in company.analyses
+            if analysis.status == "AVAILABLE"
+        )
+        if available_analyses and all(
+            analysis.features.time_decay <= 0.0
+            for analysis in available_analyses
+        ):
+            failures[factor.symbol] = ("STALE_EVENT_EVIDENCE",)
+            debate_by_symbol[factor.symbol] = _insufficient_debate(
+                quant, "STALE_EVENT_EVIDENCE"
+            )
+            event_ids[factor.symbol] = tuple(
+                item.event_id for item in company.events
+            )
+            semantic_scores[factor.symbol] = 0.0
+            raw_adjustments[factor.symbol] = 0.0
+            applied_adjustments[factor.symbol] = 0.0
+            continue
 
         thesis_result = thesis_analyzer.analyze(
             quant=quant,
@@ -305,6 +325,13 @@ def build_agentic_shadow_document(
         )
         inferences.append(thesis_result.inference.model_dump(mode="json"))
         thesis = thesis_result.thesis
+        deterministic_conflict = _event_evidence_conflicts(available_analyses)
+        if (
+            thesis is not None
+            and deterministic_conflict
+            and not thesis.source_conflict
+        ):
+            thesis = thesis.model_copy(update={"source_conflict": True})
         if thesis is not None:
             thesis_by_symbol[factor.symbol] = thesis
             themes[factor.symbol] = thesis.key_catalysts
@@ -322,8 +349,12 @@ def build_agentic_shadow_document(
         debate_by_symbol[factor.symbol] = debate
         event_ids[factor.symbol] = tuple(item.event_id for item in company.events)
         semantic_score = (
-            _semantic_score(company.analyses, debate) if thesis is not None else 0.0
+            _semantic_score(company.analyses, debate)
+            if thesis is not None and not thesis.source_conflict
+            else 0.0
         )
+        if thesis is not None and thesis.source_conflict:
+            failures[factor.symbol] = ("CONFLICTING_EVENT_EVIDENCE",)
         semantic_scores[factor.symbol] = semantic_score
         raw_adjustments[factor.symbol] = _semantic_alpha_proxy(
             float(factor.expected_alpha),
@@ -341,7 +372,7 @@ def build_agentic_shadow_document(
     shadow_targets = (
         shadow_output.target.target_weights
         if shadow_output is not None and shadow_output.target is not None
-        else {}
+        else target_weights
     )
     shadow_ranking = tuple(
         sorted(
@@ -583,7 +614,7 @@ def _shadow_pipeline_document(output: DailyQuantOutput | None) -> dict[str, obje
     if output is None:
         return {
             "status": "NOT_RUN",
-        "reason": "SHADOW_CONTEXT_UNAVAILABLE",
+            "reason": "SHADOW_CONTEXT_UNAVAILABLE",
             "deterministic_risk_evaluated": False,
         }
     target = output.target
@@ -613,6 +644,20 @@ def _semantic_score(analyses: tuple[EventAnalysis, ...], debate: LLMQuantDebate)
     ]
     values.append(debate.semantic_adjustment_direction * debate.confidence)
     return max(-1.0, min(1.0, mean(values))) if values else 0.0
+
+
+def _event_evidence_conflicts(analyses: tuple[EventAnalysis, ...]) -> bool:
+    directions = tuple(
+        analysis.features.direction
+        * analysis.features.magnitude
+        * analysis.features.confidence
+        * analysis.features.time_decay
+        for analysis in analyses
+        if analysis.status == "AVAILABLE"
+    )
+    return any(value >= 0.2 for value in directions) and any(
+        value <= -0.2 for value in directions
+    )
 
 
 def _shadow_ranking_key(item: dict[str, object]) -> tuple[float, str]:
