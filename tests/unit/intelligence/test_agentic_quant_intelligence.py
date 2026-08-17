@@ -47,6 +47,7 @@ from personal_alpha_terminal.intelligence.agentic_models import (
     LLMQuantDebate,
     PromotionStatus,
     QuantThesis,
+    SecurityIdentity,
     SemanticAlphaStatus,
     Stance,
 )
@@ -54,9 +55,19 @@ from personal_alpha_terminal.intelligence.agentic_models import (
 NOW = datetime(2026, 8, 17, 12, tzinfo=UTC)
 
 
+def security(symbol: str = "AAA", *, as_of: datetime = NOW) -> SecurityIdentity:
+    return SecurityIdentity(
+        permanent_security_id=f"PERM:{symbol}",
+        company_id=f"company-{symbol.casefold()}",
+        symbol=symbol,
+        symbol_as_of_time=as_of - timedelta(minutes=1),
+    )
+
+
 def event(
     event_id: str,
     *,
+    symbol: str = "AAA",
     available_at: datetime = NOW,
     content_hash: str | None = None,
     revision: bool = False,
@@ -65,8 +76,9 @@ def event(
 ) -> EventRecord:
     return EventRecord(
         event_id=event_id,
-        symbol="AAA",
-        company_id="company-aaa",
+        symbol=symbol,
+        company_id=f"company-{symbol.casefold()}",
+        security=security(symbol),
         event_type=event_type,
         source_id=f"source-{event_id}",
         source_name="fixture",
@@ -142,6 +154,8 @@ def test_event_ledger_deduplicates_and_preserves_revision_chain() -> None:
     assert ledger.append(original).event_id == "e1"
     duplicate = event("e2", content_hash="same-content")
     assert ledger.append(duplicate).event_id == "e1"
+    other_company = event("e3", symbol="BBB", content_hash="same-content")
+    assert ledger.append(other_company).event_id == "e3"
     revised = event(
         "e1-revision",
         available_at=NOW + timedelta(hours=1),
@@ -149,8 +163,17 @@ def test_event_ledger_deduplicates_and_preserves_revision_chain() -> None:
         parent="e1",
     )
     ledger.append(revised)
-    assert [item.event_id for item in ledger.records] == ["e1", "e1-revision"]
+    assert [item.event_id for item in ledger.records] == ["e1", "e3", "e1-revision"]
     assert ledger.visible(NOW)[0].event_id == "e1"
+    with pytest.raises(GroundingViolation, match="revision security identity"):
+        ledger.append(
+            event(
+                "wrong-revision",
+                symbol="BBB",
+                revision=True,
+                parent="e1",
+            )
+        )
 
 
 def test_event_replay_excludes_future_events_and_detects_snapshot_contamination() -> None:
@@ -173,7 +196,10 @@ def test_prompt_separates_injection_fixture_from_system_instruction() -> None:
     assert "untrusted data" in request.system_prompt
     assert "ignore previous instructions" in request.user_prompt
     assert "ignore previous instructions" not in request.system_prompt
-    assert json.loads(request.user_prompt)["USER_DATA"]["summary"] == malicious.summary
+    user_data = json.loads(request.user_prompt)["USER_DATA"]
+    assert user_data["summary"] == malicious.summary
+    assert user_data["permanent_security_id"] == "PERM:AAA"
+    assert user_data["company_id"] == "company-aaa"
 
 
 def test_event_analyzer_validates_output_and_falls_back_to_zero_on_invalid_json() -> None:
@@ -215,6 +241,13 @@ def test_event_cache_identity_and_flash_pro_routing_are_auditable() -> None:
         model="fixture-v1",
         schema_version="event-features-v1",
     )
+    assert key != event_analysis_cache_key(
+        event("e2", symbol="BBB", content_hash=record.content_hash),
+        prompt_version="event-intelligence-v1",
+        provider="fixture",
+        model="fixture-v1",
+        schema_version="event-features-v1",
+    )
     analysis = EventAnalyzer(Provider(valid_features())).analyze(record, now=NOW)
     cache = EventAnalysisCache()
     cache.put(key, analysis)
@@ -230,6 +263,7 @@ def test_event_cache_identity_and_flash_pro_routing_are_auditable() -> None:
 def test_company_thesis_is_source_grounded_and_unavailable_claims_are_marked() -> None:
     thesis = LLMCompanyThesis(
         symbol="AAA",
+        security=security(),
         stance=Stance.BULLISH,
         confidence=0.9,
         event_direction=0.7,
@@ -243,32 +277,75 @@ def test_company_thesis_is_source_grounded_and_unavailable_claims_are_marked() -
         concise_rationale="e1 supports the thesis",
         evidence_event_ids=("e1",),
     )
-    parsed = parse_company_thesis(thesis.model_dump_json(), allowed_event_ids={"e1"})
+    parsed = parse_company_thesis(
+        thesis.model_dump_json(),
+        allowed_events=(event("e1"),),
+        expected_security=security(),
+    )
     assert parsed.evidence_event_ids == ("e1",)
     with pytest.raises(GroundingViolation):
         parse_company_thesis(
             thesis.model_copy(
                 update={"evidence_event_ids": ("unknown",)}
             ).model_dump_json(),
-            allowed_event_ids={"e1"},
+            allowed_events=(event("e1"),),
+            expected_security=security(),
         )
     no_source = parse_company_thesis(
         thesis.model_copy(update={"evidence_event_ids": ()}).model_dump_json(),
-        allowed_event_ids={"e1"},
+        allowed_events=(event("e1"),),
+        expected_security=security(),
     )
     assert "UNSUPPORTED_CLAIM" in no_source.unsupported_claims
     assert no_source.confidence == 0.25
 
 
+def test_company_thesis_rejects_hallucinated_or_wrong_security_identity() -> None:
+    payload = LLMCompanyThesis(
+        symbol="AAA",
+        security=security(),
+        stance=Stance.NEUTRAL,
+        confidence=0.5,
+        event_direction=0.0,
+        event_magnitude=0.2,
+        market_surprise=0.0,
+        novelty=0.2,
+        company_relevance=0.8,
+        expected_horizon_sessions=5,
+        bull_case="Grounded upside case.",
+        bear_case="Grounded downside case.",
+        concise_rationale="e1 is the only source.",
+        evidence_event_ids=("e1",),
+    ).model_dump(mode="json")
+    payload["symbol"] = "HALLUCINATED"
+    with pytest.raises(GroundingViolation, match="schema validation"):
+        parse_company_thesis(
+            json.dumps(payload),
+            allowed_events=(event("e1"),),
+            expected_security=security(),
+        )
+
+    payload["symbol"] = "AAA"
+    payload["security"] = security("BBB").model_dump(mode="json")
+    with pytest.raises(GroundingViolation, match="schema validation"):
+        parse_company_thesis(
+            json.dumps(payload),
+            allowed_events=(event("e1"),),
+            expected_security=security(),
+        )
+
+
 def test_company_information_pack_rejects_future_profile_event_and_outcome_data() -> None:
     quant = QuantThesis(
         symbol="AAA",
+        security=security(),
         quant_rank=1,
         expected_alpha=0.02,
         uncertainty=0.2,
     )
     profile = CompanyProfileSnapshot(
         symbol="AAA",
+        security=security(),
         company_name="AAA Corporation",
         business_description="Fixture business.",
         industry="Technology",
@@ -277,6 +354,7 @@ def test_company_information_pack_rejects_future_profile_event_and_outcome_data(
     )
     pack = CompanyInformationPack(
         symbol="AAA",
+        security=security(),
         decision_time=NOW,
         company_profile=profile,
         quant_evidence=quant,
@@ -288,6 +366,7 @@ def test_company_information_pack_rejects_future_profile_event_and_outcome_data(
     with pytest.raises(ValueError, match="future outcome"):
         CompanyInformationPack(
             symbol="AAA",
+            security=security(),
             decision_time=NOW,
             company_profile=profile,
             quant_evidence=quant,
@@ -297,6 +376,7 @@ def test_company_information_pack_rejects_future_profile_event_and_outcome_data(
     with pytest.raises(ValueError, match="future event"):
         CompanyInformationPack(
             symbol="AAA",
+            security=security(),
             decision_time=NOW,
             company_profile=profile,
             quant_evidence=quant,
@@ -310,6 +390,7 @@ def test_quant_debate_and_market_intelligence_keep_regimes_separate() -> None:
     analysis = EventAnalyzer(Provider(valid_features("e1"))).analyze(first, now=NOW)
     quant = QuantThesis(
         symbol="AAA",
+        security=security(),
         quant_rank=0.8,
         expected_alpha=0.05,
         factor_contributions={"momentum": 0.2},
@@ -325,6 +406,22 @@ def test_quant_debate_and_market_intelligence_keep_regimes_separate() -> None:
     )
     assert market.quant_regime == "QUANT_NEUTRAL"
     assert market.llm_interpreted_regime in {"RISK_ON", "MIXED", "RISK_OFF"}
+
+
+def test_quant_debate_hard_rejects_wrong_company_event() -> None:
+    quant = QuantThesis(
+        symbol="AAA",
+        security=security(),
+        quant_rank=0.8,
+        expected_alpha=0.05,
+        uncertainty=0.1,
+    )
+    wrong_company = event("wrong-company", symbol="BBB")
+    analysis = EventAnalyzer(
+        Provider(valid_features("wrong-company"))
+    ).analyze(wrong_company, now=NOW)
+    with pytest.raises(GroundingViolation, match="security identity"):
+        debate_quant_and_events(quant, (wrong_company,), (analysis,))
 
 
 def test_raw_score_and_calibrator_require_real_forward_outcomes() -> None:
@@ -343,6 +440,7 @@ def test_raw_score_and_calibrator_require_real_forward_outcomes() -> None:
     prediction = ForwardPrediction(
         prediction_id="p1",
         symbol="AAA",
+        security=security(),
         prediction_time=NOW,
         raw_event_score=0.5,
         delta_mu_event=0.0,
@@ -356,7 +454,7 @@ def test_raw_score_and_calibrator_require_real_forward_outcomes() -> None:
     )
     calibrator = SemanticAlphaCalibrator()
     assert calibrator.fit((prediction,), ()) is SemanticAlphaStatus.EVIDENCE_INSUFFICIENT
-    assert calibrator.predict(0.5) == 0.0
+    assert calibrator.predict(0.5, prediction_time=NOW + timedelta(days=1)) == 0.0
 
 
 def test_forward_outcome_ledger_separates_prediction_and_outcome_time() -> None:
@@ -364,6 +462,7 @@ def test_forward_outcome_ledger_separates_prediction_and_outcome_time() -> None:
     prediction = ForwardPrediction(
         prediction_id="p1",
         symbol="AAA",
+        security=security(),
         prediction_time=NOW,
         raw_event_score=0.5,
         delta_mu_event=0.0,
@@ -375,6 +474,7 @@ def test_forward_outcome_ledger_separates_prediction_and_outcome_time() -> None:
         ledger.attach_outcome(
             ForwardOutcome(
                 prediction_id="p1",
+                security=security(),
                 outcome_time=NOW,
                 horizons={"T+5": 5},
                 excess_returns={"T+5": 0.1},
@@ -383,6 +483,7 @@ def test_forward_outcome_ledger_separates_prediction_and_outcome_time() -> None:
     ledger.attach_outcome(
         ForwardOutcome(
             prediction_id="p1",
+            security=security(),
             outcome_time=NOW + timedelta(days=5),
             horizons={"T+5": 5},
             excess_returns={"T+5": 0.1},
@@ -391,6 +492,30 @@ def test_forward_outcome_ledger_separates_prediction_and_outcome_time() -> None:
     predictions, outcomes = ledger.promotion_inputs()
     assert predictions == (prediction,)
     assert len(outcomes) == 1
+
+
+def test_forward_outcome_ledger_rejects_cross_security_contamination() -> None:
+    ledger = ForwardOutcomeLedger()
+    prediction = ForwardPrediction(
+        prediction_id="identity-bound",
+        symbol="AAA",
+        security=security(),
+        prediction_time=NOW,
+        raw_event_score=0.5,
+        delta_mu_event=0.0,
+        status=SemanticAlphaStatus.SHADOW,
+    )
+    ledger.append_prediction(prediction)
+    with pytest.raises(GroundingViolation, match="security identity mismatch"):
+        ledger.attach_outcome(
+            ForwardOutcome(
+                prediction_id=prediction.prediction_id,
+                security=security("BBB"),
+                outcome_time=NOW + timedelta(days=5),
+                horizons={"T+5": 5},
+                excess_returns={"T+5": 0.1},
+            )
+        )
 
 
 def test_counterfactual_portfolio_ledger_is_append_only_and_time_ordered() -> None:
@@ -405,6 +530,7 @@ def test_counterfactual_portfolio_ledger_is_append_only_and_time_ordered() -> No
         slippage_model="slippage-v1",
         benchmark_convention="SPY_TOTAL_RETURN",
         data_version="data-v1",
+        security_ids=("PERM:AAA",),
         regime="NEUTRAL",
         quant_gross_return=0.01,
         quant_net_return=0.009,
@@ -431,6 +557,7 @@ def test_walk_forward_split_preserves_strict_time_order() -> None:
         ForwardPrediction(
             prediction_id=f"p{index}",
             symbol="AAA",
+            security=security(),
             prediction_time=NOW + timedelta(days=index),
             raw_event_score=float(index),
             delta_mu_event=0.0,
@@ -454,6 +581,7 @@ def test_calibration_candidates_serialize_without_future_data(
         ForwardPrediction(
             prediction_id=f"p{index}",
             symbol="AAA",
+            security=security(),
             prediction_time=NOW + timedelta(days=index),
             raw_event_score=float(index) / 10,
             delta_mu_event=0.01,
@@ -465,6 +593,7 @@ def test_calibration_candidates_serialize_without_future_data(
     outcomes = tuple(
         ForwardOutcome(
             prediction_id=f"p{index}",
+            security=security(),
             outcome_time=NOW + timedelta(days=index + 5),
             horizons={"T+5": 5},
             excess_returns={"T+5": 0.001 * (index + 1)},
@@ -475,13 +604,85 @@ def test_calibration_candidates_serialize_without_future_data(
     assert calibrator.fit(predictions, outcomes) is SemanticAlphaStatus.CALIBRATING
     document = calibrator.state_document()
     restored = SemanticAlphaCalibrator.from_document(document)
-    assert restored.predict(0.2) == pytest.approx(calibrator.predict(0.2))
+    prediction_time = NOW + timedelta(days=9)
+    assert restored.predict(
+        0.2,
+        prediction_time=prediction_time,
+    ) == pytest.approx(
+        calibrator.predict(0.2, prediction_time=prediction_time)
+    )
+
+
+def test_failed_refit_invalidates_stale_semantic_calibration_state() -> None:
+    predictions = tuple(
+        ForwardPrediction(
+            prediction_id=f"stale-{index}",
+            symbol="AAA",
+            security=security(),
+            prediction_time=NOW + timedelta(days=index),
+            evaluation_horizon="T+5",
+            raw_event_score=float(index),
+            delta_mu_event=0.01,
+            status=SemanticAlphaStatus.SHADOW,
+        )
+        for index in range(2)
+    )
+    outcomes = tuple(
+        ForwardOutcome(
+            prediction_id=f"stale-{index}",
+            security=security(),
+            outcome_time=NOW + timedelta(days=index + 5),
+            horizons={"T+5": 5},
+            excess_returns={"T+5": 0.01 * (index + 1)},
+        )
+        for index in range(2)
+    )
+    calibrator = SemanticAlphaCalibrator(model="ridge")
+    assert calibrator.fit(predictions, outcomes) is SemanticAlphaStatus.CALIBRATING
+    future_time = NOW + timedelta(days=7)
+    assert calibrator.predict(1.0, prediction_time=future_time) != 0.0
+    assert calibrator.predict(
+        1.0,
+        prediction_time=outcomes[-1].outcome_time,
+    ) == 0.0
+
+    assert (
+        calibrator.fit((predictions[0],), ())
+        is SemanticAlphaStatus.EVIDENCE_INSUFFICIENT
+    )
+    state = calibrator.state_document()
+    assert state["slope"] is None
+    assert state["intercept"] is None
+    assert state["fit_available_at"] is None
+    assert calibrator.predict(1.0, prediction_time=future_time) == 0.0
+
+
+def test_restored_invalid_calibration_cannot_reuse_stale_coefficients() -> None:
+    restored = SemanticAlphaCalibrator.from_document(
+        {
+            "schema_version": "semantic-alpha-calibrator-v2",
+            "model": "ridge",
+            "ridge": 1e-6,
+            "status": "EVIDENCE_INSUFFICIENT",
+            "slope": 99.0,
+            "intercept": 99.0,
+            "buckets": {},
+            "isotonic": [],
+            "fit_available_at": NOW.isoformat(),
+        }
+    )
+    assert restored.state_document()["slope"] is None
+    assert restored.predict(
+        1.0,
+        prediction_time=NOW + timedelta(days=1),
+    ) == 0.0
 
 
 def test_promotion_is_sample_blocked_and_lambda_is_fail_closed() -> None:
     prediction = ForwardPrediction(
         prediction_id="p1",
         symbol="AAA",
+        security=security(),
         prediction_time=NOW,
         raw_event_score=0.5,
         delta_mu_event=0.02,
@@ -490,6 +691,7 @@ def test_promotion_is_sample_blocked_and_lambda_is_fail_closed() -> None:
     )
     outcome = ForwardOutcome(
         prediction_id="p1",
+        security=security(),
         outcome_time=NOW + timedelta(days=5),
         horizons={"T+5": 5},
         transaction_cost_aware_returns={"T+5": 0.02},
@@ -534,7 +736,8 @@ def test_promotion_uses_counterfactual_cost_risk_and_calibration_metrics() -> No
     predictions = tuple(
         ForwardPrediction(
             prediction_id=f"pass-{index}",
-            symbol=("AAA" if index % 2 == 0 else "BBB"),
+            symbol=(symbol := ("AAA" if index % 2 == 0 else "BBB")),
+            security=security(symbol),
             prediction_time=NOW + timedelta(days=index),
             information_cutoff=NOW + timedelta(days=index),
             universe_identity="universe-v1",
@@ -556,6 +759,7 @@ def test_promotion_uses_counterfactual_cost_risk_and_calibration_metrics() -> No
     outcomes = tuple(
         ForwardOutcome(
             prediction_id=f"pass-{index}",
+            security=security("AAA" if index % 2 == 0 else "BBB"),
             outcome_time=NOW + timedelta(days=index + 5),
             horizons={"T+5": 5},
             excess_returns={"T+5": 0.001 * (index + 1)},
@@ -575,6 +779,9 @@ def test_promotion_uses_counterfactual_cost_risk_and_calibration_metrics() -> No
             slippage_model="slippage-v1",
             benchmark_convention="SPY_TOTAL_RETURN",
             data_version="data-v1",
+            security_ids=(
+                f"PERM:{'AAA' if index % 2 == 0 else 'BBB'}",
+            ),
             regime=("RISK_ON" if index < 3 else "RISK_OFF"),
             cluster_id=f"cluster-{index}",
             quant_gross_return=0.001,
@@ -641,7 +848,8 @@ def test_promotion_blocks_when_hybrid_underperforms_quant() -> None:
     predictions = tuple(
         ForwardPrediction(
             prediction_id=f"adversarial-{index}",
-            symbol=("AAA" if index % 2 == 0 else "BBB"),
+            symbol=(symbol := ("AAA" if index % 2 == 0 else "BBB")),
+            security=security(symbol),
             prediction_time=NOW + timedelta(days=index),
             information_cutoff=NOW + timedelta(days=index),
             universe_identity="universe-v1",
@@ -662,6 +870,7 @@ def test_promotion_blocks_when_hybrid_underperforms_quant() -> None:
     outcomes = tuple(
         ForwardOutcome(
             prediction_id=f"adversarial-{index}",
+            security=security("AAA" if index % 2 == 0 else "BBB"),
             outcome_time=NOW + timedelta(days=index + 5),
             horizons={"T+5": 5},
             excess_returns={"T+5": 0.01},
@@ -680,6 +889,9 @@ def test_promotion_blocks_when_hybrid_underperforms_quant() -> None:
             slippage_model="slippage-v1",
             benchmark_convention="SPY_TOTAL_RETURN",
             data_version="data-v1",
+            security_ids=(
+                f"PERM:{'AAA' if index % 2 == 0 else 'BBB'}",
+            ),
             regime="NEUTRAL",
             quant_gross_return=0.02,
             quant_net_return=0.019,
@@ -717,6 +929,7 @@ def test_promotion_excludes_unpaired_counterfactual_assumptions() -> None:
     prediction = ForwardPrediction(
         prediction_id="pairing-contract",
         symbol="AAA",
+        security=security(),
         prediction_time=NOW,
         information_cutoff=NOW,
         universe_identity="universe-v1",
@@ -734,6 +947,7 @@ def test_promotion_excludes_unpaired_counterfactual_assumptions() -> None:
     )
     outcome = ForwardOutcome(
         prediction_id=prediction.prediction_id,
+        security=security(),
         outcome_time=NOW + timedelta(days=5),
         horizons={"T+5": 5},
         excess_returns={"T+5": 0.01},
@@ -749,6 +963,7 @@ def test_promotion_excludes_unpaired_counterfactual_assumptions() -> None:
         slippage_model="slippage-v1",
         benchmark_convention="SPY_TOTAL_RETURN",
         data_version="data-v1",
+        security_ids=("PERM:AAA",),
         regime="NEUTRAL",
         quant_gross_return=0.01,
         quant_net_return=0.009,

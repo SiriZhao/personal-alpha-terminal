@@ -43,6 +43,7 @@ from personal_alpha_terminal.intelligence.agentic_models import (
     PromotionEvaluation,
     PromotionStatus,
     QuantThesis,
+    SecurityIdentity,
     SemanticAlphaStatus,
 )
 
@@ -94,15 +95,25 @@ class EventLedger:
                 item
                 for item in self.records
                 if item.content_hash == event.content_hash
+                and item.security == event.security
             ),
             None,
         )
         if duplicate is not None:
             return duplicate
-        if event.is_revision and not any(
-            item.event_id == event.parent_event_id for item in self.records
-        ):
-            raise PITViolation(f"revision parent is missing: {event.parent_event_id}")
+        if event.is_revision:
+            parent = next(
+                (
+                    item
+                    for item in self.records
+                    if item.event_id == event.parent_event_id
+                ),
+                None,
+            )
+            if parent is None:
+                raise PITViolation(f"revision parent is missing: {event.parent_event_id}")
+            if parent.security != event.security:
+                raise GroundingViolation("revision security identity mismatch")
         self.records.append(event)
         return event
 
@@ -163,6 +174,21 @@ def build_event_prompt(event: EventRecord) -> LLMRequest:
     payload = {
         "event_id": event.event_id,
         "symbol": event.symbol,
+        "permanent_security_id": (
+            event.security.permanent_security_id
+            if event.security is not None
+            else None
+        ),
+        "company_id": (
+            event.security.company_id
+            if event.security is not None
+            else None
+        ),
+        "symbol_as_of_time": (
+            event.security.symbol_as_of_time.isoformat()
+            if event.security is not None
+            else None
+        ),
         "event_type": event.event_type.value,
         "title": event.title,
         "summary": event.summary,
@@ -198,6 +224,11 @@ def event_analysis_cache_key(
     return _digest(
         {
             "event_content_hash": event.content_hash,
+            "security_identity": (
+                event.security.model_dump(mode="json")
+                if event.security is not None
+                else None
+            ),
             "prompt_version": prompt_version,
             "provider": provider,
             "model": model,
@@ -356,8 +387,14 @@ class EventAnalyzer:
 
 def validate_grounded_thesis(
     thesis: LLMCompanyThesis,
-    allowed_event_ids: set[str],
+    allowed_events: tuple[EventRecord, ...],
+    expected_security: SecurityIdentity,
 ) -> LLMCompanyThesis:
+    if thesis.security != expected_security:
+        raise GroundingViolation("company thesis security identity mismatch")
+    if any(event.security != expected_security for event in allowed_events):
+        raise GroundingViolation("allowed event security identity mismatch")
+    allowed_event_ids = {event.event_id for event in allowed_events}
     unsupported = tuple(
         event_id for event_id in thesis.evidence_event_ids if event_id not in allowed_event_ids
     )
@@ -378,13 +415,14 @@ def validate_grounded_thesis(
 def parse_company_thesis(
     content: str,
     *,
-    allowed_event_ids: set[str],
+    allowed_events: tuple[EventRecord, ...],
+    expected_security: SecurityIdentity,
 ) -> LLMCompanyThesis:
     try:
         thesis = LLMCompanyThesis.model_validate_json(content)
     except (ValidationError, ValueError) as error:
         raise GroundingViolation("company thesis schema validation failed") from error
-    return validate_grounded_thesis(thesis, allowed_event_ids)
+    return validate_grounded_thesis(thesis, allowed_events, expected_security)
 
 
 def requires_pro_analysis(
@@ -416,7 +454,22 @@ def debate_quant_and_events(
 ) -> LLMQuantDebate:
     """Create a bounded, evidence-linked debate without recomputing factors."""
 
+    if quant.security is None:
+        raise GroundingViolation("quant evidence lacks canonical security identity")
+    if any(event.security != quant.security for event in events):
+        raise GroundingViolation("event security identity does not match quant evidence")
     event_by_id = {event.event_id: event for event in events}
+    unsupported_analysis_ids = tuple(
+        event_id
+        for analysis in analyses
+        if analysis.status == "AVAILABLE"
+        for event_id in analysis.features.evidence_event_ids
+        if event_id not in event_by_id
+    )
+    if unsupported_analysis_ids:
+        raise GroundingViolation(
+            f"event analysis cites unavailable event ids: {unsupported_analysis_ids}"
+        )
     usable = [
         analysis
         for analysis in analyses
@@ -426,6 +479,7 @@ def debate_quant_and_events(
     if not usable:
         return LLMQuantDebate(
             symbol=quant.symbol,
+            security=quant.security,
             decision=DebateDecision.INSUFFICIENT_INFORMATION,
             agreement_strength=0.0,
             confidence=0.0,
@@ -455,6 +509,7 @@ def debate_quant_and_events(
         decision = DebateDecision.DISAGREE
     return LLMQuantDebate(
         symbol=quant.symbol,
+        security=quant.security,
         decision=decision,
         agreement_strength=min(abs(score), 1.0),
         supporting_event_ids=evidence_ids if score * quant.expected_alpha >= 0 else (),
@@ -543,86 +598,139 @@ class SemanticAlphaCalibrator:
         self.model = model
         self.ridge = ridge
         self.status = SemanticAlphaStatus.UNCALIBRATED
-        self._slope = 0.0
-        self._intercept = 0.0
+        self._slope: float | None = None
+        self._intercept: float | None = None
         self._buckets: dict[int, float] = {}
         self._isotonic: tuple[tuple[float, float], ...] = ()
+        self._fit_available_at: datetime | None = None
+
+    def _invalidate(self, status: SemanticAlphaStatus) -> SemanticAlphaStatus:
+        self.status = status
+        self._slope = None
+        self._intercept = None
+        self._buckets = {}
+        self._isotonic = ()
+        self._fit_available_at = None
+        return self.status
 
     def fit(
         self,
         predictions: tuple[ForwardPrediction, ...],
         outcomes: tuple[ForwardOutcome, ...],
     ) -> SemanticAlphaStatus:
+        self._invalidate(SemanticAlphaStatus.UNCALIBRATED)
         outcome_by_id = {outcome.prediction_id: outcome for outcome in outcomes}
-        rows: list[tuple[ForwardPrediction, float]] = []
+        if len(outcome_by_id) != len(outcomes):
+            return self._invalidate(SemanticAlphaStatus.INVALID_FIT)
+        rows: list[tuple[ForwardPrediction, ForwardOutcome, float]] = []
         for prediction in predictions:
             outcome = outcome_by_id.get(prediction.prediction_id)
             if outcome is None or prediction.historical_llm_replay:
                 continue
             if outcome.outcome_time <= prediction.prediction_time:
-                self.status = SemanticAlphaStatus.REJECTED
-                return self.status
-            value = outcome.transaction_cost_aware_returns.get("T+5")
+                return self._invalidate(SemanticAlphaStatus.REJECTED)
+            if outcome.security != prediction.security:
+                return self._invalidate(SemanticAlphaStatus.REJECTED)
+            horizon = prediction.evaluation_horizon or "T+5"
+            if horizon not in outcome.horizons:
+                continue
+            value = outcome.transaction_cost_aware_returns.get(horizon)
             if value is None:
-                value = outcome.excess_returns.get("T+5")
-            if value is not None and math.isfinite(value):
-                rows.append((prediction, float(value)))
+                value = outcome.excess_returns.get(horizon)
+            if (
+                value is not None
+                and math.isfinite(value)
+                and math.isfinite(prediction.raw_event_score)
+            ):
+                rows.append((prediction, outcome, float(value)))
         if len(rows) < 2:
-            self.status = SemanticAlphaStatus.EVIDENCE_INSUFFICIENT
-            return self.status
-        xs = [item.raw_event_score for item, _ in rows]
-        ys = [value for _, value in rows]
-        if self.model in {"linear", "ridge"}:
-            x_bar, y_bar = mean(xs), mean(ys)
-            penalty = self.ridge if self.model == "ridge" else 0.0
-            denom = sum((x - x_bar) ** 2 for x in xs) + penalty
-            self._slope = (
-                sum(
-                    (x - x_bar) * (y - y_bar)
-                    for x, y in zip(xs, ys, strict=True)
+            return self._invalidate(SemanticAlphaStatus.EVIDENCE_INSUFFICIENT)
+        xs = [prediction.raw_event_score for prediction, _, _ in rows]
+        ys = [value for _, _, value in rows]
+        try:
+            if self.model in {"linear", "ridge"}:
+                x_bar, y_bar = mean(xs), mean(ys)
+                penalty = self.ridge if self.model == "ridge" else 0.0
+                denom = sum((x - x_bar) ** 2 for x in xs) + penalty
+                if denom <= 0:
+                    return self._invalidate(SemanticAlphaStatus.INVALID_FIT)
+                self._slope = (
+                    sum(
+                        (x - x_bar) * (y - y_bar)
+                        for x, y in zip(xs, ys, strict=True)
+                    )
+                    / denom
                 )
-                / denom
-            )
-            self._intercept = y_bar - self._slope * x_bar
-        elif self.model == "robust":
-            slopes = [
-                (ys[right] - ys[left]) / (xs[right] - xs[left])
-                for left in range(len(xs))
-                for right in range(left + 1, len(xs))
-                if xs[right] != xs[left]
-            ]
-            self._slope = median(slopes) if slopes else 0.0
-            self._intercept = median(
-                y - self._slope * x for x, y in zip(xs, ys, strict=True)
-            )
-        elif self.model == "isotonic":
-            self._isotonic = _fit_isotonic(xs, ys)
-        else:
-            buckets: dict[int, list[float]] = defaultdict(list)
-            for x, y in zip(xs, ys, strict=True):
-                buckets[max(-4, min(4, int(round(x * 4))))].append(y)
-            self._buckets = {key: mean(values) for key, values in buckets.items()}
+                self._intercept = y_bar - self._slope * x_bar
+            elif self.model == "robust":
+                slopes = [
+                    (ys[right] - ys[left]) / (xs[right] - xs[left])
+                    for left in range(len(xs))
+                    for right in range(left + 1, len(xs))
+                    if xs[right] != xs[left]
+                ]
+                if not slopes:
+                    return self._invalidate(SemanticAlphaStatus.INVALID_FIT)
+                self._slope = median(slopes)
+                self._intercept = median(
+                    y - self._slope * x for x, y in zip(xs, ys, strict=True)
+                )
+            elif self.model == "isotonic":
+                self._isotonic = _fit_isotonic(xs, ys)
+                if not self._isotonic:
+                    return self._invalidate(SemanticAlphaStatus.INVALID_FIT)
+            else:
+                buckets: dict[int, list[float]] = defaultdict(list)
+                for x, y in zip(xs, ys, strict=True):
+                    buckets[max(-4, min(4, int(round(x * 4))))].append(y)
+                self._buckets = {key: mean(values) for key, values in buckets.items()}
+                if not self._buckets:
+                    return self._invalidate(SemanticAlphaStatus.INVALID_FIT)
+        except (ArithmeticError, ValueError):
+            return self._invalidate(SemanticAlphaStatus.FAILED_CALIBRATION)
+        fitted_values = (
+            *(value for value in (self._slope, self._intercept) if value is not None),
+            *(value for _, value in self._isotonic),
+            *self._buckets.values(),
+        )
+        if not fitted_values or any(not math.isfinite(value) for value in fitted_values):
+            return self._invalidate(SemanticAlphaStatus.INVALID_FIT)
+        self._fit_available_at = max(outcome.outcome_time for _, outcome, _ in rows)
         self.status = SemanticAlphaStatus.CALIBRATING
         return self.status
 
-    def predict(self, score: float) -> float:
-        if self.model in {"linear", "ridge", "robust"}:
-            return self._intercept + self._slope * score
-        if self.model == "isotonic":
-            if not self._isotonic:
-                return 0.0
-            for upper, value in self._isotonic:
-                if score <= upper:
-                    return value
-            return self._isotonic[-1][1]
-        if not self._buckets:
+    def predict(self, score: float, *, prediction_time: datetime) -> float:
+        _aware(prediction_time, "prediction_time")
+        if (
+            self.status is not SemanticAlphaStatus.CALIBRATING
+            or self._fit_available_at is None
+            or prediction_time <= self._fit_available_at
+            or not math.isfinite(score)
+        ):
             return 0.0
-        key = min(self._buckets, key=lambda candidate: abs(candidate / 4 - score))
-        return self._buckets[key]
+        if self.model in {"linear", "ridge", "robust"}:
+            if self._intercept is None or self._slope is None:
+                return 0.0
+            value = self._intercept + self._slope * score
+        elif self.model == "isotonic":
+            value = self._isotonic[-1][1]
+            for upper, candidate in self._isotonic:
+                if score <= upper:
+                    value = candidate
+                    break
+        else:
+            if not self._buckets:
+                return 0.0
+            key = min(self._buckets, key=lambda candidate: abs(candidate / 4 - score))
+            value = self._buckets[key]
+        if not math.isfinite(value):
+            self._invalidate(SemanticAlphaStatus.FAILED_CALIBRATION)
+            return 0.0
+        return value
 
     def state_document(self) -> dict[str, object]:
         return {
-            "schema_version": "semantic-alpha-calibrator-v1",
+            "schema_version": "semantic-alpha-calibrator-v2",
             "model": self.model,
             "ridge": self.ridge,
             "status": self.status.value,
@@ -630,11 +738,19 @@ class SemanticAlphaCalibrator:
             "intercept": self._intercept,
             "buckets": {str(key): value for key, value in self._buckets.items()},
             "isotonic": [list(item) for item in self._isotonic],
+            "fit_available_at": (
+                self._fit_available_at.isoformat()
+                if self._fit_available_at is not None
+                else None
+            ),
         }
 
     @classmethod
     def from_document(cls, document: dict[str, object]) -> SemanticAlphaCalibrator:
-        if document.get("schema_version") != "semantic-alpha-calibrator-v1":
+        if document.get("schema_version") not in {
+            "semantic-alpha-calibrator-v1",
+            "semantic-alpha-calibrator-v2",
+        }:
             raise ValueError("unsupported semantic alpha calibrator schema")
         model = document.get("model")
         ridge = document.get("ridge")
@@ -645,11 +761,26 @@ class SemanticAlphaCalibrator:
         if not isinstance(status, str):
             raise ValueError("invalid semantic alpha calibrator status")
         calibrator.status = SemanticAlphaStatus(status)
+        if calibrator.status is not SemanticAlphaStatus.CALIBRATING:
+            calibrator._invalidate(calibrator.status)
+            return calibrator
+        fit_available_at = document.get("fit_available_at")
+        if not isinstance(fit_available_at, str):
+            calibrator._invalidate(SemanticAlphaStatus.EVIDENCE_INSUFFICIENT)
+            return calibrator
+        calibrator._fit_available_at = _aware(
+            datetime.fromisoformat(fit_available_at),
+            "fit_available_at",
+        )
         for name in ("slope", "intercept"):
             value = document.get(name)
-            if not isinstance(value, (int, float)):
+            if value is not None and not isinstance(value, (int, float)):
                 raise ValueError(f"invalid calibrator {name}")
-            setattr(calibrator, f"_{name}", float(value))
+            setattr(
+                calibrator,
+                f"_{name}",
+                float(value) if value is not None else None,
+            )
         raw_buckets = document.get("buckets")
         if not isinstance(raw_buckets, dict):
             raise ValueError("invalid calibrator buckets")
@@ -671,6 +802,17 @@ class SemanticAlphaCalibrator:
                 raise ValueError("invalid isotonic calibration point")
             isotonic.append((float(item[0]), float(item[1])))
         calibrator._isotonic = tuple(isotonic)
+        values = (
+            *(
+                value
+                for value in (calibrator._slope, calibrator._intercept)
+                if value is not None
+            ),
+            *(value for _, value in calibrator._isotonic),
+            *calibrator._buckets.values(),
+        )
+        if not values or any(not math.isfinite(value) for value in values):
+            calibrator._invalidate(SemanticAlphaStatus.INVALID_FIT)
         return calibrator
 
 
@@ -717,6 +859,8 @@ class ForwardOutcomeLedger:
             raise ValueError(f"unknown prediction: {outcome.prediction_id}")
         if outcome.prediction_id in self.outcomes:
             raise ValueError(f"outcome already attached: {outcome.prediction_id}")
+        if outcome.security != prediction.security:
+            raise GroundingViolation("forward outcome security identity mismatch")
         if outcome.outcome_time <= prediction.prediction_time:
             raise PITViolation("outcome must be observed after prediction")
         self.outcomes[outcome.prediction_id] = outcome
@@ -814,9 +958,13 @@ def _score_monotonicity(
     means = [
         mean(
             outcome.transaction_cost_aware_returns.get(
-                "T+5", outcome.excess_returns.get("T+5", 0.0)
+                prediction.evaluation_horizon or "T+5",
+                outcome.excess_returns.get(
+                    prediction.evaluation_horizon or "T+5",
+                    0.0,
+                ),
             )
-            for _, outcome in bucket
+            for prediction, outcome in bucket
         )
         for bucket in buckets
         if bucket
@@ -853,6 +1001,11 @@ def _paired_counterfactuals(
             and prediction.benchmark_convention == snapshot.benchmark_convention
             and prediction.data_version == snapshot.data_version
             and snapshot.evaluation_horizon in outcome.horizons
+            and set(snapshot.security_ids)
+            == {
+                prediction.security.permanent_security_id
+                for prediction, _ in rows
+            }
             for prediction, outcome in rows
         ):
             paired.append(snapshot)
@@ -908,14 +1061,33 @@ def evaluate_promotion(
             and outcome.outcome_time <= prediction.prediction_time
         )
     ]
-    if contaminated:
+    identity_mismatches = [
+        prediction.prediction_id
+        for prediction in predictions
+        if (
+            (outcome := outcomes_by_id.get(prediction.prediction_id)) is not None
+            and outcome.security != prediction.security
+        )
+    ]
+    if contaminated or identity_mismatches:
         return PromotionEvaluation(
             status=PromotionStatus.PROMOTION_BLOCKED_LEAKAGE,
             observations=0,
             unique_sessions=0,
             unique_symbols=0,
             unique_events=0,
-            reasons=("FUTURE_OUTCOME_ISOLATION_FAILED", *contaminated),
+            reasons=(
+                *(
+                    ("FUTURE_OUTCOME_ISOLATION_FAILED", *contaminated)
+                    if contaminated
+                    else ()
+                ),
+                *(
+                    ("SECURITY_IDENTITY_MISMATCH", *identity_mismatches)
+                    if identity_mismatches
+                    else ()
+                ),
+            ),
         )
     valid = [
         (prediction, outcome)

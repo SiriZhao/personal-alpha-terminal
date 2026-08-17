@@ -80,6 +80,8 @@ class SemanticAlphaStatus(StrEnum):
     SHADOW = "SHADOW"
     CALIBRATING = "CALIBRATING"
     EVIDENCE_INSUFFICIENT = "EVIDENCE_INSUFFICIENT"
+    INVALID_FIT = "INVALID_FIT"
+    FAILED_CALIBRATION = "FAILED_CALIBRATION"
     PROMOTION_ELIGIBLE = "PROMOTION_ELIGIBLE"
     REJECTED = "REJECTED"
 
@@ -98,11 +100,31 @@ class PromotionStatus(StrEnum):
     PROMOTION_BLOCKED_CALIBRATION = "PROMOTION_BLOCKED_CALIBRATION"
 
 
+class SecurityIdentity(AgenticStrictModel):
+    """Canonical identity; symbol is display metadata valid at a stated time."""
+
+    permanent_security_id: str
+    company_id: str
+    symbol: str
+    symbol_as_of_time: datetime
+
+    @field_validator("permanent_security_id", "company_id", "symbol")
+    @classmethod
+    def security_identity_required(cls, value: str, info: Any) -> str:
+        return _required(value, info.field_name)
+
+    @field_validator("symbol_as_of_time")
+    @classmethod
+    def symbol_time_aware(cls, value: datetime) -> datetime:
+        return _aware(value, "symbol_as_of_time")
+
+
 class EventRecord(AgenticStrictModel):
     schema_version: str = "event-record-v1"
     event_id: str
     symbol: str | None = None
     company_id: str | None = None
+    security: SecurityIdentity | None = None
     event_type: EventType
     source_id: str
     source_name: str
@@ -173,6 +195,20 @@ class EventRecord(AgenticStrictModel):
             for token in ("t+1", "t+5", "t+20", "forward return", "future price")
         ):
             raise ValueError("future outcome text cannot be stored in an event record")
+        company_specific = self.event_type not in {
+            EventType.MACRO,
+            EventType.SECTOR,
+            EventType.GEOPOLITICAL,
+        }
+        if company_specific and self.security is None:
+            raise ValueError("company event requires canonical security identity")
+        if self.security is not None:
+            if self.symbol != self.security.symbol:
+                raise ValueError("event symbol does not match canonical security identity")
+            if self.company_id != self.security.company_id:
+                raise ValueError("event company_id does not match canonical security identity")
+            if self.security.symbol_as_of_time > self.available_at:
+                raise ValueError("event symbol identity is newer than event availability")
         return self
 
     def visible_at(self, decision_time: datetime) -> bool:
@@ -244,6 +280,7 @@ class LLMInferenceRecord(AgenticStrictModel):
 class LLMCompanyThesis(AgenticStrictModel):
     schema_version: str = "company-thesis-v1"
     symbol: str
+    security: SecurityIdentity
     stance: Stance
     confidence: float = Field(ge=0, le=1)
     event_direction: float = Field(ge=-1, le=1)
@@ -262,10 +299,17 @@ class LLMCompanyThesis(AgenticStrictModel):
     unsupported_claims: tuple[str, ...] = ()
     source_conflict: bool = False
 
+    @model_validator(mode="after")
+    def validate_thesis_security(self) -> LLMCompanyThesis:
+        if self.symbol != self.security.symbol:
+            raise ValueError("thesis symbol does not match canonical security identity")
+        return self
+
 
 class CompanyProfileSnapshot(AgenticStrictModel):
     schema_version: str = "company-profile-v1"
     symbol: str
+    security: SecurityIdentity
     company_name: str
     business_description: str
     revenue_sources: tuple[str, ...] = ()
@@ -278,10 +322,19 @@ class CompanyProfileSnapshot(AgenticStrictModel):
     def profile_time_aware(cls, value: datetime) -> datetime:
         return _aware(value, "as_of")
 
+    @model_validator(mode="after")
+    def validate_profile_security(self) -> CompanyProfileSnapshot:
+        if self.symbol != self.security.symbol:
+            raise ValueError("profile symbol does not match canonical security identity")
+        if self.security.symbol_as_of_time > self.as_of:
+            raise ValueError("profile symbol identity is newer than profile snapshot")
+        return self
+
 
 class QuantThesis(AgenticStrictModel):
     schema_version: str = "quant-thesis-v1"
     symbol: str
+    security: SecurityIdentity | None = None
     quant_rank: float
     expected_alpha: float
     factor_contributions: dict[str, float] = {}
@@ -294,10 +347,17 @@ class QuantThesis(AgenticStrictModel):
     risk_flags: tuple[str, ...] = ()
     uncertainty: float = Field(ge=0, le=1)
 
+    @model_validator(mode="after")
+    def validate_quant_security(self) -> QuantThesis:
+        if self.security is not None and self.symbol != self.security.symbol:
+            raise ValueError("quant symbol does not match canonical security identity")
+        return self
+
 
 class LLMQuantDebate(AgenticStrictModel):
     schema_version: str = "quant-llm-debate-v1"
     symbol: str
+    security: SecurityIdentity | None = None
     decision: DebateDecision
     agreement_strength: float = Field(ge=0, le=1)
     supporting_event_ids: tuple[str, ...] = ()
@@ -305,6 +365,12 @@ class LLMQuantDebate(AgenticStrictModel):
     semantic_adjustment_direction: float = Field(ge=-1, le=1)
     confidence: float = Field(ge=0, le=1)
     reason_codes: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_debate_security(self) -> LLMQuantDebate:
+        if self.security is not None and self.symbol != self.security.symbol:
+            raise ValueError("debate symbol does not match canonical security identity")
+        return self
 
 
 class MarketIntelligenceSnapshot(AgenticStrictModel):
@@ -329,6 +395,7 @@ class MarketIntelligenceSnapshot(AgenticStrictModel):
 class CompanyInformationPack(AgenticStrictModel):
     schema_version: str = "company-information-pack-v1"
     symbol: str
+    security: SecurityIdentity
     decision_time: datetime
     company_profile: CompanyProfileSnapshot | None = None
     quant_evidence: QuantThesis
@@ -344,6 +411,19 @@ class CompanyInformationPack(AgenticStrictModel):
 
     @model_validator(mode="after")
     def validate_no_future_information(self) -> CompanyInformationPack:
+        if self.symbol != self.security.symbol:
+            raise ValueError("information pack symbol does not match security identity")
+        if self.security.symbol_as_of_time > self.decision_time:
+            raise ValueError("information pack security identity is newer than decision time")
+        if self.quant_evidence.security != self.security:
+            raise ValueError("quant evidence security identity mismatch")
+        if (
+            self.company_profile is not None
+            and self.company_profile.security != self.security
+        ):
+            raise ValueError("company profile security identity mismatch")
+        if any(event.security != self.security for event in self.recent_pit_events):
+            raise ValueError("event security identity mismatch")
         if self.company_profile is not None and self.company_profile.as_of > self.decision_time:
             raise ValueError("company profile is newer than the decision cutoff")
         if any(not event.visible_at(self.decision_time) for event in self.recent_pit_events):
@@ -372,6 +452,7 @@ class ForwardPrediction(AgenticStrictModel):
     schema_version: str = "forward-prediction-v1"
     prediction_id: str
     symbol: str
+    security: SecurityIdentity
     prediction_time: datetime
     information_cutoff: datetime | None = None
     universe_identity: str | None = None
@@ -421,6 +502,10 @@ class ForwardPrediction(AgenticStrictModel):
 
     @model_validator(mode="after")
     def bind_historical_replay_status(self) -> ForwardPrediction:
+        if self.symbol != self.security.symbol:
+            raise ValueError("prediction symbol does not match canonical security identity")
+        if self.security.symbol_as_of_time > self.prediction_time:
+            raise ValueError("prediction security identity is newer than prediction time")
         expected = (
             HistoricalLLMReplayStatus.ENGINEERING_ONLY
             if self.historical_llm_replay
@@ -439,6 +524,7 @@ class ForwardPrediction(AgenticStrictModel):
 class ForwardOutcome(AgenticStrictModel):
     schema_version: str = "forward-outcome-v1"
     prediction_id: str
+    security: SecurityIdentity
     outcome_time: datetime
     horizons: dict[str, float]
     excess_returns: dict[str, float] = {}
@@ -462,6 +548,7 @@ class CounterfactualPortfolioSnapshot(AgenticStrictModel):
     slippage_model: str
     benchmark_convention: str
     data_version: str
+    security_ids: tuple[str, ...]
     regime: str
     cluster_id: str | None = None
     quant_gross_return: float
@@ -520,6 +607,12 @@ class CounterfactualPortfolioSnapshot(AgenticStrictModel):
     def validate_counterfactual_pairing(self) -> CounterfactualPortfolioSnapshot:
         if self.information_cutoff > self.session:
             raise ValueError("information_cutoff cannot follow decision session")
+        if not self.security_ids:
+            raise ValueError("counterfactual security_ids cannot be empty")
+        if len(set(self.security_ids)) != len(self.security_ids):
+            raise ValueError("counterfactual security_ids must be unique")
+        if any(not value.strip() for value in self.security_ids):
+            raise ValueError("counterfactual security_ids cannot contain empty values")
         return self
 
 
