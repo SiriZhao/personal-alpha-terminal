@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json as _json
+import logging
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import asdict, replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 from time import perf_counter
@@ -121,6 +122,8 @@ from personal_alpha_terminal.terminal.market_sessions import (
     MarketSessionState,
 )
 
+logger = logging.getLogger(__name__)
+
 _STAGE_ORDER = (
     "CALENDAR",
     "DATA",
@@ -157,6 +160,8 @@ class DailyQuantOrchestrator:
         sync_runner: SyncRunner | None = None,
         llm_runtime_status_path: Path = DEFAULT_LLM_RUNTIME_STATUS_PATH,
         shadow_llm_provider_factory: Callable[[], LLMProvider] | None = None,
+        shadow_checkpoint_callback: Callable[[str, dict[str, object]], None]
+        | None = None,
     ) -> None:
         self._factory = session_factory
         if isinstance(effective_config, Settings):
@@ -167,6 +172,7 @@ class DailyQuantOrchestrator:
         self._sync_runner = sync_runner
         self._llm_runtime_status_path = llm_runtime_status_path
         self._shadow_llm_provider_factory = shadow_llm_provider_factory
+        self._shadow_checkpoint_callback = shadow_checkpoint_callback
         self._calendar = MarketSessionCalendar(
             nasdaq_23h_enabled=effective_config.nasdaq_23h_enabled,
             nasdaq_23h_effective_date=effective_config.nasdaq_23h_effective_date,
@@ -181,9 +187,10 @@ class DailyQuantOrchestrator:
         decision_time: datetime | None = None,
         refresh: bool = True,
         progress: Callable[[str], None] | None = None,
+        run_id: str | None = None,
     ) -> DailyQuantResult:
         started_at = datetime.now(UTC)
-        run_id = f"daily-{uuid4().hex}"
+        run_id = run_id or f"daily-{uuid4().hex}"
         run_identity = RunIdentity.create(run_id)
         now = decision_time or started_at
         effective_decision_time = now
@@ -402,6 +409,19 @@ class DailyQuantOrchestrator:
             )
         quant_duration = perf_counter() - stage_started
         self._merge_quant_stages(stages, workflow_result, quant_duration)
+        self._notify_shadow_checkpoint(
+            "QUANT_COMPLETED",
+            {
+                "decision_timestamp": workflow_result.decision_time.isoformat(),
+                "information_cutoff": (
+                    workflow_result.data_cutoff.isoformat()
+                    if workflow_result.data_cutoff is not None
+                    else workflow_result.decision_time.isoformat()
+                ),
+                "data_snapshot_identity": workflow_result.data_hash,
+                "quant_status": workflow_result.status,
+            },
+        )
         if progress is not None:
             progress("[FACTOR] \u8ba1\u7b97\u5b8c\u6210")
         stage_started = perf_counter()
@@ -445,6 +465,7 @@ class DailyQuantOrchestrator:
             build_shadow_hybrid_document,
         )
 
+        quant_authority_hash = _quant_authority_fingerprint(workflow_result)
         shadow_evidence = AgenticShadowEvidence(companies={})
         try:
             with self._factory.begin() as session:
@@ -459,6 +480,20 @@ class DailyQuantOrchestrator:
                     ),
                     decision_time=effective_decision_time,
                 )
+            self._notify_shadow_checkpoint(
+                "EVENTS_RESOLVED",
+                {
+                    "security_count": len(shadow_evidence.companies),
+                    "event_ids": sorted(
+                        {
+                            event.event_id
+                            for company in shadow_evidence.companies.values()
+                            for event in company.events
+                        }
+                    ),
+                    "rejected_event_count": len(shadow_evidence.rejected_events),
+                },
+            )
             provider_name, _, configured, _ = self._configured_llm_identity()
             shadow_provider = (
                 self._shadow_llm_provider_factory()
@@ -471,12 +506,49 @@ class DailyQuantOrchestrator:
                 if configured
                 else None
             )
+            self._notify_shadow_checkpoint(
+                "LLM_REQUESTED",
+                {
+                    "provider": getattr(shadow_provider, "name", "disabled"),
+                    "model": getattr(shadow_provider, "model", "disabled"),
+                    "security_count": len(shadow_evidence.companies),
+                },
+            )
             hybrid_intelligence = build_shadow_hybrid_document(
                 workflow=workflow_result,
                 llm_stage=stages.get("LLM_INTELLIGENCE"),
                 evidence=shadow_evidence,
                 provider=shadow_provider,
                 effective_config=self._effective_config,
+            )
+            inference_rows = hybrid_intelligence.get("llm_inferences")
+            thesis_rows = hybrid_intelligence.get("structured_theses")
+            self._notify_shadow_checkpoint(
+                "LLM_COMPLETED",
+                {
+                    "inference_count": (
+                        len(inference_rows) if isinstance(inference_rows, list) else 0
+                    ),
+                    "valid_thesis_count": (
+                        len(thesis_rows) if isinstance(thesis_rows, dict) else 0
+                    ),
+                },
+            )
+            self._notify_shadow_checkpoint(
+                "THESIS_VALIDATED",
+                {
+                    "valid_thesis_count": (
+                        len(thesis_rows) if isinstance(thesis_rows, dict) else 0
+                    ),
+                    "production_influence": False,
+                },
+            )
+            self._notify_shadow_checkpoint(
+                "SHADOW_COMPUTED",
+                {
+                    "production_influence": False,
+                    "production_lambda": 0.0,
+                },
             )
         except Exception as error:
             warnings.append(
@@ -493,6 +565,14 @@ class DailyQuantOrchestrator:
             degradation = hybrid_intelligence.get("degradation")
             if isinstance(degradation, dict):
                 degradation["pipeline_failure"] = type(error).__name__
+        quant_authority_hash_after = _quant_authority_fingerprint(workflow_result)
+        if quant_authority_hash_after != quant_authority_hash:
+            raise RuntimeError("AGENTIC_SHADOW_MUTATED_QUANT_PRODUCTION")
+        hybrid_invariants = hybrid_intelligence.get("invariants")
+        if isinstance(hybrid_invariants, dict):
+            hybrid_invariants["quant_production_hash_before"] = quant_authority_hash
+            hybrid_invariants["quant_production_hash_after"] = quant_authority_hash_after
+            hybrid_invariants["quant_production_unchanged"] = True
         llm_stage = stages.get("LLM_INTELLIGENCE")
         if llm_stage is not None:
             counts = hybrid_intelligence.get("counts")
@@ -537,6 +617,16 @@ class DailyQuantOrchestrator:
                 )
                 promotion_added = ledger.append_promotion_evaluation(promotion)
             forward_counts["promotion_evaluations"] = int(promotion_added)
+            if int(forward_counts.get("predictions", 0)) > 0:
+                self._notify_shadow_checkpoint(
+                    "PREDICTION_PERSISTED",
+                    {"prediction_count": int(forward_counts["predictions"])},
+                )
+            if int(forward_counts.get("counterfactuals", 0)) > 0:
+                self._notify_shadow_checkpoint(
+                    "COUNTERFACTUAL_PERSISTED",
+                    {"counterfactual_count": int(forward_counts["counterfactuals"])},
+                )
             hybrid_intelligence["forward_evidence_persistence"] = forward_counts
             hybrid_intelligence["promotion"] = promotion.model_dump(mode="json")
             hybrid_status = hybrid_intelligence.get("status")
@@ -1493,6 +1583,9 @@ class DailyQuantOrchestrator:
 
     def _configured_llm_identity(self) -> tuple[str, str, bool, str]:
         selected = self._settings.llm_provider
+        if self._settings.runtime_profile == "FORWARD_SHADOW_VALIDATION":
+            if not self._settings.agentic_shadow_external_enabled:
+                return selected, "DISABLED", False, "DISABLED_BY_EXPLICIT_GATE"
         runtime = llm_runtime_status(self._settings, self._llm_runtime_status_path)
         if selected == "deepseek":
             return (
@@ -1541,7 +1634,10 @@ class DailyQuantOrchestrator:
             return "MOCK"
         if self._settings.app_env == "test" or self._settings.runtime_profile == "TEST":
             return "TEST"
-        if (
+        if self._settings.runtime_profile == "FORWARD_SHADOW_VALIDATION":
+            if not self._settings.agentic_shadow_external_enabled:
+                return "NON_PRODUCTION"
+        elif (
             self._settings.app_env != "production"
             or self._settings.runtime_profile != "PRODUCTION_DESKTOP"
         ):
@@ -1549,6 +1645,23 @@ class DailyQuantOrchestrator:
         if provider not in {"openai", "deepseek", "anthropic", "custom"}:
             return "NON_PRODUCTION"
         return "REAL_FORWARD"
+
+    def _notify_shadow_checkpoint(
+        self,
+        state: str,
+        metadata: dict[str, object],
+    ) -> None:
+        callback = self._shadow_checkpoint_callback
+        if callback is None:
+            return
+        try:
+            callback(state, metadata)
+        except Exception as error:  # noqa: BLE001 - observability cannot alter Quant
+            logger.warning(
+                "Agentic Shadow checkpoint failed safely: state=%s error=%s",
+                state,
+                type(error).__name__,
+            )
 
     def _resolve_portfolio(self, requested: int | None) -> int | None:
         if requested is None:
@@ -3242,3 +3355,20 @@ class DailyQuantOrchestrator:
 
     def _config_fingerprint(self) -> str:
         return self._effective_config.canonical_run_config_hash
+
+
+def _quant_authority_fingerprint(workflow: TodayResult) -> str:
+    """Hash only authoritative Quant/optimizer/risk/action outputs."""
+
+    return fingerprint(
+        {
+            "status": workflow.status,
+            "recommendations": [asdict(item) for item in workflow.recommendations],
+            "target_weights": (
+                dict(workflow.target.target_weights) if workflow.target is not None else {}
+            ),
+            "trades": [asdict(item) for item in workflow.trades],
+            "risk": _json.loads(_json.dumps(workflow.risk, default=str)),
+            "blockers": workflow.blockers,
+        }
+    )

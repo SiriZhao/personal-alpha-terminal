@@ -13,6 +13,7 @@ from personal_alpha_terminal.core.config import Settings
 
 class RuntimeProfile(StrEnum):
     PRODUCTION_DESKTOP = "PRODUCTION_DESKTOP"
+    FORWARD_SHADOW_VALIDATION = "FORWARD_SHADOW_VALIDATION"
     DEVELOPMENT = "DEVELOPMENT"
     TEST = "TEST"
 
@@ -54,7 +55,10 @@ class RuntimeContext:
             application_root = desktop_root
             expected_path = (desktop_root / "data" / "personal_alpha.db").resolve()
             database_url = f"sqlite:///{expected_path.as_posix()}"
-        elif profile is RuntimeProfile.DEVELOPMENT:
+        elif profile in {
+            RuntimeProfile.DEVELOPMENT,
+            RuntimeProfile.FORWARD_SHADOW_VALIDATION,
+        }:
             application_root = root
             expected_path = (root / "var" / "personal_alpha.db").resolve()
             configured = make_url(settings.database_url)

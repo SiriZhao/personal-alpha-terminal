@@ -27,6 +27,7 @@ from personal_alpha_terminal.application.agentic_shadow_service import (
     AgenticShadowEvidence,
 )
 from personal_alpha_terminal.application.quant_daily_service import TodayResult
+from personal_alpha_terminal.core.build_metadata import current_build_metadata
 from personal_alpha_terminal.intelligence.agentic_models import AgenticStrictModel
 from personal_alpha_terminal.intelligence.storage import IntelligenceRepository
 from personal_alpha_terminal.models.intelligence import IntelligenceResearchResult
@@ -43,9 +44,12 @@ EvidenceOrigin = Literal[
     "REAL_FORWARD",
     "NON_PRODUCTION",
     "TEST",
+    "FIXTURE",
     "MOCK",
     "SYNTHETIC",
+    "BACKFILL",
     "BACKTEST",
+    "SMOKE_TEST",
 ]
 
 
@@ -723,6 +727,7 @@ def append_daily_shadow_evidence(
     )
     if not factors_with_identity:
         return {"predictions": 0, "counterfactuals": 0}
+    code_sha = current_build_metadata().git_commit
     security_ids = tuple(
         sorted(
             {
@@ -822,6 +827,7 @@ def append_daily_shadow_evidence(
                 "universe_snapshot_id": workflow.universe_snapshot_id,
                 "decision_id": decision_id,
             },
+            code_model_version=code_sha,
             status="DEGRADED" if failure_reason else "SHADOW",
             failure_reason=failure_reason,
             evidence_origin=evidence_origin,

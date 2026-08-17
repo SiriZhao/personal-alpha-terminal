@@ -141,6 +141,32 @@ class MarketSessionCalendar:
             candidate += timedelta(days=1)
         return candidate
 
+    def advance_trading_sessions(self, value: date, sessions: int) -> date:
+        """Advance by an exact number of certified exchange sessions."""
+
+        if sessions < 0:
+            raise ValueError("sessions must be non-negative")
+        candidate = value
+        for _ in range(sessions):
+            candidate = self.next_trading_day(candidate)
+        return candidate
+
+    def trading_session_window(self, start: date, end: date) -> tuple[date, ...]:
+        """Return the exact inclusive certified session window."""
+
+        if end < start:
+            raise ValueError("session window is inverted")
+        if not self.is_trading_day(start) or not self.is_trading_day(end):
+            raise ValueError("session window endpoints must be trading sessions")
+        sessions = [start]
+        candidate = start
+        while candidate < end:
+            candidate = self.next_trading_day(candidate)
+            sessions.append(candidate)
+        if sessions[-1] != end:
+            raise ValueError("session window endpoint is not reachable")
+        return tuple(sessions)
+
     def _structure(self, local_date: date) -> MarketStructureVersion:
         if (
             self.nasdaq_23h_enabled

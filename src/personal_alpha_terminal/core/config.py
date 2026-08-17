@@ -21,7 +21,12 @@ class Settings(BaseSettings):
     )
 
     app_env: Literal["development", "test", "production"] = "development"
-    runtime_profile: Literal["PRODUCTION_DESKTOP", "DEVELOPMENT", "TEST"] = "DEVELOPMENT"
+    runtime_profile: Literal[
+        "PRODUCTION_DESKTOP",
+        "FORWARD_SHADOW_VALIDATION",
+        "DEVELOPMENT",
+        "TEST",
+    ] = "DEVELOPMENT"
     database_url: str = "sqlite:///./var/personal_alpha.db"
     sql_echo: bool = False
     database_pool_size: int = Field(default=5, ge=1, le=50)
@@ -55,6 +60,9 @@ class Settings(BaseSettings):
     daily_pipeline_quality_report_path: Path = Path("DATA_QUALITY_REPORT.md")
     daily_pipeline_lock_path: Path = Path("var/run/daily_pipeline.lock")
     daily_pipeline_lock_stale_hours: int = Field(default=12, ge=1, le=168)
+    forward_shadow_lock_path: Path = Path("var/run/forward_shadow.lock")
+    forward_outcome_lock_path: Path = Path("var/run/forward_outcomes.lock")
+    forward_shadow_lock_stale_hours: int = Field(default=12, ge=1, le=168)
     log_level: str = "INFO"
     log_dir: Path = Path("var/logs")
     llm_provider: Literal[
@@ -83,6 +91,7 @@ class Settings(BaseSettings):
     llm_temperature: float = Field(default=0.2, ge=0, le=2)
     llm_timeout_seconds: float = Field(default=60.0, ge=1, le=600)
     llm_max_retries: int = Field(default=2, ge=0, le=10)
+    agentic_shadow_external_enabled: bool = False
     llm_enabled: bool = True
     llm_event_intelligence: bool = True
     llm_filing_intelligence: bool = False
@@ -347,6 +356,20 @@ class Settings(BaseSettings):
             raise ValueError("production PostgreSQL requires sslmode=require or stronger")
         if not url.username or not url.database:
             raise ValueError("production PostgreSQL URL requires a user and database name")
+        return self
+
+    @model_validator(mode="after")
+    def validate_forward_shadow_profile(self) -> "Settings":
+        if self.agentic_shadow_external_enabled:
+            if self.runtime_profile != "FORWARD_SHADOW_VALIDATION":
+                raise ValueError(
+                    "external Agentic Shadow requires runtime_profile="
+                    "FORWARD_SHADOW_VALIDATION"
+                )
+            if self.llm_provider in {"auto", "mock", "disabled"}:
+                raise ValueError(
+                    "external Agentic Shadow requires an explicit external llm_provider"
+                )
         return self
 
     @model_validator(mode="after")

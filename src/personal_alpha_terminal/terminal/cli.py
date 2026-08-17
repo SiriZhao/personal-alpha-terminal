@@ -22,6 +22,10 @@ from rich.table import Table
 from personal_alpha_terminal.terminal.broad_universe_cli import broad_universe_command
 from personal_alpha_terminal.terminal.config import default_config_text, load_config
 from personal_alpha_terminal.terminal.daily_renderer import render_daily_quant_result
+from personal_alpha_terminal.terminal.forward_shadow_cli import (
+    forward_shadow_command,
+    run_forward_shadow_daily,
+)
 from personal_alpha_terminal.terminal.forward_track_cli import forward_track_command
 from personal_alpha_terminal.terminal.intelligence_cli import intelligence_command
 from personal_alpha_terminal.terminal.market_sessions import MarketSessionCalendar
@@ -297,6 +301,12 @@ def run_daily(
 
     try:
         config = load_config(config_path)
+        if config.settings.runtime_profile == "FORWARD_SHADOW_VALIDATION":
+            return run_forward_shadow_daily(
+                config,
+                refresh=refresh,
+                locale=locale,
+            )
         progress = _progress_printer(config) if refresh else None
         if refresh:
             from personal_alpha_terminal.terminal.instance import ConsoleInstanceLock
@@ -3692,6 +3702,55 @@ def build_parser() -> argparse.ArgumentParser:
     append_outcome.add_argument("--qqq-relative", type=float, default=None)
     append_outcome.add_argument("--max-adverse-excursion", type=float, default=None)
     append_outcome.add_argument("--max-favorable-excursion", type=float, default=None)
+    forward_shadow = subparsers.add_parser(
+        "forward-shadow",
+        help="Operate restart-safe external-LLM Forward Shadow validation",
+    )
+    forward_shadow_actions = forward_shadow.add_subparsers(
+        dest="forward_shadow_action",
+        required=True,
+    )
+    forward_shadow_actions.add_parser(
+        "provider-status",
+        help="Show provider configuration without making a paid call",
+    )
+    provider_test = forward_shadow_actions.add_parser(
+        "provider-test",
+        help="Run an explicit NOT_FORWARD_EVIDENCE structured connectivity test",
+    )
+    provider_test.add_argument("--live", action="store_true")
+    shadow_run = forward_shadow_actions.add_parser(
+        "run",
+        help="Run Quant production plus real Agentic Shadow for one stable session",
+    )
+    shadow_run.add_argument("--decision-time", default=None)
+    shadow_run.add_argument("--no-refresh", action="store_true")
+    shadow_resume = forward_shadow_actions.add_parser(
+        "resume",
+        help="Resume the latest compatible incomplete Shadow run without duplicates",
+    )
+    shadow_resume.add_argument("--run-id", default=None)
+    shadow_resume.add_argument("--refresh", action="store_true")
+    collect_outcomes = forward_shadow_actions.add_parser(
+        "collect-outcomes",
+        help="Append all exact-session matured real outcomes and re-evaluate promotion",
+    )
+    collect_outcomes.add_argument("--as-of", default=None)
+    shadow_status = forward_shadow_actions.add_parser(
+        "status",
+        help="Show provider, daily run, Forward evidence and promotion dashboard",
+    )
+    shadow_status.add_argument("--json", action="store_true")
+    shadow_doctor = forward_shadow_actions.add_parser(
+        "doctor",
+        help="Check Forward Shadow readiness without a paid provider call",
+    )
+    shadow_doctor.add_argument("--json", action="store_true")
+    shadow_reconcile = forward_shadow_actions.add_parser(
+        "reconcile",
+        help="Read-only immutable ledger reconciliation with exclusion reasons",
+    )
+    shadow_reconcile.add_argument("--json", action="store_true")
     round4_research = subparsers.add_parser(
         "round4-research",
         help="Run ROUND 4 broad cross-section, calibration and OOS research",
@@ -4003,6 +4062,8 @@ def main(argv: list[str] | None = None) -> int:
             return broad_universe_command(args)
         if command == "forward-track":
             return forward_track_command(args)
+        if command == "forward-shadow":
+            return forward_shadow_command(args, load_config(args.config))
         if command == "round4-research":
             return _round4_research_command(args)
         if command == "round7-research":

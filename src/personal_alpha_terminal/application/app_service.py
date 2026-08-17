@@ -8,6 +8,7 @@ from pathlib import Path
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
+from personal_alpha_terminal.agents.llm.providers import LLMProvider
 from personal_alpha_terminal.application.backtest_service import BacktestService
 from personal_alpha_terminal.application.daily_orchestrator import DailyQuantOrchestrator
 from personal_alpha_terminal.application.daily_result import DailyQuantResult
@@ -196,6 +197,10 @@ class ApplicationService:
         decision_time: datetime | None = None,
         refresh: bool = True,
         progress: Callable[[str], None] | None = None,
+        run_id: str | None = None,
+        shadow_llm_provider_factory: Callable[[], LLMProvider] | None = None,
+        shadow_checkpoint_callback: Callable[[str, dict[str, object]], None]
+        | None = None,
     ) -> DailyQuantResult:
         """Run the only production daily orchestrator consumed by terminals."""
 
@@ -210,11 +215,14 @@ class ApplicationService:
                 self._snapshot_root / "daily-runs" if self._snapshot_root is not None else None
             ),
             sync_runner=self._sync_runner,
+            shadow_llm_provider_factory=shadow_llm_provider_factory,
+            shadow_checkpoint_callback=shadow_checkpoint_callback,
         ).run(
             portfolio_id=resolved_id,
             decision_time=decision_time,
             refresh=refresh,
             progress=progress,
+            run_id=run_id,
         )
 
     def get_daily_dashboard(self) -> DashboardView:
