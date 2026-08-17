@@ -751,18 +751,28 @@ class CounterfactualPortfolioLedger:
     def metrics(self) -> dict[str, float] | None:
         if not self.snapshots:
             return None
+        incremental_returns = [
+            item.hybrid_net_return - item.quant_net_return for item in self.snapshots
+        ]
         return {
             "quant_net_return": mean(item.quant_net_return for item in self.snapshots),
             "hybrid_net_return": mean(item.hybrid_net_return for item in self.snapshots),
+            "mean_incremental_net_alpha": mean(incremental_returns),
+            "median_incremental_net_alpha": median(incremental_returns),
+            "incremental_hit_rate": mean(value > 0 for value in incremental_returns),
             "incremental_turnover": mean(
                 item.hybrid_turnover - item.quant_turnover for item in self.snapshots
+            ),
+            "incremental_cost": mean(
+                item.hybrid_cost - item.quant_cost for item in self.snapshots
             ),
             "hybrid_drawdown_increase": max(
                 item.hybrid_drawdown for item in self.snapshots
             )
             - max(item.quant_drawdown for item in self.snapshots),
             "benchmark_adjusted_alpha": mean(
-                item.hybrid_net_return - item.benchmark_return
+                (item.hybrid_net_return - item.benchmark_return)
+                - (item.quant_net_return - item.benchmark_return)
                 for item in self.snapshots
             ),
         }
@@ -790,23 +800,6 @@ def walk_forward_split(
     return ordered[:train_end], ordered[train_end:validation_end], ordered[validation_end:]
 
 
-def _clustered_returns(
-    valid: list[tuple[ForwardPrediction, ForwardOutcome]],
-) -> list[float]:
-    clusters: dict[str, list[float]] = defaultdict(list)
-    for prediction, outcome in valid:
-        value = outcome.transaction_cost_aware_returns.get(
-            "T+5", outcome.excess_returns.get("T+5", 0.0)
-        )
-        cluster = (
-            outcome.event_cluster_id
-            or next(iter(prediction.event_cluster_ids), None)
-            or prediction.prediction_time.date().isoformat()
-        )
-        clusters[cluster].append(value)
-    return [mean(values) for values in clusters.values()]
-
-
 def _score_monotonicity(
     valid: list[tuple[ForwardPrediction, ForwardOutcome]],
 ) -> bool:
@@ -831,23 +824,72 @@ def _score_monotonicity(
     return all(left <= right for left, right in zip(means, means[1:], strict=False))
 
 
-def _subperiod_stability(
+def _paired_counterfactuals(
     valid: list[tuple[ForwardPrediction, ForwardOutcome]],
-) -> bool:
-    if len(valid) < 4:
-        return False
-    ordered = sorted(valid, key=lambda item: item[0].prediction_time)
-    split = len(ordered) // 2
+    snapshots: tuple[CounterfactualPortfolioSnapshot, ...],
+) -> tuple[CounterfactualPortfolioSnapshot, ...]:
+    rows_by_session: dict[
+        datetime,
+        list[tuple[ForwardPrediction, ForwardOutcome]],
+    ] = defaultdict(list)
+    for prediction, outcome in valid:
+        rows_by_session[prediction.prediction_time].append((prediction, outcome))
 
-    def period_mean(rows: list[tuple[ForwardPrediction, ForwardOutcome]]) -> float:
-        return mean(
-            outcome.transaction_cost_aware_returns.get(
-                "T+5", outcome.excess_returns.get("T+5", 0.0)
+    paired: list[CounterfactualPortfolioSnapshot] = []
+    for snapshot in snapshots:
+        rows = rows_by_session.get(snapshot.session, ())
+        if not rows:
+            continue
+        if all(
+            prediction.information_cutoff == snapshot.information_cutoff
+            and prediction.universe_identity == snapshot.universe_identity
+            and prediction.evaluation_horizon == snapshot.evaluation_horizon
+            and (
+                prediction.execution_assumptions_hash
+                == snapshot.execution_assumptions_hash
             )
-            for _, outcome in rows
-        )
+            and prediction.transaction_cost_model == snapshot.transaction_cost_model
+            and prediction.slippage_model == snapshot.slippage_model
+            and prediction.benchmark_convention == snapshot.benchmark_convention
+            and prediction.data_version == snapshot.data_version
+            and snapshot.evaluation_horizon in outcome.horizons
+            for prediction, outcome in rows
+        ):
+            paired.append(snapshot)
+    return tuple(paired)
 
-    return period_mean(ordered[:split]) >= 0 and period_mean(ordered[split:]) >= 0
+
+def _clustered_incremental_returns(
+    snapshots: tuple[CounterfactualPortfolioSnapshot, ...],
+) -> list[float]:
+    clusters: dict[str, list[float]] = defaultdict(list)
+    for snapshot in snapshots:
+        cluster = snapshot.cluster_id or snapshot.session.date().isoformat()
+        clusters[cluster].append(snapshot.hybrid_net_return - snapshot.quant_net_return)
+    return [mean(values) for values in clusters.values()]
+
+
+def _counterfactual_regime_stability(
+    snapshots: tuple[CounterfactualPortfolioSnapshot, ...],
+) -> bool:
+    if len(snapshots) < 4:
+        return False
+    ordered = tuple(sorted(snapshots, key=lambda item: item.session))
+    split = len(ordered) // 2
+    first = mean(
+        item.hybrid_net_return - item.quant_net_return for item in ordered[:split]
+    )
+    second = mean(
+        item.hybrid_net_return - item.quant_net_return for item in ordered[split:]
+    )
+    by_regime: dict[str, list[float]] = defaultdict(list)
+    for item in ordered:
+        by_regime[item.regime].append(item.hybrid_net_return - item.quant_net_return)
+    return (
+        first >= 0
+        and second >= 0
+        and all(mean(values) >= 0 for values in by_regime.values())
+    )
 
 
 def evaluate_promotion(
@@ -890,8 +932,10 @@ def evaluate_promotion(
         for prediction, _ in valid
         for event_id in prediction.event_ids
     }
+    paired_snapshots = _paired_counterfactuals(valid, portfolio_snapshots)
     if (
         len(valid) < policy.minimum_forward_observations
+        or len(paired_snapshots) < policy.minimum_forward_observations
         or len(sessions) < policy.minimum_unique_sessions
         or len(symbols) < policy.minimum_unique_symbols
         or len(events) < policy.minimum_unique_events
@@ -899,21 +943,39 @@ def evaluate_promotion(
         return PromotionEvaluation(
             status=PromotionStatus.PROMOTION_BLOCKED_SAMPLE,
             observations=len(valid),
+            sample_n=len(paired_snapshots),
+            paired_sample_n=len(paired_snapshots),
             unique_sessions=len(sessions),
             unique_symbols=len(symbols),
             unique_events=len(events),
-            reasons=("REALIZED_SAMPLE_INSUFFICIENT",),
+            reasons=(
+                (
+                    "PAIRED_COUNTERFACTUAL_SAMPLE_INSUFFICIENT"
+                    if len(paired_snapshots) < policy.minimum_forward_observations
+                    else "REALIZED_SAMPLE_INSUFFICIENT"
+                ),
+            ),
         )
-    values = _clustered_returns(valid)
-    alpha = mean(values)
-    benchmark_values: list[float] = []
-    for _, outcome in valid:
-        value = outcome.excess_returns.get("T+5")
-        if value is not None:
-            benchmark_values.append(float(value))
-    benchmark_adjusted = (
-        mean(benchmark_values) if benchmark_values else None
-    )
+    counterfactual_ledger = CounterfactualPortfolioLedger()
+    for snapshot in sorted(paired_snapshots, key=lambda item: item.session):
+        counterfactual_ledger.append(snapshot)
+    counterfactual = counterfactual_ledger.metrics()
+    if counterfactual is None:
+        return PromotionEvaluation(
+            status=PromotionStatus.PROMOTION_BLOCKED_SAMPLE,
+            observations=len(valid),
+            sample_n=0,
+            paired_sample_n=0,
+            unique_sessions=len(sessions),
+            unique_symbols=len(symbols),
+            unique_events=len(events),
+            reasons=("PAIRED_COUNTERFACTUAL_EVIDENCE_MISSING",),
+        )
+    values = _clustered_incremental_returns(paired_snapshots)
+    alpha = counterfactual["mean_incremental_net_alpha"]
+    median_alpha = counterfactual["median_incremental_net_alpha"]
+    hit_rate = counterfactual["incremental_hit_rate"]
+    benchmark_adjusted = counterfactual["benchmark_adjusted_alpha"]
     directional_rows = [
         (
             prediction.delta_mu_event > 0,
@@ -936,18 +998,9 @@ def evaluate_promotion(
         if directional_rows
         else None
     )
-    counterfactual_ledger = CounterfactualPortfolioLedger()
-    for snapshot in portfolio_snapshots:
-        counterfactual_ledger.append(snapshot)
-    counterfactual = counterfactual_ledger.metrics()
-    incremental_turnover = (
-        counterfactual["incremental_turnover"] if counterfactual is not None else None
-    )
-    drawdown_increase = (
-        counterfactual["hybrid_drawdown_increase"]
-        if counterfactual is not None
-        else None
-    )
+    incremental_turnover = counterfactual["incremental_turnover"]
+    incremental_cost = counterfactual["incremental_cost"]
+    drawdown_increase = counterfactual["hybrid_drawdown_increase"]
     random_generator = random.Random(17)
     bootstrap: list[float] = []
     for _ in range(400):
@@ -956,12 +1009,9 @@ def evaluate_promotion(
     low = bootstrap[int(0.025 * len(bootstrap))]
     high = bootstrap[int(0.975 * len(bootstrap))]
     monotonic = _score_monotonicity(valid)
-    stable = _subperiod_stability(valid)
+    stable = _counterfactual_regime_stability(paired_snapshots)
     reasons: tuple[str, ...]
-    if counterfactual is None:
-        status = PromotionStatus.PROMOTION_BLOCKED_STABILITY
-        reasons = ("COUNTERFACTUAL_PORTFOLIO_EVIDENCE_MISSING",)
-    elif alpha < policy.minimum_incremental_net_alpha:
+    if alpha <= policy.minimum_incremental_net_alpha:
         status = PromotionStatus.PROMOTION_BLOCKED_PERFORMANCE
         reasons = ("INCREMENTAL_NET_ALPHA_BELOW_POLICY",)
     elif benchmark_adjusted is None or benchmark_adjusted < 0:
@@ -997,24 +1047,33 @@ def evaluate_promotion(
     elif policy.require_subperiod_stability and not stable:
         status = PromotionStatus.PROMOTION_BLOCKED_STABILITY
         reasons = ("SUBPERIOD_STABILITY_NOT_ESTABLISHED",)
-    elif policy.require_ci_low_non_negative and low < 0:
+    elif (
+        policy.require_ci_low_non_negative
+        and low <= policy.minimum_confidence_bound
+    ):
         status = PromotionStatus.PROMOTION_BLOCKED_STABILITY
-        reasons = ("BOOTSTRAP_CI_DOES_NOT_SUPPORT_NON_NEGATIVE_BENEFIT",)
+        reasons = ("BOOTSTRAP_CI_NOT_CONVINCINGLY_POSITIVE",)
     else:
         status = PromotionStatus.PROMOTION_PASS
         reasons = ()
     return PromotionEvaluation(
         status=status,
         observations=len(valid),
+        sample_n=len(paired_snapshots),
+        paired_sample_n=len(paired_snapshots),
         unique_sessions=len(sessions),
         unique_symbols=len(symbols),
         unique_events=len(events),
         incremental_net_alpha=alpha,
+        median_incremental_net_alpha=median_alpha,
         bootstrap_ci_low=low,
         bootstrap_ci_high=high,
+        incremental_hit_rate=hit_rate,
         benchmark_adjusted_alpha=benchmark_adjusted,
         incremental_turnover=incremental_turnover,
+        incremental_cost=incremental_cost,
         hybrid_drawdown_increase=drawdown_increase,
+        regime_stability=stable,
         directional_accuracy=directional_accuracy,
         confidence_calibration_error=confidence_error,
         reasons=reasons,

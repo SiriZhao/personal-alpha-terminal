@@ -397,6 +397,15 @@ def test_counterfactual_portfolio_ledger_is_append_only_and_time_ordered() -> No
     ledger = CounterfactualPortfolioLedger()
     first = CounterfactualPortfolioSnapshot(
         session=NOW,
+        information_cutoff=NOW,
+        universe_identity="universe-v1",
+        evaluation_horizon="T+5",
+        execution_assumptions_hash="execution-v1",
+        transaction_cost_model="cost-v1",
+        slippage_model="slippage-v1",
+        benchmark_convention="SPY_TOTAL_RETURN",
+        data_version="data-v1",
+        regime="NEUTRAL",
         quant_gross_return=0.01,
         quant_net_return=0.009,
         quant_cost=0.001,
@@ -527,6 +536,14 @@ def test_promotion_uses_counterfactual_cost_risk_and_calibration_metrics() -> No
             prediction_id=f"pass-{index}",
             symbol=("AAA" if index % 2 == 0 else "BBB"),
             prediction_time=NOW + timedelta(days=index),
+            information_cutoff=NOW + timedelta(days=index),
+            universe_identity="universe-v1",
+            evaluation_horizon="T+5",
+            execution_assumptions_hash="execution-v1",
+            transaction_cost_model="cost-v1",
+            slippage_model="slippage-v1",
+            benchmark_convention="SPY_TOTAL_RETURN",
+            data_version="data-v1",
             raw_event_score=float(index + 1) / 10,
             delta_mu_event=0.01,
             status=SemanticAlphaStatus.SHADOW,
@@ -550,6 +567,16 @@ def test_promotion_uses_counterfactual_cost_risk_and_calibration_metrics() -> No
     snapshots = tuple(
         CounterfactualPortfolioSnapshot(
             session=NOW + timedelta(days=index),
+            information_cutoff=NOW + timedelta(days=index),
+            universe_identity="universe-v1",
+            evaluation_horizon="T+5",
+            execution_assumptions_hash="execution-v1",
+            transaction_cost_model="cost-v1",
+            slippage_model="slippage-v1",
+            benchmark_convention="SPY_TOTAL_RETURN",
+            data_version="data-v1",
+            regime=("RISK_ON" if index < 3 else "RISK_OFF"),
+            cluster_id=f"cluster-{index}",
             quant_gross_return=0.001,
             quant_net_return=0.0008,
             quant_cost=0.0002,
@@ -580,6 +607,11 @@ def test_promotion_uses_counterfactual_cost_risk_and_calibration_metrics() -> No
         ),
     )
     assert promotion.status is PromotionStatus.PROMOTION_PASS
+    assert promotion.incremental_net_alpha == pytest.approx(0.0004)
+    assert promotion.median_incremental_net_alpha == pytest.approx(0.0004)
+    assert promotion.incremental_hit_rate == 1.0
+    assert promotion.incremental_cost == pytest.approx(0.0001)
+    assert promotion.regime_stability is True
     assert promotion.directional_accuracy == 1.0
     assert promotion.confidence_calibration_error == 0.0
     attribution = fuse_alpha(
@@ -603,6 +635,148 @@ def test_promotion_uses_counterfactual_cost_risk_and_calibration_metrics() -> No
     assert attribution.delta_mu_semantic_applied == pytest.approx(0.002)
     assert attribution.weight_quant_counterfactual == 0.03
     assert attribution.recommendation_hybrid == "BUY"
+
+
+def test_promotion_blocks_when_hybrid_underperforms_quant() -> None:
+    predictions = tuple(
+        ForwardPrediction(
+            prediction_id=f"adversarial-{index}",
+            symbol=("AAA" if index % 2 == 0 else "BBB"),
+            prediction_time=NOW + timedelta(days=index),
+            information_cutoff=NOW + timedelta(days=index),
+            universe_identity="universe-v1",
+            evaluation_horizon="T+5",
+            execution_assumptions_hash="execution-v1",
+            transaction_cost_model="cost-v1",
+            slippage_model="slippage-v1",
+            benchmark_convention="SPY_TOTAL_RETURN",
+            data_version="data-v1",
+            raw_event_score=float(index + 1) / 10,
+            delta_mu_event=0.01,
+            status=SemanticAlphaStatus.SHADOW,
+            event_ids=(f"event-{index}",),
+            confidence=1.0,
+        )
+        for index in range(6)
+    )
+    outcomes = tuple(
+        ForwardOutcome(
+            prediction_id=f"adversarial-{index}",
+            outcome_time=NOW + timedelta(days=index + 5),
+            horizons={"T+5": 5},
+            excess_returns={"T+5": 0.01},
+            transaction_cost_aware_returns={"T+5": 0.01},
+        )
+        for index in range(6)
+    )
+    snapshots = tuple(
+        CounterfactualPortfolioSnapshot(
+            session=NOW + timedelta(days=index),
+            information_cutoff=NOW + timedelta(days=index),
+            universe_identity="universe-v1",
+            evaluation_horizon="T+5",
+            execution_assumptions_hash="execution-v1",
+            transaction_cost_model="cost-v1",
+            slippage_model="slippage-v1",
+            benchmark_convention="SPY_TOTAL_RETURN",
+            data_version="data-v1",
+            regime="NEUTRAL",
+            quant_gross_return=0.02,
+            quant_net_return=0.019,
+            quant_cost=0.001,
+            quant_turnover=0.01,
+            quant_drawdown=0.01,
+            hybrid_gross_return=0.01,
+            hybrid_net_return=0.009,
+            hybrid_cost=0.001,
+            hybrid_turnover=0.01,
+            hybrid_drawdown=0.01,
+            benchmark_return=0.0,
+        )
+        for index in range(6)
+    )
+    promotion = evaluate_promotion(
+        predictions=predictions,
+        outcomes=outcomes,
+        portfolio_snapshots=snapshots,
+        policy=LLMPromotionPolicy(
+            minimum_forward_observations=6,
+            minimum_unique_symbols=2,
+            minimum_unique_sessions=6,
+            minimum_unique_events=6,
+            minimum_directional_accuracy=1.0,
+            maximum_confidence_calibration_error=0.0,
+        ),
+    )
+    assert promotion.status is PromotionStatus.PROMOTION_BLOCKED_PERFORMANCE
+    assert promotion.incremental_net_alpha == pytest.approx(-0.01)
+    assert promotion.reasons == ("INCREMENTAL_NET_ALPHA_BELOW_POLICY",)
+
+
+def test_promotion_excludes_unpaired_counterfactual_assumptions() -> None:
+    prediction = ForwardPrediction(
+        prediction_id="pairing-contract",
+        symbol="AAA",
+        prediction_time=NOW,
+        information_cutoff=NOW,
+        universe_identity="universe-v1",
+        evaluation_horizon="T+5",
+        execution_assumptions_hash="execution-v1",
+        transaction_cost_model="cost-v1",
+        slippage_model="slippage-v1",
+        benchmark_convention="SPY_TOTAL_RETURN",
+        data_version="data-v1",
+        raw_event_score=0.5,
+        delta_mu_event=0.01,
+        status=SemanticAlphaStatus.SHADOW,
+        event_ids=("event-1",),
+        confidence=1.0,
+    )
+    outcome = ForwardOutcome(
+        prediction_id=prediction.prediction_id,
+        outcome_time=NOW + timedelta(days=5),
+        horizons={"T+5": 5},
+        excess_returns={"T+5": 0.01},
+        transaction_cost_aware_returns={"T+5": 0.01},
+    )
+    mismatched_snapshot = CounterfactualPortfolioSnapshot(
+        session=NOW,
+        information_cutoff=NOW,
+        universe_identity="universe-v1",
+        evaluation_horizon="T+5",
+        execution_assumptions_hash="different-execution",
+        transaction_cost_model="cost-v1",
+        slippage_model="slippage-v1",
+        benchmark_convention="SPY_TOTAL_RETURN",
+        data_version="data-v1",
+        regime="NEUTRAL",
+        quant_gross_return=0.01,
+        quant_net_return=0.009,
+        quant_cost=0.001,
+        quant_turnover=0.01,
+        quant_drawdown=0.01,
+        hybrid_gross_return=0.02,
+        hybrid_net_return=0.019,
+        hybrid_cost=0.001,
+        hybrid_turnover=0.01,
+        hybrid_drawdown=0.01,
+        benchmark_return=0.0,
+    )
+    promotion = evaluate_promotion(
+        predictions=(prediction,),
+        outcomes=(outcome,),
+        portfolio_snapshots=(mismatched_snapshot,),
+        policy=LLMPromotionPolicy(
+            minimum_forward_observations=1,
+            minimum_unique_symbols=1,
+            minimum_unique_sessions=1,
+            minimum_unique_events=1,
+        ),
+    )
+    assert promotion.status is PromotionStatus.PROMOTION_BLOCKED_SAMPLE
+    assert promotion.paired_sample_n == 0
+    assert promotion.incremental_net_alpha is None
+    assert promotion.reasons == ("PAIRED_COUNTERFACTUAL_SAMPLE_INSUFFICIENT",)
 
 
 def test_rank_shift_is_bounded_without_removing_optimizer_eligibility() -> None:

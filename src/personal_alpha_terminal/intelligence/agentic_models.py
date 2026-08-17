@@ -6,6 +6,7 @@ changing the deterministic quant, optimizer, portfolio, or risk semantics.
 
 from __future__ import annotations
 
+import math
 from datetime import datetime
 from enum import StrEnum
 from typing import Any
@@ -372,6 +373,14 @@ class ForwardPrediction(AgenticStrictModel):
     prediction_id: str
     symbol: str
     prediction_time: datetime
+    information_cutoff: datetime | None = None
+    universe_identity: str | None = None
+    evaluation_horizon: str | None = None
+    execution_assumptions_hash: str | None = None
+    transaction_cost_model: str | None = None
+    slippage_model: str | None = None
+    benchmark_convention: str | None = None
+    data_version: str | None = None
     raw_event_score: float
     delta_mu_event: float
     status: SemanticAlphaStatus
@@ -388,6 +397,28 @@ class ForwardPrediction(AgenticStrictModel):
     def prediction_time_aware(cls, value: datetime) -> datetime:
         return _aware(value, "prediction_time")
 
+    @field_validator("information_cutoff")
+    @classmethod
+    def information_cutoff_aware(cls, value: datetime | None) -> datetime | None:
+        return _aware(value, "information_cutoff") if value is not None else None
+
+    @field_validator(
+        "universe_identity",
+        "evaluation_horizon",
+        "execution_assumptions_hash",
+        "transaction_cost_model",
+        "slippage_model",
+        "benchmark_convention",
+        "data_version",
+    )
+    @classmethod
+    def optional_pairing_identity_required(
+        cls,
+        value: str | None,
+        info: Any,
+    ) -> str | None:
+        return _required(value, info.field_name) if value is not None else None
+
     @model_validator(mode="after")
     def bind_historical_replay_status(self) -> ForwardPrediction:
         expected = (
@@ -397,6 +428,11 @@ class ForwardPrediction(AgenticStrictModel):
         )
         if self.historical_replay_status is not expected:
             object.__setattr__(self, "historical_replay_status", expected)
+        if (
+            self.information_cutoff is not None
+            and self.information_cutoff > self.prediction_time
+        ):
+            raise ValueError("information_cutoff cannot follow prediction_time")
         return self
 
 
@@ -418,6 +454,16 @@ class ForwardOutcome(AgenticStrictModel):
 class CounterfactualPortfolioSnapshot(AgenticStrictModel):
     schema_version: str = "counterfactual-portfolio-v1"
     session: datetime
+    information_cutoff: datetime
+    universe_identity: str
+    evaluation_horizon: str
+    execution_assumptions_hash: str
+    transaction_cost_model: str
+    slippage_model: str
+    benchmark_convention: str
+    data_version: str
+    regime: str
+    cluster_id: str | None = None
     quant_gross_return: float
     quant_net_return: float
     quant_cost: float = Field(ge=0)
@@ -432,25 +478,70 @@ class CounterfactualPortfolioSnapshot(AgenticStrictModel):
     quant_exposures: dict[str, float] = {}
     hybrid_exposures: dict[str, float] = {}
 
-    @field_validator("session")
+    @field_validator("session", "information_cutoff")
     @classmethod
-    def session_time_aware(cls, value: datetime) -> datetime:
-        return _aware(value, "session")
+    def counterfactual_times_aware(cls, value: datetime, info: Any) -> datetime:
+        return _aware(value, info.field_name)
+
+    @field_validator(
+        "universe_identity",
+        "evaluation_horizon",
+        "execution_assumptions_hash",
+        "transaction_cost_model",
+        "slippage_model",
+        "benchmark_convention",
+        "data_version",
+        "regime",
+    )
+    @classmethod
+    def counterfactual_identity_required(cls, value: str, info: Any) -> str:
+        return _required(value, info.field_name)
+
+    @field_validator(
+        "quant_gross_return",
+        "quant_net_return",
+        "quant_cost",
+        "quant_turnover",
+        "quant_drawdown",
+        "hybrid_gross_return",
+        "hybrid_net_return",
+        "hybrid_cost",
+        "hybrid_turnover",
+        "hybrid_drawdown",
+        "benchmark_return",
+    )
+    @classmethod
+    def counterfactual_values_finite(cls, value: float, info: Any) -> float:
+        if not math.isfinite(value):
+            raise ValueError(f"{info.field_name} must be finite")
+        return value
+
+    @model_validator(mode="after")
+    def validate_counterfactual_pairing(self) -> CounterfactualPortfolioSnapshot:
+        if self.information_cutoff > self.session:
+            raise ValueError("information_cutoff cannot follow decision session")
+        return self
 
 
 class PromotionEvaluation(AgenticStrictModel):
     schema_version: str = "promotion-evaluation-v1"
     status: PromotionStatus
     observations: int
+    sample_n: int = 0
+    paired_sample_n: int = 0
     unique_sessions: int
     unique_symbols: int
     unique_events: int
     incremental_net_alpha: float | None = None
+    median_incremental_net_alpha: float | None = None
     bootstrap_ci_low: float | None = None
     bootstrap_ci_high: float | None = None
+    incremental_hit_rate: float | None = None
     benchmark_adjusted_alpha: float | None = None
     incremental_turnover: float | None = None
+    incremental_cost: float | None = None
     hybrid_drawdown_increase: float | None = None
+    regime_stability: bool | None = None
     directional_accuracy: float | None = None
     confidence_calibration_error: float | None = None
     reasons: tuple[str, ...] = ()
@@ -463,6 +554,7 @@ class LLMPromotionPolicy(AgenticStrictModel):
     minimum_unique_sessions: int = Field(default=40, ge=1)
     minimum_unique_events: int = Field(default=10, ge=1)
     minimum_incremental_net_alpha: float = 0.0
+    minimum_confidence_bound: float = 0.0
     require_ci_low_non_negative: bool = True
     require_monotonicity: bool = True
     require_subperiod_stability: bool = True
