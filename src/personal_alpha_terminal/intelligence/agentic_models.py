@@ -83,6 +83,11 @@ class SemanticAlphaStatus(StrEnum):
     REJECTED = "REJECTED"
 
 
+class HistoricalLLMReplayStatus(StrEnum):
+    NOT_HISTORICAL = "NOT_HISTORICAL"
+    ENGINEERING_ONLY = "ENGINEERING_ONLY"
+
+
 class PromotionStatus(StrEnum):
     PROMOTION_PASS = "PROMOTION_PASS"
     PROMOTION_BLOCKED_SAMPLE = "PROMOTION_BLOCKED_SAMPLE"
@@ -257,6 +262,22 @@ class LLMCompanyThesis(AgenticStrictModel):
     source_conflict: bool = False
 
 
+class CompanyProfileSnapshot(AgenticStrictModel):
+    schema_version: str = "company-profile-v1"
+    symbol: str
+    company_name: str
+    business_description: str
+    revenue_sources: tuple[str, ...] = ()
+    industry: str
+    as_of: datetime
+    pit_status: str
+
+    @field_validator("as_of")
+    @classmethod
+    def profile_time_aware(cls, value: datetime) -> datetime:
+        return _aware(value, "as_of")
+
+
 class QuantThesis(AgenticStrictModel):
     schema_version: str = "quant-thesis-v1"
     symbol: str
@@ -304,6 +325,48 @@ class MarketIntelligenceSnapshot(AgenticStrictModel):
         return _aware(value, "as_of")
 
 
+class CompanyInformationPack(AgenticStrictModel):
+    schema_version: str = "company-information-pack-v1"
+    symbol: str
+    decision_time: datetime
+    company_profile: CompanyProfileSnapshot | None = None
+    quant_evidence: QuantThesis
+    recent_pit_events: tuple[EventRecord, ...] = ()
+    current_holding_weight: float = Field(ge=0, le=1)
+    sector_data: dict[str, Any] = {}
+    market_context: MarketIntelligenceSnapshot | None = None
+
+    @field_validator("decision_time")
+    @classmethod
+    def information_pack_time(cls, value: datetime) -> datetime:
+        return _aware(value, "decision_time")
+
+    @model_validator(mode="after")
+    def validate_no_future_information(self) -> CompanyInformationPack:
+        if self.company_profile is not None and self.company_profile.as_of > self.decision_time:
+            raise ValueError("company profile is newer than the decision cutoff")
+        if any(not event.visible_at(self.decision_time) for event in self.recent_pit_events):
+            raise ValueError("information pack contains a future event")
+        if (
+            self.market_context is not None
+            and self.market_context.as_of > self.decision_time
+        ):
+            raise ValueError("market context is newer than the decision cutoff")
+        forbidden = {
+            "future_return",
+            "forward_return",
+            "t+1_return",
+            "t+5_return",
+            "t+20_return",
+            "t+60_return",
+            "future_price",
+            "recommendation_outcome",
+        }
+        if any(str(key).casefold() in forbidden for key in self.sector_data):
+            raise ValueError("information pack contains future outcome data")
+        return self
+
+
 class ForwardPrediction(AgenticStrictModel):
     schema_version: str = "forward-prediction-v1"
     prediction_id: str
@@ -315,12 +378,26 @@ class ForwardPrediction(AgenticStrictModel):
     event_ids: tuple[str, ...] = ()
     event_cluster_ids: tuple[str, ...] = ()
     historical_llm_replay: bool = False
+    historical_replay_status: HistoricalLLMReplayStatus = (
+        HistoricalLLMReplayStatus.NOT_HISTORICAL
+    )
     confidence: float = Field(default=0.0, ge=0, le=1)
 
     @field_validator("prediction_time")
     @classmethod
     def prediction_time_aware(cls, value: datetime) -> datetime:
         return _aware(value, "prediction_time")
+
+    @model_validator(mode="after")
+    def bind_historical_replay_status(self) -> ForwardPrediction:
+        expected = (
+            HistoricalLLMReplayStatus.ENGINEERING_ONLY
+            if self.historical_llm_replay
+            else HistoricalLLMReplayStatus.NOT_HISTORICAL
+        )
+        if self.historical_replay_status is not expected:
+            object.__setattr__(self, "historical_replay_status", expected)
+        return self
 
 
 class ForwardOutcome(AgenticStrictModel):
@@ -399,6 +476,7 @@ class LLMInfluencePolicy(AgenticStrictModel):
     schema_version: str = "llm-influence-policy-v1"
     level: LLMInfluenceLevel = LLMInfluenceLevel.LEVEL_1_SHADOW_ALPHA
     enabled: bool = False
+    lambda_value: float = Field(default=0.0, ge=0, le=1)
     max_rank_shift: float = Field(default=0.0, ge=0)
     max_semantic_alpha_contribution: float = Field(default=0.0, ge=0)
     max_relative_alpha_adjustment: float = Field(default=0.0, ge=0)
@@ -413,7 +491,7 @@ class LLMInfluencePolicy(AgenticStrictModel):
             LLMInfluenceLevel.LEVEL_5_DYNAMIC_CONTEXTUAL_INFLUENCE,
         }:
             return 0.0
-        return 1.0
+        return self.lambda_value
 
 
 class AlphaAttribution(AgenticStrictModel):

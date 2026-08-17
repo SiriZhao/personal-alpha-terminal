@@ -30,6 +30,8 @@ from personal_alpha_terminal.intelligence.agentic_engine import (
     walk_forward_split,
 )
 from personal_alpha_terminal.intelligence.agentic_models import (
+    CompanyInformationPack,
+    CompanyProfileSnapshot,
     CounterfactualPortfolioSnapshot,
     DebateDecision,
     EventIntelligenceFeatures,
@@ -37,6 +39,7 @@ from personal_alpha_terminal.intelligence.agentic_models import (
     EventType,
     ForwardOutcome,
     ForwardPrediction,
+    HistoricalLLMReplayStatus,
     LLMCompanyThesis,
     LLMInfluenceLevel,
     LLMInfluencePolicy,
@@ -257,6 +260,51 @@ def test_company_thesis_is_source_grounded_and_unavailable_claims_are_marked() -
     assert no_source.confidence == 0.25
 
 
+def test_company_information_pack_rejects_future_profile_event_and_outcome_data() -> None:
+    quant = QuantThesis(
+        symbol="AAA",
+        quant_rank=1,
+        expected_alpha=0.02,
+        uncertainty=0.2,
+    )
+    profile = CompanyProfileSnapshot(
+        symbol="AAA",
+        company_name="AAA Corporation",
+        business_description="Fixture business.",
+        industry="Technology",
+        as_of=NOW,
+        pit_status="PIT_SAFE",
+    )
+    pack = CompanyInformationPack(
+        symbol="AAA",
+        decision_time=NOW,
+        company_profile=profile,
+        quant_evidence=quant,
+        recent_pit_events=(event("e1"),),
+        current_holding_weight=0.02,
+        sector_data={"sector_breadth": 0.5},
+    )
+    assert pack.company_profile == profile
+    with pytest.raises(ValueError, match="future outcome"):
+        CompanyInformationPack(
+            symbol="AAA",
+            decision_time=NOW,
+            company_profile=profile,
+            quant_evidence=quant,
+            current_holding_weight=0.02,
+            sector_data={"t+5_return": 0.4},
+        )
+    with pytest.raises(ValueError, match="future event"):
+        CompanyInformationPack(
+            symbol="AAA",
+            decision_time=NOW,
+            company_profile=profile,
+            quant_evidence=quant,
+            recent_pit_events=(event("future", available_at=NOW + timedelta(seconds=1)),),
+            current_holding_weight=0.02,
+        )
+
+
 def test_quant_debate_and_market_intelligence_keep_regimes_separate() -> None:
     first = event("e1")
     analysis = EventAnalyzer(Provider(valid_features("e1"))).analyze(first, now=NOW)
@@ -301,6 +349,10 @@ def test_raw_score_and_calibrator_require_real_forward_outcomes() -> None:
         status=SemanticAlphaStatus.SHADOW,
         event_ids=("e1",),
         historical_llm_replay=True,
+    )
+    assert (
+        prediction.historical_replay_status
+        is HistoricalLLMReplayStatus.ENGINEERING_ONLY
     )
     calibrator = SemanticAlphaCalibrator()
     assert calibrator.fit((prediction,), ()) is SemanticAlphaStatus.EVIDENCE_INSUFFICIENT
@@ -537,6 +589,7 @@ def test_promotion_uses_counterfactual_cost_risk_and_calibration_metrics() -> No
         policy=LLMInfluencePolicy(
             level=LLMInfluenceLevel.LEVEL_3_BOUNDED_ALPHA_OVERLAY,
             enabled=True,
+            lambda_value=1.0,
             max_semantic_alpha_contribution=0.05,
             max_relative_alpha_adjustment=0.1,
             max_absolute_alpha_adjustment=0.03,

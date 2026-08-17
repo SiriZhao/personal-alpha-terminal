@@ -8,5 +8,7 @@ Implemented append-oriented `EventLedger`, content-hash deduplication,
 immutable revision chains, explicit `available_at`, reproducible
 `EventSnapshot`, cutoff replay, and future/outcome contamination checks.
 Historical LLM replay is excluded from promotion evidence.
+Its explicit status is `ENGINEERING_ONLY`, never production promotion
+evidence.
 
 No event later than the decision cutoff is made visible by replay.

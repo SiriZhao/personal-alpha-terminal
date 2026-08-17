@@ -10,4 +10,7 @@ policy-owned lambda and configurable contribution, relative and absolute caps.
 A non-PASS promotion status structurally forces lambda to zero. Deterioration
 revokes the policy to `LEVEL_1_SHADOW_ALPHA`.
 
+`lambda_value` is explicitly configured in `LLMInfluencePolicy` and is bounded
+to `[0, 1]`; its default is `0`.
+
 The optimizer receives only final expected alpha and no LLM weight request.

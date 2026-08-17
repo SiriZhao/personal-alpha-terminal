@@ -1031,6 +1031,7 @@ def revoke_if_deteriorated(
         update={
             "level": LLMInfluenceLevel.LEVEL_1_SHADOW_ALPHA,
             "enabled": False,
+            "lambda_value": 0.0,
             "max_rank_shift": 0.0,
             "max_semantic_alpha_contribution": 0.0,
             "max_relative_alpha_adjustment": 0.0,

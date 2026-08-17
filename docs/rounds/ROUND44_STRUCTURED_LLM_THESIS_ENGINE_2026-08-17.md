@@ -10,3 +10,6 @@ event ids. Unsupported ids fail validation; claims without source are marked
 `UNSUPPORTED_CLAIM` and confidence is capped.
 
 The schema has no target-weight field.
+`CompanyInformationPack` separates PIT company profile, completed Quant
+evidence, visible events, holdings, sector data and market context, and rejects
+future-return or future-price fields.
