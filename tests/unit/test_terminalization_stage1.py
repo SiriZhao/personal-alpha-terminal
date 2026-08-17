@@ -542,7 +542,10 @@ def test_daily_agentic_shadow_executes_and_provider_failure_preserves_quant(
     assert success.hybrid_intelligence["forward_evidence_persistence"] == {
         "predictions": 1,
         "counterfactuals": 2,
+        "promotion_evaluations": 1,
     }
+    assert success.hybrid_intelligence["promotion"]["real_forward_n"] == 0
+    assert success.hybrid_intelligence["promotion"]["production_lambda"] == 0.0
     with session_factory() as session:
         ledger = AgenticForwardEvidenceLedger(session)
         assert len(ledger.records("SEMANTIC_FORWARD_PREDICTION")) == 1

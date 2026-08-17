@@ -10,9 +10,12 @@ from __future__ import annotations
 
 import json
 import math
+import random
 from dataclasses import asdict
 from datetime import UTC, datetime
+from enum import StrEnum
 from hashlib import sha256
+from statistics import mean, median
 from typing import Any, Literal, cast
 
 from pydantic import Field, field_validator, model_validator
@@ -33,6 +36,31 @@ OUTCOME_TYPE = "SEMANTIC_FORWARD_OUTCOME"
 QUANT_COUNTERFACTUAL_TYPE = "QUANT_COUNTERFACTUAL"
 HYBRID_COUNTERFACTUAL_TYPE = "HYBRID_COUNTERFACTUAL"
 PROMOTION_EVALUATION_TYPE = "AGENTIC_PROMOTION_EVALUATION"
+REAL_FORWARD_ORIGIN = "REAL_FORWARD"
+EvidenceOrigin = Literal[
+    "REAL_FORWARD",
+    "NON_PRODUCTION",
+    "TEST",
+    "MOCK",
+    "SYNTHETIC",
+    "BACKTEST",
+]
+
+
+class PromotionReason(StrEnum):
+    NO_FORWARD_EVIDENCE = "NO_FORWARD_EVIDENCE"
+    INSUFFICIENT_SAMPLE = "INSUFFICIENT_SAMPLE"
+    CALIBRATION_FAILED = "CALIBRATION_FAILED"
+    NEGATIVE_INCREMENTAL_ALPHA = "NEGATIVE_INCREMENTAL_ALPHA"
+    CI_NOT_POSITIVE = "CI_NOT_POSITIVE"
+    COST_FAILURE = "COST_FAILURE"
+    DRAWDOWN_FAILURE = "DRAWDOWN_FAILURE"
+    TURNOVER_FAILURE = "TURNOVER_FAILURE"
+    REGIME_INSTABILITY = "REGIME_INSTABILITY"
+    DATA_CONTAMINATION = "DATA_CONTAMINATION"
+    MODEL_VERSION_INCONSISTENT = "MODEL_VERSION_INCONSISTENT"
+    PROMOTION_EVALUATION_FAILED = "PROMOTION_EVALUATION_FAILED"
+    ELIGIBLE_FOR_PROMOTION_REVIEW = "ELIGIBLE_FOR_PROMOTION_REVIEW"
 
 
 def _aware(value: datetime, name: str) -> datetime:
@@ -65,6 +93,7 @@ def _payload_hash(payload: dict[str, object]) -> str:
 class SemanticForwardPredictionRecord(AgenticStrictModel):
     prediction_id: str
     observation_id: str
+    counterfactual_observation_id: str
     decision_timestamp: datetime
     information_cutoff: datetime
     security_id: str
@@ -93,12 +122,14 @@ class SemanticForwardPredictionRecord(AgenticStrictModel):
     data_snapshot_identity: dict[str, str]
     code_model_version: str = __version__
     evaluation_horizons: tuple[str, ...] = ("1d", "5d", "10d", "20d")
+    evidence_origin: EvidenceOrigin
     status: Literal["SHADOW", "DEGRADED"]
     failure_reason: str | None = None
 
     @field_validator(
         "prediction_id",
         "observation_id",
+        "counterfactual_observation_id",
         "security_id",
         "company_id",
         "symbol",
@@ -165,6 +196,8 @@ class SemanticForwardOutcomeRecord(AgenticStrictModel):
     hybrid_drawdown: float
     data_snapshot_identity: dict[str, str]
     source_identity: str
+    regime: str
+    evidence_origin: EvidenceOrigin
 
     @field_validator(
         "outcome_id",
@@ -173,6 +206,7 @@ class SemanticForwardOutcomeRecord(AgenticStrictModel):
         "evaluation_horizon",
         "security_id",
         "source_identity",
+        "regime",
     )
     @classmethod
     def outcome_text(cls, value: str, info: Any) -> str:
@@ -274,14 +308,26 @@ class PromotionEvaluationRecord(AgenticStrictModel):
     evaluation_id: str
     evaluated_at: datetime
     status: str
+    promotion_reason: str
     reason_codes: tuple[str, ...]
     real_forward_n: int
+    minimum_required_n: int
     paired_sample_n: int
-    metrics: dict[str, object] = Field(default_factory=dict)
+    incremental_alpha: float | None = None
+    median_incremental_alpha: float | None = None
+    confidence_interval: tuple[float, float] | None = None
+    hit_rate: float | None = None
+    calibration_status: str
+    regime_coverage: tuple[str, ...] = ()
+    cost_delta: float | None = None
+    drawdown_delta: float | None = None
+    turnover_delta: float | None = None
+    contaminated_n: int = 0
+    model_versions: tuple[str, ...] = ()
     production_lambda: float = 0.0
     human_approval_required: bool = True
 
-    @field_validator("evaluation_id", "status")
+    @field_validator("evaluation_id", "status", "promotion_reason")
     @classmethod
     def evaluation_text(cls, value: str, info: Any) -> str:
         return _required(value, info.field_name)
@@ -298,6 +344,22 @@ class PromotionEvaluationRecord(AgenticStrictModel):
         if value != 0.0:
             raise ValueError("production_lambda must remain zero in ROUND56-58")
         return value
+
+    @model_validator(mode="after")
+    def promotion_cannot_activate(self) -> PromotionEvaluationRecord:
+        if not self.human_approval_required:
+            raise ValueError("human approval must remain required")
+        return self
+
+
+class RuntimePromotionPolicy(AgenticStrictModel):
+    minimum_required_n: int = Field(default=120, ge=120)
+    minimum_incremental_alpha: float = Field(default=0.0, ge=0.0)
+    maximum_calibration_error: float = Field(default=0.2, ge=0, le=0.2)
+    maximum_turnover_delta: float = Field(default=0.05, ge=0, le=0.05)
+    maximum_drawdown_delta: float = Field(default=0.02, ge=0, le=0.02)
+    minimum_regimes: int = Field(default=2, ge=2)
+    bootstrap_draws: int = Field(default=2_000, ge=1_000)
 
 
 class AgenticForwardEvidenceLedger:
@@ -453,6 +515,7 @@ def append_daily_shadow_evidence(
     evidence: AgenticShadowEvidence,
     run_id: str,
     decision_id: str,
+    evidence_origin: EvidenceOrigin,
 ) -> dict[str, int]:
     """Persist one immutable prediction per bound security and one paired portfolio."""
 
@@ -495,6 +558,25 @@ def append_daily_shadow_evidence(
     by_symbol = degradation_rows.get("by_symbol")
     failures = by_symbol if isinstance(by_symbol, dict) else {}
     ledger = AgenticForwardEvidenceLedger(session)
+    factors_with_identity = tuple(
+        evidence.companies[factor.symbol]
+        for factor in workflow.factors
+        if factor.symbol in evidence.companies
+    )
+    if not factors_with_identity:
+        return {"predictions": 0, "counterfactuals": 0}
+    security_ids = tuple(
+        company.security.permanent_security_id
+        for company in factors_with_identity
+    )
+    portfolio_observation = _identity(
+        "portfolio",
+        decision_id,
+        workflow.decision_time.isoformat(),
+        workflow.universe_snapshot_id,
+        "|".join(security_ids),
+        "1d|5d|10d|20d",
+    )
     prediction_count = 0
     for factor in workflow.factors:
         company = evidence.companies.get(factor.symbol)
@@ -524,6 +606,7 @@ def append_daily_shadow_evidence(
         record = SemanticForwardPredictionRecord(
             prediction_id=prediction_id,
             observation_id=observation_id,
+            counterfactual_observation_id=portfolio_observation,
             decision_timestamp=workflow.decision_time,
             information_cutoff=workflow.data_cutoff or workflow.decision_time,
             security_id=company.security.permanent_security_id,
@@ -567,29 +650,11 @@ def append_daily_shadow_evidence(
             },
             status="DEGRADED" if failure_reason else "SHADOW",
             failure_reason=failure_reason,
+            evidence_origin=evidence_origin,
         )
         if ledger.append_prediction(record):
             prediction_count += 1
 
-    factors_with_identity = tuple(
-        evidence.companies[factor.symbol]
-        for factor in workflow.factors
-        if factor.symbol in evidence.companies
-    )
-    if not factors_with_identity:
-        return {"predictions": prediction_count, "counterfactuals": 0}
-    security_ids = tuple(
-        company.security.permanent_security_id
-        for company in factors_with_identity
-    )
-    portfolio_observation = _identity(
-        "portfolio",
-        decision_id,
-        workflow.decision_time.isoformat(),
-        workflow.universe_snapshot_id,
-        "|".join(security_ids),
-        "1d|5d|10d|20d",
-    )
     shadow_pipeline = hybrid_document.get("shadow_pipeline")
     pipeline = shadow_pipeline if isinstance(shadow_pipeline, dict) else {}
     assumptions = {
@@ -655,6 +720,304 @@ def append_daily_shadow_evidence(
         "predictions": prediction_count,
         "counterfactuals": int(quant_added) + int(hybrid_added),
     }
+
+
+def evaluate_runtime_promotion(
+    ledger: AgenticForwardEvidenceLedger,
+    *,
+    evaluated_at: datetime,
+    evaluation_id: str,
+    policy: RuntimePromotionPolicy | None = None,
+) -> PromotionEvaluationRecord:
+    """Evaluate only real, paired, immutable forward outcomes and stay fail-closed."""
+
+    active_policy = policy or RuntimePromotionPolicy()
+    evaluation_time = _aware(evaluated_at, "evaluated_at")
+    prediction_rows = ledger.records(PREDICTION_TYPE)
+    outcome_rows = ledger.records(OUTCOME_TYPE)
+    quant_rows = ledger.records(QUANT_COUNTERFACTUAL_TYPE)
+    hybrid_rows = ledger.records(HYBRID_COUNTERFACTUAL_TYPE)
+    predictions: dict[str, SemanticForwardPredictionRecord] = {}
+    outcomes: list[SemanticForwardOutcomeRecord] = []
+    contaminated = 0
+    for row in prediction_rows:
+        try:
+            prediction = SemanticForwardPredictionRecord.model_validate(row)
+        except ValueError:
+            contaminated += 1
+            continue
+        if prediction.evidence_origin != REAL_FORWARD_ORIGIN:
+            contaminated += 1
+            continue
+        if prediction.decision_timestamp > evaluation_time:
+            contaminated += 1
+            continue
+        if prediction.status != "SHADOW" or prediction.structured_thesis is None:
+            continue
+        predictions[prediction.prediction_id] = prediction
+    for row in outcome_rows:
+        try:
+            outcome = SemanticForwardOutcomeRecord.model_validate(row)
+        except ValueError:
+            contaminated += 1
+            continue
+        if outcome.evidence_origin != REAL_FORWARD_ORIGIN:
+            contaminated += 1
+            continue
+        if outcome.outcome_timestamp > evaluation_time:
+            contaminated += 1
+            continue
+        outcomes.append(outcome)
+    quant_pairs = _counterfactuals_by_observation(quant_rows, "QUANT")
+    hybrid_pairs = _counterfactuals_by_observation(hybrid_rows, "HYBRID")
+    real_matches: list[
+        tuple[SemanticForwardPredictionRecord, SemanticForwardOutcomeRecord]
+    ] = []
+    paired: list[
+        tuple[SemanticForwardPredictionRecord, SemanticForwardOutcomeRecord]
+    ] = []
+    for outcome in outcomes:
+        matched_prediction = predictions.get(outcome.prediction_id)
+        if matched_prediction is None:
+            contaminated += 1
+            continue
+        real_matches.append((matched_prediction, outcome))
+        quant = quant_pairs.get(matched_prediction.counterfactual_observation_id)
+        hybrid = hybrid_pairs.get(matched_prediction.counterfactual_observation_id)
+        if quant is None or hybrid is None or not _counterfactuals_match(quant, hybrid):
+            continue
+        paired.append((matched_prediction, outcome))
+
+    real_forward_n = len(real_matches)
+    paired_sample_n = len(paired)
+    model_versions = tuple(
+        sorted(
+            {
+                "|".join(
+                    (
+                        prediction.llm_provider,
+                        prediction.llm_model,
+                        prediction.prompt_version,
+                        prediction.code_model_version,
+                    )
+                )
+                for prediction, _ in paired
+            }
+        )
+    )
+    increments = [
+        outcome.hybrid_net_return - outcome.quant_net_return
+        for _, outcome in paired
+    ]
+    cost_deltas = [
+        outcome.hybrid_cost - outcome.quant_cost for _, outcome in paired
+    ]
+    turnover_deltas = [
+        outcome.hybrid_turnover - outcome.quant_turnover for _, outcome in paired
+    ]
+    drawdown_deltas = [
+        outcome.hybrid_drawdown - outcome.quant_drawdown for _, outcome in paired
+    ]
+    regime_coverage = tuple(sorted({outcome.regime for _, outcome in paired}))
+    incremental_alpha = mean(increments) if increments else None
+    median_incremental = median(increments) if increments else None
+    hit_rate = (
+        sum(value > 0 for value in increments) / len(increments)
+        if increments
+        else None
+    )
+    cost_delta = mean(cost_deltas) if cost_deltas else None
+    turnover_delta = mean(turnover_deltas) if turnover_deltas else None
+    drawdown_delta = mean(drawdown_deltas) if drawdown_deltas else None
+    confidence_interval = (
+        _cluster_bootstrap_interval(paired, active_policy.bootstrap_draws)
+        if increments
+        else None
+    )
+    calibration_error = (
+        mean(
+            abs(
+                max(0.0, min(1.0, (prediction.semantic_score + 1.0) / 2.0))
+                - float(outcome.hybrid_net_return > outcome.quant_net_return)
+            )
+            for prediction, outcome in paired
+        )
+        if paired
+        else None
+    )
+    calibration_status = (
+        "PASS"
+        if calibration_error is not None
+        and calibration_error <= active_policy.maximum_calibration_error
+        else "FAILED"
+        if calibration_error is not None
+        else "INSUFFICIENT_EVIDENCE"
+    )
+    reason = _promotion_reason(
+        real_forward_n=real_forward_n,
+        paired_sample_n=paired_sample_n,
+        contaminated=contaminated,
+        model_versions=model_versions,
+        increments=increments,
+        cost_deltas=cost_deltas,
+        incremental_alpha=incremental_alpha,
+        confidence_interval=confidence_interval,
+        calibration_status=calibration_status,
+        turnover_delta=turnover_delta,
+        drawdown_delta=drawdown_delta,
+        regime_coverage=regime_coverage,
+        paired=paired,
+        policy=active_policy,
+    )
+    status = (
+        "ELIGIBLE_FOR_PROMOTION_REVIEW"
+        if reason is PromotionReason.ELIGIBLE_FOR_PROMOTION_REVIEW
+        else "NO_FORWARD_EVIDENCE"
+        if reason is PromotionReason.NO_FORWARD_EVIDENCE
+        else "INSUFFICIENT_EVIDENCE"
+        if reason is PromotionReason.INSUFFICIENT_SAMPLE
+        else "BLOCKED"
+    )
+    return PromotionEvaluationRecord(
+        evaluation_id=evaluation_id,
+        evaluated_at=evaluation_time,
+        status=status,
+        promotion_reason=reason.value,
+        reason_codes=(reason.value,),
+        real_forward_n=real_forward_n,
+        minimum_required_n=active_policy.minimum_required_n,
+        paired_sample_n=paired_sample_n,
+        incremental_alpha=incremental_alpha,
+        median_incremental_alpha=median_incremental,
+        confidence_interval=confidence_interval,
+        hit_rate=hit_rate,
+        calibration_status=calibration_status,
+        regime_coverage=regime_coverage,
+        cost_delta=cost_delta,
+        drawdown_delta=drawdown_delta,
+        turnover_delta=turnover_delta,
+        contaminated_n=contaminated,
+        model_versions=model_versions,
+        production_lambda=0.0,
+        human_approval_required=True,
+    )
+
+
+def _promotion_reason(
+    *,
+    real_forward_n: int,
+    paired_sample_n: int,
+    contaminated: int,
+    model_versions: tuple[str, ...],
+    increments: list[float],
+    cost_deltas: list[float],
+    incremental_alpha: float | None,
+    confidence_interval: tuple[float, float] | None,
+    calibration_status: str,
+    turnover_delta: float | None,
+    drawdown_delta: float | None,
+    regime_coverage: tuple[str, ...],
+    paired: list[tuple[SemanticForwardPredictionRecord, SemanticForwardOutcomeRecord]],
+    policy: RuntimePromotionPolicy,
+) -> PromotionReason:
+    if not real_forward_n and not contaminated:
+        return PromotionReason.NO_FORWARD_EVIDENCE
+    if contaminated:
+        return PromotionReason.DATA_CONTAMINATION
+    if paired_sample_n < policy.minimum_required_n:
+        return PromotionReason.INSUFFICIENT_SAMPLE
+    if len(model_versions) != 1:
+        return PromotionReason.MODEL_VERSION_INCONSISTENT
+    if calibration_status != "PASS":
+        return PromotionReason.CALIBRATION_FAILED
+    if incremental_alpha is None:
+        return PromotionReason.INSUFFICIENT_SAMPLE
+    gross_increment = mean(
+        increment + cost_delta
+        for increment, cost_delta in zip(increments, cost_deltas, strict=True)
+    )
+    if incremental_alpha <= policy.minimum_incremental_alpha:
+        if gross_increment > policy.minimum_incremental_alpha:
+            return PromotionReason.COST_FAILURE
+        return PromotionReason.NEGATIVE_INCREMENTAL_ALPHA
+    if confidence_interval is None or confidence_interval[0] <= 0:
+        return PromotionReason.CI_NOT_POSITIVE
+    if drawdown_delta is None or drawdown_delta > policy.maximum_drawdown_delta:
+        return PromotionReason.DRAWDOWN_FAILURE
+    if turnover_delta is None or turnover_delta > policy.maximum_turnover_delta:
+        return PromotionReason.TURNOVER_FAILURE
+    regime_means = {
+        regime: mean(
+            outcome.hybrid_net_return - outcome.quant_net_return
+            for _, outcome in paired
+            if outcome.regime == regime
+        )
+        for regime in regime_coverage
+    }
+    if (
+        len(regime_coverage) < policy.minimum_regimes
+        or any(value <= 0 for value in regime_means.values())
+    ):
+        return PromotionReason.REGIME_INSTABILITY
+    return PromotionReason.ELIGIBLE_FOR_PROMOTION_REVIEW
+
+
+def _counterfactuals_by_observation(
+    rows: tuple[dict[str, object], ...],
+    strategy: Literal["QUANT", "HYBRID"],
+) -> dict[str, QuantCounterfactualRecord | HybridCounterfactualRecord]:
+    result: dict[str, QuantCounterfactualRecord | HybridCounterfactualRecord] = {}
+    model = QuantCounterfactualRecord if strategy == "QUANT" else HybridCounterfactualRecord
+    for row in rows:
+        try:
+            record = model.model_validate(row)
+        except ValueError:
+            continue
+        result.setdefault(record.observation_id, record)
+    return result
+
+
+def _counterfactuals_match(
+    quant: QuantCounterfactualRecord | HybridCounterfactualRecord,
+    hybrid: QuantCounterfactualRecord | HybridCounterfactualRecord,
+) -> bool:
+    fields = (
+        "observation_id",
+        "decision_timestamp",
+        "information_cutoff",
+        "security_ids",
+        "universe_identity",
+        "evaluation_horizon",
+        "execution_assumptions_hash",
+        "transaction_cost_model",
+        "slippage_model",
+        "benchmark_convention",
+        "data_version",
+    )
+    return all(getattr(quant, field) == getattr(hybrid, field) for field in fields)
+
+
+def _cluster_bootstrap_interval(
+    paired: list[tuple[SemanticForwardPredictionRecord, SemanticForwardOutcomeRecord]],
+    draws: int,
+) -> tuple[float, float]:
+    by_session: dict[str, list[float]] = {}
+    for prediction, outcome in paired:
+        key = prediction.decision_timestamp.date().isoformat()
+        by_session.setdefault(key, []).append(
+            outcome.hybrid_net_return - outcome.quant_net_return
+        )
+    cluster_means = [mean(values) for values in by_session.values()]
+    if not cluster_means:
+        raise ValueError("bootstrap requires paired observations")
+    rng = random.Random(42)
+    samples = sorted(
+        mean(rng.choice(cluster_means) for _ in cluster_means)
+        for _ in range(draws)
+    )
+    low = samples[int(0.025 * (len(samples) - 1))]
+    high = samples[int(0.975 * (len(samples) - 1))]
+    return low, high
 
 
 def _identity(prefix: str, *parts: str) -> str:

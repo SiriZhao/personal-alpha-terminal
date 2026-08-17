@@ -446,7 +446,7 @@ def build_agentic_shadow_document(
         company_intelligence="AVAILABLE" if real_theses else "DEGRADED",
         market_intelligence="AVAILABLE" if all_analyses else "DEGRADED",
         semantic_alpha="SHADOW_ACTIVE" if real_theses else "SHADOW_DEGRADED",
-        promotion_gate="INSUFFICIENT_FORWARD_EVIDENCE",
+        promotion_gate="RUNTIME_EVALUATION_PENDING",
         formal_economic_influence=0.0,
     )
     return {

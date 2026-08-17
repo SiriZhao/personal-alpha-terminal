@@ -59,7 +59,10 @@ from personal_alpha_terminal.application.etf_sleeve_service import (
     EtfSleeveApplicationService,
 )
 from personal_alpha_terminal.application.forward_evidence import (
+    AgenticForwardEvidenceLedger,
+    EvidenceOrigin,
     append_daily_shadow_evidence,
+    evaluate_runtime_promotion,
 )
 from personal_alpha_terminal.application.intelligence_service import (
     IntelligenceApplicationService,
@@ -522,8 +525,23 @@ class DailyQuantOrchestrator:
                     evidence=shadow_evidence,
                     run_id=run_id,
                     decision_id=run_identity.decision_id,
+                    evidence_origin=self._agentic_evidence_origin(
+                        hybrid_intelligence
+                    ),
                 )
+                ledger = AgenticForwardEvidenceLedger(session)
+                promotion = evaluate_runtime_promotion(
+                    ledger,
+                    evaluated_at=effective_decision_time,
+                    evaluation_id=f"promotion-{run_id}",
+                )
+                promotion_added = ledger.append_promotion_evaluation(promotion)
+            forward_counts["promotion_evaluations"] = int(promotion_added)
             hybrid_intelligence["forward_evidence_persistence"] = forward_counts
+            hybrid_intelligence["promotion"] = promotion.model_dump(mode="json")
+            hybrid_status = hybrid_intelligence.get("status")
+            if isinstance(hybrid_status, dict):
+                hybrid_status["promotion_gate"] = promotion.reason_codes[0]
         except Exception as error:
             warnings.append(
                 "Agentic forward evidence persistence degraded "
@@ -532,8 +550,23 @@ class DailyQuantOrchestrator:
             hybrid_intelligence["forward_evidence_persistence"] = {
                 "predictions": 0,
                 "counterfactuals": 0,
+                "promotion_evaluations": 0,
                 "error": type(error).__name__,
             }
+            hybrid_intelligence["promotion"] = {
+                "status": "BLOCKED",
+                "promotion_reason": "PROMOTION_EVALUATION_FAILED",
+                "reason_codes": ["PROMOTION_EVALUATION_FAILED"],
+                "real_forward_n": 0,
+                "minimum_required_n": 120,
+                "paired_sample_n": 0,
+                "production_lambda": 0.0,
+                "human_approval_required": True,
+                "error": type(error).__name__,
+            }
+            hybrid_status = hybrid_intelligence.get("status")
+            if isinstance(hybrid_status, dict):
+                hybrid_status["promotion_gate"] = "PROMOTION_EVALUATION_FAILED"
         self._record_probability_predictions(
             workflow_result=workflow_result,
             run_identity=run_identity,
@@ -1496,6 +1529,26 @@ class DailyQuantOrchestrator:
         if runtime.credential == "PRESENT" and runtime.connectivity == "AVAILABLE":
             return runtime.provider, runtime.model, True, runtime.connectivity
         return selected, "NOT_CONFIGURED", False, runtime.connectivity
+
+    def _agentic_evidence_origin(
+        self,
+        hybrid_document: dict[str, object],
+    ) -> EvidenceOrigin:
+        status = hybrid_document.get("status")
+        status_payload = status if isinstance(status, dict) else {}
+        provider = str(status_payload.get("provider", "UNAVAILABLE")).casefold()
+        if provider == "mock":
+            return "MOCK"
+        if self._settings.app_env == "test" or self._settings.runtime_profile == "TEST":
+            return "TEST"
+        if (
+            self._settings.app_env != "production"
+            or self._settings.runtime_profile != "PRODUCTION_DESKTOP"
+        ):
+            return "NON_PRODUCTION"
+        if provider not in {"openai", "deepseek", "anthropic", "custom"}:
+            return "NON_PRODUCTION"
+        return "REAL_FORWARD"
 
     def _resolve_portfolio(self, requested: int | None) -> int | None:
         if requested is None:
