@@ -120,10 +120,28 @@ def test_probability_promotion_ladder_requires_evidence_and_human_approval() -> 
 
 
 def test_probability_promotion_report_current_state_research_only() -> None:
-    report = build_probability_promotion_report()
+    audit = {
+        "schema_version": "forward-prediction-audit-v1",
+        "raw_prediction_rows": 3,
+        "canonical_prediction_rows": 2,
+        "duplicate_prediction_rows": 1,
+        "distinct_decision_dates": 1,
+        "distinct_decision_manifests": 1,
+        "distinct_tickers": 2,
+    }
+    evaluation = {
+        "status": "NO_MATURED_OUTCOMES",
+        "effective_sample_size": 0,
+        "decision_date_n": 0,
+        "human_approved": False,
+    }
+    report = build_probability_promotion_report(
+        forward_audit=audit,
+        evaluation=evaluation,
+    )
     assert report["current_status"] == "RESEARCH_ONLY"
     assert report["production_influence"] == 0.0
-    assert report["ledger_audit"]["canonical_prediction_rows"] == 66
+    assert report["ledger_audit"] == audit
     assert report["decision"]["human_approval_required"] is True
 
 
