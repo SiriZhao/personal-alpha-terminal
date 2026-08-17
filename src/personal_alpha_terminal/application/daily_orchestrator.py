@@ -58,6 +58,9 @@ from personal_alpha_terminal.application.decision_manifest import (
 from personal_alpha_terminal.application.etf_sleeve_service import (
     EtfSleeveApplicationService,
 )
+from personal_alpha_terminal.application.forward_evidence import (
+    append_daily_shadow_evidence,
+)
 from personal_alpha_terminal.application.intelligence_service import (
     IntelligenceApplicationService,
 )
@@ -439,6 +442,7 @@ class DailyQuantOrchestrator:
             build_shadow_hybrid_document,
         )
 
+        shadow_evidence = AgenticShadowEvidence(companies={})
         try:
             with self._factory.begin() as session:
                 pit_events = IntelligenceRepository(session).visible_events(
@@ -509,6 +513,27 @@ class DailyQuantOrchestrator:
                     "production_influence": False,
                 },
             )
+        try:
+            with self._factory.begin() as session:
+                forward_counts = append_daily_shadow_evidence(
+                    session,
+                    workflow=workflow_result,
+                    hybrid_document=hybrid_intelligence,
+                    evidence=shadow_evidence,
+                    run_id=run_id,
+                    decision_id=run_identity.decision_id,
+                )
+            hybrid_intelligence["forward_evidence_persistence"] = forward_counts
+        except Exception as error:
+            warnings.append(
+                "Agentic forward evidence persistence degraded "
+                f"({type(error).__name__}); production Quant output is unchanged"
+            )
+            hybrid_intelligence["forward_evidence_persistence"] = {
+                "predictions": 0,
+                "counterfactuals": 0,
+                "error": type(error).__name__,
+            }
         self._record_probability_predictions(
             workflow_result=workflow_result,
             run_identity=run_identity,

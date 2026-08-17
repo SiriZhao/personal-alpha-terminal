@@ -458,6 +458,14 @@ def build_agentic_shadow_document(
         "portfolio_semantic_risk": semantic_risk.model_dump(mode="json"),
         "shadow_ranking": list(shadow_ranking),
         "llm_inferences": inferences,
+        "structured_theses": {
+            symbol: thesis.model_dump(mode="json")
+            for symbol, thesis in sorted(thesis_by_symbol.items())
+        },
+        "debates": {
+            symbol: debate.model_dump(mode="json")
+            for symbol, debate in sorted(debate_by_symbol.items())
+        },
         "event_provenance": {
             symbol: [item.model_dump(mode="json") for item in company.events]
             for symbol, company in sorted(evidence.companies.items())

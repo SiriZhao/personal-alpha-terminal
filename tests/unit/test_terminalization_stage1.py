@@ -18,6 +18,9 @@ from personal_alpha_terminal.application.daily_result import (
     StageStatus,
 )
 from personal_alpha_terminal.application.data_certification import DailyDataCertification
+from personal_alpha_terminal.application.forward_evidence import (
+    AgenticForwardEvidenceLedger,
+)
 from personal_alpha_terminal.application.quant_daily_service import (
     ShadowQuantContext,
     TodayRecommendation,
@@ -536,6 +539,15 @@ def test_daily_agentic_shadow_executes_and_provider_failure_preserves_quant(
     assert success.hybrid_intelligence["counts"]["real_shadow_llm_decisions"] == 1
     assert success.hybrid_intelligence["counts"]["hybrid_counterfactual_executed"] == 1
     assert success.hybrid_intelligence["invariants"]["production_lambda"] == 0.0
+    assert success.hybrid_intelligence["forward_evidence_persistence"] == {
+        "predictions": 1,
+        "counterfactuals": 2,
+    }
+    with session_factory() as session:
+        ledger = AgenticForwardEvidenceLedger(session)
+        assert len(ledger.records("SEMANTIC_FORWARD_PREDICTION")) == 1
+        assert len(ledger.records("QUANT_COUNTERFACTUAL")) == 1
+        assert len(ledger.records("HYBRID_COUNTERFACTUAL")) == 1
     assert success.hybrid_intelligence["shadow_pipeline"]["deterministic_risk_evaluated"] is True
     assert [(item.symbol, item.action) for item in success.final_decisions] == [
         (item.symbol, item.action) for item in workflow.recommendations
