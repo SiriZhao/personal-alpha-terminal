@@ -9,7 +9,8 @@
 - 数据正确性优先。
 - 禁止未来函数和数据泄漏。
 - PIT、风险、成本、统计门禁 fail-closed。
-- LLM 只做 SHADOW 情报，不选股、不设定概率、不控制组合。
+- LLM 默认只做 SHADOW 情报；只有真实 forward promotion gate 通过后，
+  才能获得有上限的 semantic alpha 权限。LLM 永不设定最终仓位或风险上限。
 - 不自动下单，不连接 Broker API。
 
 ## 快速开始
@@ -48,3 +49,24 @@ python main.py operational-policy status
 - 当前 LLM production influence 为 NONE。
 - Probability fallback 为 CLASSICAL，生产权重为 0。
 - 自动执行保持 DISABLED。
+
+## Hybrid Intelligence
+
+每日运行会在 run artifact 中记录 `hybrid_intelligence.json`。终端明确区分：
+
+- Quant Alpha：确定性量化核心给出的基础预期 Alpha。
+- Event / Semantic Alpha：事件结构化评分及其校准候选。
+- Applied LLM Adjustment：promotion policy 实际允许应用的调整。
+- Final Alpha：传入 optimizer 的最终预期 Alpha。
+- Quant-only / Hybrid counterfactual：没有 LLM 与有 LLM 时的差异。
+
+当前真实 forward 样本不足时，正确状态是：
+
+```text
+Semantic Alpha: SHADOW
+Promotion Gate: PROMOTION_BLOCKED_SAMPLE
+Formal Economic Influence: 0%
+```
+
+这不会阻塞 Classical Quant，也不会删除任何 optimizer eligible security。
+最终权重始终来自 Portfolio Optimizer + Risk Engine，并由用户人工确认。

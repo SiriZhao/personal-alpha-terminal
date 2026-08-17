@@ -428,6 +428,14 @@ class DailyQuantOrchestrator:
             },
             current_exposure=current_exposure,
         )
+        from personal_alpha_terminal.application.hybrid_intelligence_service import (
+            build_shadow_hybrid_document,
+        )
+
+        hybrid_intelligence = build_shadow_hybrid_document(
+            workflow=workflow_result,
+            llm_stage=stages.get("LLM_INTELLIGENCE"),
+        )
         self._record_probability_predictions(
             workflow_result=workflow_result,
             run_identity=run_identity,
@@ -475,6 +483,7 @@ class DailyQuantOrchestrator:
             pre_execution=pre_execution,
             run_identity=run_identity,
             current_exposure=current_exposure,
+            hybrid_intelligence=hybrid_intelligence,
         )
         if result.decision_manifest is not None:
             try:
@@ -1572,6 +1581,7 @@ class DailyQuantOrchestrator:
         pre_execution: dict[str, object] | None = None,
         run_identity: RunIdentity | None = None,
         current_exposure: dict[str, object] | None = None,
+        hybrid_intelligence: dict[str, object] | None = None,
     ) -> DailyQuantResult:
         actionable = workflow.status in {"GENERATED", "NO_DECISION"} and not blockers
         data_cutoff = self._resolved_data_cutoff(stages, workflow.data_cutoff)
@@ -2065,6 +2075,7 @@ class DailyQuantOrchestrator:
             decision_manifest=decision_manifest,
             current_exposure=current_exposure,
             decision_provenance=decision_provenance,
+            hybrid_intelligence=hybrid_intelligence,
         )
 
     def _decision_provenance(
@@ -2756,6 +2767,20 @@ class DailyQuantOrchestrator:
                     encoding="utf-8",
                 )
                 temporary.replace(brief_path)
+            if updated.hybrid_intelligence is not None:
+                run_directory = self._snapshot_root / updated.run_id
+                hybrid_path = run_directory / "hybrid_intelligence.json"
+                temporary = hybrid_path.with_suffix(".json.tmp")
+                temporary.write_text(
+                    _json.dumps(
+                        updated.hybrid_intelligence,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        default=str,
+                    ),
+                    encoding="utf-8",
+                )
+                temporary.replace(hybrid_path)
             if updated.etf_targets:
                 run_directory = self._snapshot_root / updated.run_id
                 etf_path = run_directory / "etf_sleeve_evidence.json"

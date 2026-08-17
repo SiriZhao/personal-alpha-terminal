@@ -436,6 +436,64 @@ production influence = 0
 
 没有操作不一定是故障。如果所有门禁通过但无需调仓，系统会显示 `NO_ACTION / NO_TRADE`。
 
+## P. Hybrid Intelligence 日常使用
+
+建议在美股正式决策 cutoff 之后运行一次 `daily`，不要把盘后或未来修订新闻
+回填到较早决策。每次运行的 `reports/daily-runs/<run_id>/hybrid_intelligence.json`
+保存当时可见的 Hybrid Intelligence 只读视图。
+
+### 四类 Alpha
+
+- `Quant Alpha`：确定性因子、概率和量化模型形成的基础预期 Alpha。
+- `Event Alpha`：事件方向、幅度、surprise、novelty、relevance、source quality、
+  time decay 和 confidence 的结构化原始分数；它本身不是收益率。
+- `Semantic Alpha`：经过严格时间顺序 forward outcome 校准后的增量 Alpha。
+- `Final Alpha`：`Quant Alpha + policy 允许的 bounded Semantic Alpha`。
+
+若 forward evidence 不足，`Semantic Alpha = SHADOW`，正式 influence 为 `0%`。
+这是合法的 fail-closed 状态，不是系统故障。
+
+### 为什么 LLM 有时影响为 0
+
+以下任一情况都会强制回到 Quant-only：
+
+- LLM timeout、rate limit、invalid JSON 或 schema mismatch。
+- event feed 不可用、数据过期或 PIT 检查失败。
+- thesis 引用了输入中不存在的 event id。
+- historical LLM replay 被标记为 `ENGINEERING_ONLY / DIAGNOSTIC`。
+- promotion gate 样本、表现、稳定性、泄漏或校准门禁未通过。
+
+模型不会猜测缺失数据，也不会自动填入正向分数。
+
+### Quant-only counterfactual
+
+终端“操作清单”同时展示：
+
+- Current Weight
+- Quant-only Target
+- Hybrid Target
+- Final Risk-adjusted Target
+
+当 formal influence 为 0 时，Quant-only 与 Hybrid 应相同。最终 target 仍由
+Optimizer + Risk Engine 计算，LLM 不能设置 maximum weight、leverage、cash floor、
+turnover、liquidity 或 drawdown limit。
+
+### 权限提升与自动降级
+
+`LLMPromotionPolicy` 检查真实 forward observations、unique sessions/symbols/events、
+transaction-cost-aware incremental alpha、cluster-aware bootstrap CI、score
+monotonicity 和 subperiod stability。达到样本数量本身不会自动 promotion。
+
+若未来证据通过，系统也只启用配置化的小幅 bounded influence；若 forward
+表现恶化或 evidence 被撤销，会自动降级到 `LEVEL_1_SHADOW_ALPHA`。任何情况下：
+
+```text
+AUTO EXECUTION = DISABLED
+MANUAL CONFIRMATION = ENABLED
+PRE-OPTIMIZER TOP-N = null
+FIXED HOLDINGS CAP = null
+```
+
 ## 最终原则
 
 数据正确性 > 无未来函数 > 策略有效性 > 风险控制 > 可复现性 > 稳定性 > 用户体验。

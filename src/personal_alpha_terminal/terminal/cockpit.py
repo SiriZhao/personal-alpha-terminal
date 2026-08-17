@@ -117,4 +117,13 @@ def render_daily_cockpit(
             title="【今日人工执行检查】",
         )
     )
+    hybrid_path = (
+        reports_root / "daily-runs" / run_id / "hybrid_intelligence.json"
+    )
+    if hybrid_path.is_file():
+        from personal_alpha_terminal.terminal.hybrid_intelligence import (
+            render_hybrid_intelligence_document,
+        )
+
+        render_hybrid_intelligence_document(console, _read_json(hybrid_path))
     return 0

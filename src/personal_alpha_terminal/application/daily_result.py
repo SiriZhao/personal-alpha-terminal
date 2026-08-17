@@ -277,6 +277,9 @@ class DailyQuantResult:
     # ROUND28 P0: per-formal-decision immutable provenance (factor inputs,
     # optimizer raw/constrained target, risk, cost, gates and hashes).
     decision_provenance: dict[str, object] | None = None
+    # ROUND42-51: read-only event/semantic attribution.  The production
+    # optimizer and risk engine remain the only final-weight authorities.
+    hybrid_intelligence: dict[str, object] | None = None
 
     @property
     def duration_seconds(self) -> float:
@@ -520,6 +523,7 @@ class DailyQuantResult:
             "provenance": _json_value(self.provenance),
             "decision_traces": _json_value(self.decision_traces or {}),
             "decision_manifest": _json_value(self.decision_manifest or {}),
+            "hybrid_intelligence": _json_value(self.hybrid_intelligence or {}),
         }
         target = run_directory / "run_certificate.json"
         _atomic_json(target, certificate)
