@@ -389,6 +389,8 @@ def test_daily_pipeline_blocks_unapproved_alpha_and_runs_without_ai() -> None:
     assert ready.trades
     assert ready.decision is not None
     assert not ready.decision.automatic_execution_allowed
+    drift_stage = next(item for item in ready.stages if item.name == "RISK DRIFT")
+    assert drift_stage.detail.startswith("RISK DRIFT:")
     blocked = pipeline.run(
         replace(
             base,

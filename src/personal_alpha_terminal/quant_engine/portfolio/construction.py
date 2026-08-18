@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -27,6 +28,18 @@ class PortfolioConstructionStatus(StrEnum):
     PRODUCTION_APPROVED = "PRODUCTION_APPROVED"
     PROVISIONAL_OPERATIONAL_APPROVED = "PROVISIONAL_OPERATIONAL_APPROVED"
     BLOCKED = "BLOCKED"
+
+
+class PortfolioOptimizationStage(StrEnum):
+    PRIMARY_OPTIMIZER = "PRIMARY_OPTIMIZER"
+    FEASIBILITY_RECOVERY = "FEASIBILITY_RECOVERY"
+    SELL_ONLY_FALLBACK = "SELL_ONLY_FALLBACK"
+    BLOCKED = "BLOCKED"
+
+
+class PortfolioOperatingMode(StrEnum):
+    NORMAL = "NORMAL"
+    RISK_REDUCTION_ONLY = "RISK_REDUCTION_ONLY"
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,6 +128,8 @@ class OptimizerCardinalityProvenance:
     gross_final: float
     explicit_position_cap: float | None
     pre_optimizer_top_n: int | None
+    mandatory_risk_repair_count: int = 0
+    mandatory_risk_repair_symbols: tuple[str, ...] = ()
 
     def document(self) -> dict[str, object]:
         return {
@@ -133,6 +148,8 @@ class OptimizerCardinalityProvenance:
             "gross_final": self.gross_final,
             "explicit_position_cap": self.explicit_position_cap,
             "pre_optimizer_top_n": self.pre_optimizer_top_n,
+            "mandatory_risk_repair_count": self.mandatory_risk_repair_count,
+            "mandatory_risk_repair_symbols": list(self.mandatory_risk_repair_symbols),
             "holding_cap_policy": "NO_FIXED_CARDINALITY_CAP",
         }
 
@@ -162,6 +179,9 @@ class PortfolioTarget:
     target_holding_count: int = 0
     optimizer_provenance: dict[str, object] | None = None
     raw_target_weights: dict[str, float] | None = None
+    optimization_stage: PortfolioOptimizationStage = PortfolioOptimizationStage.BLOCKED
+    operating_mode: PortfolioOperatingMode = PortfolioOperatingMode.NORMAL
+    risk_repair_symbols: tuple[str, ...] = ()
 
     @property
     def production_approved(self) -> bool:
@@ -240,22 +260,20 @@ class PortfolioConstructionEngine:
                 ("no operationally approved alpha is available",),
             )
         contributions, expected = _expected_returns(approved, risk.symbols, decision_time)
-        if not expected or max(expected.values()) <= 0:
-            return self._blocked(
-                decision_time,
-                authorization,
-                risk,
-                ("no positive decayed expected excess return",),
-            )
-        if not risk_budget.allow_new_risk and any(
-            expected.get(symbol, 0.0) > 0 and current_weights.get(symbol, 0.0) == 0
-            for symbol in risk.symbols
+        operating_mode = (
+            PortfolioOperatingMode.NORMAL
+            if risk_budget.allow_new_risk
+            else PortfolioOperatingMode.RISK_REDUCTION_ONLY
+        )
+        if operating_mode is PortfolioOperatingMode.NORMAL and (
+            not expected or max(expected.values()) <= 0
         ):
             return self._blocked(
                 decision_time,
                 authorization,
                 risk,
-                ("dynamic risk budget blocks new exposure",),
+                ("no positive decayed expected excess return",),
+                operating_mode=operating_mode,
             )
         symbols = risk.symbols
         current = np.array([current_weights.get(symbol, 0.0) for symbol in symbols])
@@ -272,7 +290,7 @@ class PortfolioConstructionEngine:
             self.constraints.target_annualized_volatility
             * risk_budget.volatility_multiplier
         )
-        bounds = []
+        bounds: list[tuple[float, float]] = []
         for symbol in symbols:
             liquidity_cap = (
                 risk.average_daily_dollar_volume[symbol]
@@ -280,6 +298,7 @@ class PortfolioConstructionEngine:
                 / portfolio_value
             )
             bounds.append((0.0, min(position_limit, liquidity_cap)))
+        liquidity_limits = np.asarray([upper for _, upper in bounds], dtype=float)
         cluster_members = _correlation_clusters(
             symbols,
             risk.correlation,
@@ -288,6 +307,26 @@ class PortfolioConstructionEngine:
         sector_members = _members_by_label(symbols, risk.sectors)
         beta = np.array([risk.beta[symbol] for symbol in symbols])
         sizes = np.array([risk.size_scores.get(symbol, 0.0) for symbol in symbols])
+
+        def validate(weights: np.ndarray) -> list[str]:
+            return _constraint_violations(
+                weights,
+                current=current,
+                risk=risk,
+                constraints=self.constraints,
+                gross_limit=gross_limit,
+                position_limit=position_limit,
+                volatility_limit=volatility_limit,
+                sector_members=sector_members,
+                cluster_members=cluster_members,
+                liquidity_limits=liquidity_limits,
+                require_size_exposure=(
+                    not self.operational_mode
+                    or risk.size_exposure_status is SizeExposureStatus.VALID
+                ),
+            )
+
+        pre_solve_violations = tuple(validate(current))
 
         # ROUND25 PHASE 13: analytic gradients (identical semantics, no
         # numerical differentiation).  SLSQP previously evaluated the objective
@@ -384,65 +423,256 @@ class PortfolioConstructionEngine:
             for members in cluster_members.values()
             if len(members) > 1 or not large_problem
         )
-        initial = np.minimum(current, np.array([upper for _, upper in bounds]))
+        initial = np.minimum(current, liquidity_limits)
         if initial.sum() > gross_limit and initial.sum() > 0:
             initial *= gross_limit / initial.sum()
         elif initial.sum() <= 0 and large_problem:
             seed = min(gross_limit / max(1, len(symbols)), 1e-6)
             initial = np.full(len(symbols), seed)
-        try:
-            minimize_kwargs: dict[str, object] = {
-                "method": "SLSQP",
-                "bounds": bounds,
-                "constraints": constraints,
-                "options": {"maxiter": 500, "ftol": 1e-10, "disp": False},
-            }
-            if large_problem:
-                minimize_kwargs["jac"] = objective_jac
-            result = minimize(objective, initial, **minimize_kwargs)
-        except (ArithmeticError, FloatingPointError, ValueError) as error:
+        attempts: list[dict[str, object]] = []
+        selected_weights: np.ndarray | None = None
+        selected_raw_weights: np.ndarray | None = None
+        selected_stage = PortfolioOptimizationStage.BLOCKED
+        selected_message = ""
+        selected_iterations: int | None = None
+        mandatory_indices: tuple[int, ...] = ()
+
+        def evaluate_candidate(
+            raw_weights: np.ndarray,
+            *,
+            sell_only: bool,
+        ) -> tuple[np.ndarray, tuple[int, ...], tuple[str, ...]]:
+            processed, mandatory = _apply_constraint_aware_no_trade_bands(
+                raw_weights,
+                current,
+                portfolio_value,
+                self.constraints,
+                validator=validate,
+            )
+            candidate_violations = validate(processed)
+            if sell_only:
+                candidate_violations.extend(
+                    _sell_only_violations(
+                        processed,
+                        current=current,
+                        risk=risk,
+                    )
+                )
+            return processed, mandatory, tuple(candidate_violations)
+
+        def record_attempt(
+            *,
+            stage: PortfolioOptimizationStage,
+            solver_success: bool,
+            message: str,
+            iterations: int | None,
+            violations: tuple[str, ...],
+            accepted: bool,
+        ) -> None:
+            attempts.append(
+                {
+                    "stage": stage.value,
+                    "solver_success": solver_success,
+                    "solver_message": message,
+                    "iterations": iterations,
+                    "post_solve_validation": "PASS" if not violations else "FAIL",
+                    "blocking_constraints": list(violations),
+                    "accepted": accepted,
+                }
+            )
+
+        if operating_mode is PortfolioOperatingMode.NORMAL:
+            try:
+                minimize_kwargs: dict[str, object] = {
+                    "method": "SLSQP",
+                    "bounds": bounds,
+                    "constraints": constraints,
+                    "options": {"maxiter": 500, "ftol": 1e-10, "disp": False},
+                }
+                if large_problem:
+                    minimize_kwargs["jac"] = objective_jac
+                primary_result = minimize(objective, initial, **minimize_kwargs)
+                primary_message = str(primary_result.message)
+                primary_iterations = int(getattr(primary_result, "nit", 0))
+                primary_solver_success = bool(primary_result.success) and bool(
+                    np.all(np.isfinite(primary_result.x))
+                )
+                primary_raw = np.asarray(primary_result.x, dtype=float)
+                if primary_solver_success:
+                    primary_weights, primary_mandatory, primary_violations = (
+                        evaluate_candidate(primary_raw, sell_only=False)
+                    )
+                else:
+                    primary_weights = primary_raw
+                    primary_mandatory = ()
+                    primary_violations = (f"optimizer failed: {primary_message}",)
+                primary_accepted = primary_solver_success and not primary_violations
+                record_attempt(
+                    stage=PortfolioOptimizationStage.PRIMARY_OPTIMIZER,
+                    solver_success=primary_solver_success,
+                    message=primary_message,
+                    iterations=primary_iterations,
+                    violations=primary_violations,
+                    accepted=primary_accepted,
+                )
+                if primary_accepted:
+                    selected_weights = primary_weights
+                    selected_raw_weights = primary_raw
+                    selected_stage = PortfolioOptimizationStage.PRIMARY_OPTIMIZER
+                    selected_message = primary_message
+                    selected_iterations = primary_iterations
+                    mandatory_indices = primary_mandatory
+            except (ArithmeticError, FloatingPointError, ValueError) as error:
+                record_attempt(
+                    stage=PortfolioOptimizationStage.PRIMARY_OPTIMIZER,
+                    solver_success=False,
+                    message=f"optimizer failed safely: {error}",
+                    iterations=None,
+                    violations=("primary optimizer raised a numerical error",),
+                    accepted=False,
+                )
+        else:
+            record_attempt(
+                stage=PortfolioOptimizationStage.PRIMARY_OPTIMIZER,
+                solver_success=False,
+                message="skipped because the production risk budget forbids new risk",
+                iterations=None,
+                violations=("RISK_REDUCTION_ONLY",),
+                accepted=False,
+            )
+
+        def run_projection(
+            *,
+            stage: PortfolioOptimizationStage,
+            projection_bounds: list[tuple[float, float]],
+            sell_only: bool,
+        ) -> None:
+            nonlocal mandatory_indices
+            nonlocal selected_iterations
+            nonlocal selected_message
+            nonlocal selected_raw_weights
+            nonlocal selected_stage
+            nonlocal selected_weights
+            projection_initial = _recovery_initial(
+                current,
+                bounds=projection_bounds,
+                gross_limit=gross_limit,
+                volatility_limit=volatility_limit,
+                covariance=covariance,
+            )
+
+            def projection_objective(weights: np.ndarray) -> float:
+                delta = weights - current
+                return 0.5 * float(delta @ delta)
+
+            def projection_jac(weights: np.ndarray) -> np.ndarray:
+                return np.asarray(weights - current, dtype=float)
+
+            try:
+                projection_result = minimize(
+                    projection_objective,
+                    projection_initial,
+                    method="SLSQP",
+                    jac=projection_jac,
+                    bounds=projection_bounds,
+                    constraints=constraints,
+                    options={"maxiter": 1_000, "ftol": 1e-12, "disp": False},
+                )
+                message = str(projection_result.message)
+                iterations = int(getattr(projection_result, "nit", 0))
+                solver_success = bool(projection_result.success) and bool(
+                    np.all(np.isfinite(projection_result.x))
+                )
+                raw_weights = np.asarray(projection_result.x, dtype=float)
+                if solver_success:
+                    processed, mandatory, violations = evaluate_candidate(
+                        raw_weights,
+                        sell_only=sell_only,
+                    )
+                else:
+                    processed = raw_weights
+                    mandatory = ()
+                    violations = (f"optimizer failed: {message}",)
+                accepted = solver_success and not violations
+                record_attempt(
+                    stage=stage,
+                    solver_success=solver_success,
+                    message=message,
+                    iterations=iterations,
+                    violations=violations,
+                    accepted=accepted,
+                )
+                if accepted:
+                    selected_weights = processed
+                    selected_raw_weights = raw_weights
+                    selected_stage = stage
+                    selected_message = message
+                    selected_iterations = iterations
+                    mandatory_indices = mandatory
+            except (ArithmeticError, FloatingPointError, ValueError) as error:
+                record_attempt(
+                    stage=stage,
+                    solver_success=False,
+                    message=f"recovery failed safely: {error}",
+                    iterations=None,
+                    violations=("recovery optimizer raised a numerical error",),
+                    accepted=False,
+                )
+
+        if (
+            selected_weights is None
+            and operating_mode is PortfolioOperatingMode.NORMAL
+        ):
+            run_projection(
+                stage=PortfolioOptimizationStage.FEASIBILITY_RECOVERY,
+                projection_bounds=bounds,
+                sell_only=False,
+            )
+        if selected_weights is None:
+            sell_only_bounds = [
+                (0.0, min(float(current[index]), upper))
+                for index, (_, upper) in enumerate(bounds)
+            ]
+            run_projection(
+                stage=PortfolioOptimizationStage.SELL_ONLY_FALLBACK,
+                projection_bounds=sell_only_bounds,
+                sell_only=True,
+            )
+        if selected_weights is None or selected_raw_weights is None:
+            blocking_items: list[str] = []
+            for attempt in attempts:
+                recorded_constraints = attempt.get("blocking_constraints")
+                if isinstance(recorded_constraints, list):
+                    blocking_items.extend(str(item) for item in recorded_constraints)
+            blocking_constraints = tuple(dict.fromkeys(blocking_items))
+            diagnostics = _optimizer_diagnostics(
+                attempts=attempts,
+                stage=PortfolioOptimizationStage.BLOCKED,
+                operating_mode=operating_mode,
+                pre_solve_violations=pre_solve_violations,
+                solver_message="no recovery stage produced a valid target",
+                iterations=None,
+                blocking_constraints=blocking_constraints,
+                final_target_status=PortfolioConstructionStatus.BLOCKED,
+            )
             return self._blocked(
                 decision_time,
                 authorization,
                 risk,
-                (f"optimizer failed safely: {error}",),
+                (
+                    "PORTFOLIO_BLOCKED_NO_FEASIBLE_TARGET",
+                    *blocking_constraints,
+                ),
+                optimizer_provenance=diagnostics,
+                operating_mode=operating_mode,
             )
-        if not result.success or not np.all(np.isfinite(result.x)):
-            return self._blocked(
-                decision_time,
-                authorization,
-                risk,
-                (f"optimizer failed: {result.message}",),
-            )
-        weights = _apply_no_trade_bands(
-            np.asarray(result.x, dtype=float),
-            current,
-            portfolio_value,
-            self.constraints,
-        )
-        violations = _constraint_violations(
-            weights,
-            current=current,
-            risk=risk,
-            constraints=self.constraints,
-            gross_limit=gross_limit,
-            position_limit=position_limit,
-            volatility_limit=volatility_limit,
-            sector_members=sector_members,
-            cluster_members=cluster_members,
-            require_size_exposure=(
-                not self.operational_mode
-                or risk.size_exposure_status is SizeExposureStatus.VALID
-            ),
-        )
-        if violations:
-            return self._blocked(decision_time, authorization, risk, tuple(violations))
+        weights = selected_weights
+        raw_weights = selected_raw_weights
         target = {
             symbol: float(weights[index])
             for index, symbol in enumerate(symbols)
             if weights[index] > 1e-12
         }
-        raw_weights = np.asarray(result.x, dtype=float)
         raw_nonzero = {
             symbol: float(raw_weights[index])
             for index, symbol in enumerate(symbols)
@@ -458,6 +688,8 @@ class PortfolioConstructionEngine:
             delta = proposed - current_value
             if abs(delta) < 1e-12:
                 continue
+            if abs(float(weights[index] - current_value)) >= 1e-12:
+                continue
             if abs(delta) < self.constraints.no_trade_band:
                 dropped_no_trade += 1
             elif abs(delta) < self.constraints.minimum_rebalance_weight:
@@ -465,9 +697,8 @@ class PortfolioConstructionEngine:
             elif abs(delta) * portfolio_value < self.constraints.minimum_trade_value:
                 dropped_minimum_value += 1
         positive_raw = [value for value in raw_nonzero.values() if value > 0]
-        positive_final = [
-            value for value in target.values() if value > 0
-        ]
+        positive_final = [value for value in target.values() if value > 0]
+        risk_repair_symbols = tuple(symbols[index] for index in mandatory_indices)
         provenance = OptimizerCardinalityProvenance(
             optimizer_input_count=len(symbols),
             raw_nonzero_count=raw_nonzero_count,
@@ -488,6 +719,25 @@ class PortfolioConstructionEngine:
             gross_final=float(weights.sum()),
             explicit_position_cap=position_limit,
             pre_optimizer_top_n=None,
+            mandatory_risk_repair_count=len(risk_repair_symbols),
+            mandatory_risk_repair_symbols=risk_repair_symbols,
+        )
+        provenance_document = provenance.document()
+        provenance_document.update(
+            _optimizer_diagnostics(
+                attempts=attempts,
+                stage=selected_stage,
+                operating_mode=operating_mode,
+                pre_solve_violations=pre_solve_violations,
+                solver_message=selected_message,
+                iterations=selected_iterations,
+                blocking_constraints=(),
+                final_target_status=(
+                    PortfolioConstructionStatus.PROVISIONAL_OPERATIONAL_APPROVED
+                    if self.operational_mode
+                    else PortfolioConstructionStatus.PRODUCTION_APPROVED
+                ),
+            )
         )
         turnover = float(np.sum(np.abs(weights - current)))
         estimated_cost = 0.0
@@ -504,6 +754,8 @@ class PortfolioConstructionEngine:
                 authorization,
                 risk,
                 (f"transaction-cost validation failed: {error}",),
+                optimizer_provenance=provenance_document,
+                operating_mode=operating_mode,
             )
         sector_weights = {
             sector: float(np.sum(weights[list(members)]))
@@ -520,6 +772,8 @@ class PortfolioConstructionEngine:
                 authorization,
                 risk,
                 ("approved alpha signals use inconsistent data versions",),
+                optimizer_provenance=provenance_document,
+                operating_mode=operating_mode,
             )
         return PortfolioTarget(
             status=(
@@ -555,8 +809,11 @@ class PortfolioConstructionEngine:
             data_version=next(iter(versions)),
             model_validation_id=self.constraints.model_validation_id,
             target_holding_count=len(target),
-            optimizer_provenance=provenance.document(),
+            optimizer_provenance=provenance_document,
             raw_target_weights=raw_nonzero,
+            optimization_stage=selected_stage,
+            operating_mode=operating_mode,
+            risk_repair_symbols=risk_repair_symbols,
         )
 
     def _blocked(
@@ -565,6 +822,9 @@ class PortfolioConstructionEngine:
         authorization: ResearchDataAuthorization,
         risk: RiskModelEstimate,
         blockers: tuple[str, ...],
+        *,
+        optimizer_provenance: dict[str, object] | None = None,
+        operating_mode: PortfolioOperatingMode = PortfolioOperatingMode.NORMAL,
     ) -> PortfolioTarget:
         return PortfolioTarget(
             status=PortfolioConstructionStatus.BLOCKED,
@@ -587,6 +847,9 @@ class PortfolioConstructionEngine:
             cost_model_version=self.cost_model.config.version,
             data_version=authorization.decision.evidence_fingerprint,
             model_validation_id=self.constraints.model_validation_id or "",
+            optimizer_provenance=optimizer_provenance,
+            optimization_stage=PortfolioOptimizationStage.BLOCKED,
+            operating_mode=operating_mode,
         )
 
 
@@ -669,21 +932,120 @@ def _correlation_clusters(
     return clusters
 
 
-def _apply_no_trade_bands(
+def _apply_constraint_aware_no_trade_bands(
     proposed: np.ndarray,
     current: np.ndarray,
     portfolio_value: float,
     constraints: PortfolioConstraints,
-) -> np.ndarray:
+    *,
+    validator: Callable[[np.ndarray], list[str]],
+) -> tuple[np.ndarray, tuple[int, ...]]:
     output = proposed.copy()
+    mandatory: list[int] = []
     for index, delta in enumerate(proposed - current):
-        if abs(delta) < constraints.no_trade_band:
-            output[index] = current[index]
-        elif abs(delta) < constraints.minimum_rebalance_weight:
-            output[index] = current[index]
-        elif abs(delta) * portfolio_value < constraints.minimum_trade_value:
-            output[index] = current[index]
-    return output
+        suppressible = (
+            abs(delta) < constraints.no_trade_band
+            or abs(delta) < constraints.minimum_rebalance_weight
+            or abs(delta) * portfolio_value < constraints.minimum_trade_value
+        )
+        if not suppressible:
+            continue
+        reverted = output.copy()
+        reverted[index] = current[index]
+        if validator(reverted):
+            mandatory.append(index)
+        else:
+            output = reverted
+    return output, tuple(mandatory)
+
+
+def _recovery_initial(
+    current: np.ndarray,
+    *,
+    bounds: list[tuple[float, float]],
+    gross_limit: float,
+    volatility_limit: float,
+    covariance: np.ndarray,
+) -> np.ndarray:
+    initial = np.clip(
+        current,
+        np.asarray([lower for lower, _ in bounds], dtype=float),
+        np.asarray([upper for _, upper in bounds], dtype=float),
+    )
+    gross = float(initial.sum())
+    if gross > gross_limit and gross > 0:
+        initial *= gross_limit / gross
+    volatility = portfolio_volatility(initial, covariance)
+    if volatility > volatility_limit and volatility > 0:
+        initial *= volatility_limit / volatility
+    return np.asarray(initial, dtype=float)
+
+
+def _sell_only_violations(
+    weights: np.ndarray,
+    *,
+    current: np.ndarray,
+    risk: RiskModelEstimate,
+) -> list[str]:
+    tolerance = 1e-8
+    violations: list[str] = []
+    if np.any(weights > current + tolerance):
+        violations.append("sell-only fallback increased a position")
+    if float(weights.sum()) > float(current.sum()) + tolerance:
+        violations.append("sell-only fallback increased gross exposure")
+    current_volatility = portfolio_volatility(current, risk.annualized_covariance)
+    target_volatility = portfolio_volatility(weights, risk.annualized_covariance)
+    if target_volatility > current_volatility + tolerance:
+        violations.append("sell-only fallback increased portfolio volatility")
+    current_hhi = float(np.sum(current * current))
+    target_hhi = float(np.sum(weights * weights))
+    if target_hhi > current_hhi + tolerance:
+        violations.append("sell-only fallback increased concentration HHI")
+    beta = np.asarray([risk.beta[symbol] for symbol in risk.symbols], dtype=float)
+    if abs(float(beta @ weights)) > abs(float(beta @ current)) + tolerance:
+        violations.append("sell-only fallback increased absolute beta")
+    return violations
+
+
+def _optimizer_diagnostics(
+    *,
+    attempts: list[dict[str, object]],
+    stage: PortfolioOptimizationStage,
+    operating_mode: PortfolioOperatingMode,
+    pre_solve_violations: tuple[str, ...],
+    solver_message: str,
+    iterations: int | None,
+    blocking_constraints: tuple[str, ...],
+    final_target_status: PortfolioConstructionStatus,
+) -> dict[str, object]:
+    primary = next(
+        (
+            item
+            for item in attempts
+            if item.get("stage") == PortfolioOptimizationStage.PRIMARY_OPTIMIZER.value
+        ),
+        {},
+    )
+    status = {
+        PortfolioOptimizationStage.PRIMARY_OPTIMIZER: "OPTIMIZER_PRIMARY_PASS",
+        PortfolioOptimizationStage.FEASIBILITY_RECOVERY: "FEASIBILITY_RECOVERY_PASS",
+        PortfolioOptimizationStage.SELL_ONLY_FALLBACK: "SELL_ONLY_FALLBACK_PASS",
+        PortfolioOptimizationStage.BLOCKED: "PORTFOLIO_BLOCKED_NO_FEASIBLE_TARGET",
+    }[stage]
+    return {
+        "optimizer_status": status,
+        "solver_message": solver_message,
+        "iterations": iterations,
+        "primary_success": bool(primary.get("accepted", False)),
+        "fallback_stage_used": stage.value,
+        "operating_mode": operating_mode.value,
+        "pre_solve_constraint_state": list(pre_solve_violations),
+        "post_solve_validation": "PASS" if not blocking_constraints else "FAIL",
+        "blocking_constraints": list(blocking_constraints),
+        "recovery_result": status,
+        "final_target_status": final_target_status.value,
+        "attempts": attempts,
+    }
 
 
 def _constraint_violations(
@@ -697,6 +1059,7 @@ def _constraint_violations(
     volatility_limit: float,
     sector_members: dict[str, tuple[int, ...]],
     cluster_members: dict[str, tuple[int, ...]],
+    liquidity_limits: np.ndarray | None = None,
     require_size_exposure: bool = True,
 ) -> list[str]:
     violations: list[str] = []
@@ -708,6 +1071,9 @@ def _constraint_violations(
         violations.append("gross exposure limit failed after no-trade processing")
     if float(weights.max(initial=0.0)) > position_limit + tolerance:
         violations.append("single-name limit failed after no-trade processing")
+    if liquidity_limits is not None:
+        for index in np.flatnonzero(weights > liquidity_limits + tolerance):
+            violations.append(f"liquidity limit failed: {risk.symbols[int(index)]}")
     if float(np.sum(np.abs(weights - current))) > constraints.maximum_turnover + tolerance:
         violations.append("turnover limit failed after no-trade processing")
     if float(np.sum(weights * weights)) > constraints.maximum_hhi + tolerance:

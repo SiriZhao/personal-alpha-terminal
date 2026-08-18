@@ -32,6 +32,10 @@ from personal_alpha_terminal.quant_engine.risk.budget import (
     RegimeRiskInput,
     RiskBudget,
 )
+from personal_alpha_terminal.quant_engine.risk.drift import (
+    RiskDriftReport,
+    evaluate_risk_drift,
+)
 from personal_alpha_terminal.quant_engine.risk.model import (
     AssetRiskMetadata,
     PortfolioRiskModel,
@@ -91,6 +95,7 @@ class DailyQuantOutput:
     # ROUND32: the exact evaluated risk budget feeding the optimizer.  Persisted
     # in the immutable run bundle so replay re-runs the same optimization.
     risk_budget: RiskBudget | None = None
+    risk_drift: RiskDriftReport | None = None
 
 
 class DailyQuantPipeline:
@@ -264,6 +269,13 @@ class DailyQuantPipeline:
             ),
         )
         stages.append(PipelineStage("Risk Budget", "VALID", "; ".join(budget.reasons) or "base"))
+        drift = evaluate_risk_drift(
+            current_weights=inputs.current_weights,
+            risk=risk,
+            constraints=self.construction.constraints,
+            risk_budget=budget,
+        )
+        stages.append(PipelineStage("RISK DRIFT", drift.status.value, drift.detail))
         try:
             target = self.construction.construct(
                 authorization=inputs.authorization,
@@ -285,6 +297,8 @@ class DailyQuantPipeline:
                 (),
                 None,
                 tuple(blockers),
+                risk_budget=budget,
+                risk_drift=drift,
             )
         if not target.operational_approved:
             blockers.extend(target.blockers)
@@ -297,6 +311,8 @@ class DailyQuantPipeline:
                 (),
                 None,
                 tuple(blockers),
+                risk_budget=budget,
+                risk_drift=drift,
             )
         stages.append(
             PipelineStage(
@@ -306,7 +322,7 @@ class DailyQuantPipeline:
                     if self.operational_mode
                     else "PRODUCTION_APPROVED"
                 ),
-                target.model_version,
+                f"{target.model_version}; {target.optimization_stage.value}",
             )
         )
         target_vector = np.asarray(
@@ -334,6 +350,8 @@ class DailyQuantPipeline:
                 (),
                 None,
                 tuple(blockers),
+                risk_budget=budget,
+                risk_drift=drift,
             )
         stages.append(
             PipelineStage(
@@ -358,6 +376,8 @@ class DailyQuantPipeline:
                 None,
                 tuple(blockers),
                 stress,
+                budget,
+                drift,
             )
         evidence = _trade_evidence(approved_alpha)
         risk_contribution = _risk_contributions(target, risk)
@@ -370,6 +390,7 @@ class DailyQuantPipeline:
                 risk_contribution=risk_contribution,
                 average_daily_dollar_volume=risk.average_daily_dollar_volume,
                 minimum_trade_weight=self.construction.constraints.minimum_rebalance_weight,
+                mandatory_trade_symbols=frozenset(target.risk_repair_symbols),
             )
         except (ArithmeticError, ValueError) as error:
             blockers.append(f"trade generation failed safely: {error}")
@@ -382,6 +403,9 @@ class DailyQuantPipeline:
                 (),
                 None,
                 tuple(blockers),
+                stress,
+                budget,
+                drift,
             )
         stages.append(PipelineStage("Trade Generator", "VALID", f"{len(trades)} proposals"))
         decision = self.decision_engine.generate(
@@ -408,6 +432,7 @@ class DailyQuantPipeline:
             (),
             stress,
             budget,
+            drift,
         )
 
 

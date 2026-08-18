@@ -62,6 +62,7 @@ class TradeGenerator:
         risk_contribution: dict[str, float],
         average_daily_dollar_volume: dict[str, float],
         minimum_trade_weight: float,
+        mandatory_trade_symbols: frozenset[str] = frozenset(),
     ) -> tuple[TradeProposal, ...]:
         if not target.operational_approved:
             return ()
@@ -74,7 +75,7 @@ class TradeGenerator:
             delta = desired - current
             if not all(isfinite(value) for value in (current, desired, delta)):
                 raise ValueError("trade weights must be finite")
-            if abs(delta) < minimum_trade_weight:
+            if abs(delta) < minimum_trade_weight and symbol not in mandatory_trade_symbols:
                 action = TradeAction.HOLD
                 desired = current
                 delta = 0.0
@@ -109,7 +110,7 @@ class TradeGenerator:
                     expected_alpha=item.expected_alpha,
                     confidence=item.confidence,
                     horizon=item.horizon,
-                    reason=_reason(action, item, target),
+                    reason=_reason(action, item, target, symbol),
                     primary_evidence=item.primary_evidence,
                     counter_evidence=item.counter_evidence,
                     model_version=target.model_version,
@@ -120,7 +121,12 @@ class TradeGenerator:
         return tuple(proposals)
 
 
-def _reason(action: TradeAction, evidence: TradeEvidence, target: PortfolioTarget) -> str:
+def _reason(
+    action: TradeAction,
+    evidence: TradeEvidence,
+    target: PortfolioTarget,
+    symbol: str,
+) -> str:
     if action is TradeAction.HOLD:
         return "target difference is inside the no-trade band"
     if action in {TradeAction.BUY, TradeAction.INCREASE}:
@@ -128,6 +134,8 @@ def _reason(action: TradeAction, evidence: TradeEvidence, target: PortfolioTarge
             "validated expected alpha remained positive after covariance, risk, "
             "liquidity, turnover and cost constraints"
         )
+    if symbol in target.risk_repair_symbols:
+        return "mandatory hard-constraint risk repair overrides the normal no-trade threshold"
     return (
         "portfolio optimizer reduced exposure after alpha, covariance, risk budget "
         f"and transaction-cost evaluation; target alpha={target.expected_alpha:.6f}"

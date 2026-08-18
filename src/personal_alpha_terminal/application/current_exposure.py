@@ -125,7 +125,9 @@ def acquire_current_size_observations(
                     source_quality="CURRENT_ONLY",
                 )
             )
-        except (KeyError, OSError, RuntimeError, TypeError, ValueError) as error:
+        except Exception as error:
+            # Provider SDK exception classes are optional and version-specific;
+            # current-only exposure must degrade to an explicit failure record.
             failures[symbol] = type(error).__name__
     return tuple(observations), {
         "provider": "YAHOO_FINANCE",
