@@ -1,0 +1,47 @@
+{
+  "inventory_version": "ROUND67-DATA-EVIDENCE-v1",
+  "generated_at": "2026-08-18T00:00:00+00:00",
+  "decision_graph": [
+    "market calendar/session -> data refresh and availability cutoff",
+    "security master/permanent id -> symbol history and lifecycle",
+    "universe membership -> eligible candidates",
+    "raw OHLCV + PIT corporate actions -> returns/labels/benchmark alignment",
+    "fundamentals/filings/news -> timestamp-gated optional features/context",
+    "factor inputs -> current Production Quant Champion / shadow challengers",
+    "risk/cost/optimizer -> target weights and manual recommendations",
+    "next legal execution price -> manual confirmation -> portfolio state update"
+  ],
+  "sources": [
+    {"source_id":"prices_ohlcv","implementation":"models.Price + data.market_data.providers","capability":"raw daily OHLCV; PIT vintages incomplete"},
+    {"source_id":"corporate_actions","implementation":"data.us_market.pit_total_return + research_dataset","capability":"split/dividend schemas; complete historical ledger unavailable"},
+    {"source_id":"security_master","implementation":"models.Stock / security_master","capability":"current operational lifecycle snapshot"},
+    {"source_id":"universe_membership","implementation":"HistoricalUniverseMembership + broad_universe_service","capability":"current/broad snapshots; full historical membership unavailable"},
+    {"source_id":"benchmark","implementation":"quant_engine.benchmark + Price","capability":"SPY/QQQ operational references; bound PIT package incomplete"},
+    {"source_id":"fundamentals_filings","implementation":"models.Financial + fundamental_data","capability":"PIT schema exists; historical vintage coverage incomplete"},
+    {"source_id":"news_events","implementation":"intelligence.market_news / macro_news","capability":"decision-safe rows isolated; historical release-vintage completeness varies"},
+    {"source_id":"market_calendar","implementation":"exchange_calendars + data.us_market.session","capability":"US holidays and early closes locally verifiable"},
+    {"source_id":"execution","implementation":"backtest.production + manual_execution_service","capability":"manual-only next-session execution; historical open tradability incomplete"},
+    {"source_id":"classification","implementation":"Stock.asset_type + provider capabilities","capability":"explicit current ETF/equity/index classification"},
+    {"source_id":"fallbacks","implementation":"research.data_gate + quant_daily_service","capability":"unknown/missing/stale evidence fails closed or diagnostic-only"}
+  ],
+  "fields": [
+    {"field_id":"prices_ohlcv","status":"PASS_WITH_WARNINGS","pit_safety":"partial PIT; raw bars safer than provider-adjusted","survivorship_risk":"high without historical universe","lookahead_risk":"same-bar close leakage if used before available","missing_data_semantics":"invalid/missing rows rejected; empty panels diagnostic","stale_data_semantics":"stale bars block decisions by age gate"},
+    {"field_id":"corporate_actions","status":"BLOCKED_PIT","pit_safety":"complete PIT action vintages unavailable","survivorship_risk":"high around delistings/mergers","lookahead_risk":"revised action before availability","missing_data_semantics":"missing action blocks total-return certification","stale_data_semantics":"stale action vintage is not substituted"},
+    {"field_id":"splits","status":"BLOCKED_PIT","pit_safety":"historical ledger incomplete","survivorship_risk":"medium/high","lookahead_risk":"forward-adjusted close before vintage","missing_data_semantics":"missing split blocks affected security","stale_data_semantics":"stale revision blocks PIT research"},
+    {"field_id":"dividends","status":"BLOCKED_PIT","pit_safety":"cash-dividend vintages incomplete","survivorship_risk":"medium/high","lookahead_risk":"future dividend inclusion","missing_data_semantics":"missing dividend is unknown, not zero","stale_data_semantics":"stale revision blocks certification"},
+    {"field_id":"symbol_history","status":"BLOCKED_SURVIVORSHIP","pit_safety":"historical permanent mapping incomplete","survivorship_risk":"high","lookahead_risk":"current ticker mapped backward","missing_data_semantics":"unknown symbol quarantined","stale_data_semantics":"stale mapping cannot resolve historical row"},
+    {"field_id":"delistings","status":"BLOCKED_SURVIVORSHIP","pit_safety":"historical lifecycle incomplete","survivorship_risk":"high","lookahead_risk":"failed names dropped","missing_data_semantics":"missing delisting blocks certification","stale_data_semantics":"stale lifecycle isolates evaluation"},
+    {"field_id":"security_master","status":"PASS_WITH_WARNINGS","pit_safety":"current operational rows only","survivorship_risk":"high for historical research","lookahead_risk":"current active flag used historically","missing_data_semantics":"unknown rows excluded with warning","stale_data_semantics":"stale master blocks decisions"},
+    {"field_id":"universe_membership","status":"BLOCKED_SURVIVORSHIP","pit_safety":"historical membership unavailable","survivorship_risk":"high","lookahead_risk":"current constituents used for all dates","missing_data_semantics":"missing membership excludes certification","stale_data_semantics":"stale snapshot is not historical truth"},
+    {"field_id":"benchmark_prices","status":"BLOCKED_PIT","pit_safety":"bound PIT package incomplete","survivorship_risk":"medium","lookahead_risk":"future benchmark close","missing_data_semantics":"missing session causes mismatch blocker","stale_data_semantics":"stale benchmark blocks comparison"},
+    {"field_id":"fundamentals","status":"BLOCKED_PIT","pit_safety":"historical vintage coverage incomplete","survivorship_risk":"medium/high","lookahead_risk":"period end treated as release date","missing_data_semantics":"unknown values remain missing","stale_data_semantics":"stale filing blocks factor use"},
+    {"field_id":"filing_availability","status":"BLOCKED_PIT","pit_safety":"complete SEC vintage package unavailable","survivorship_risk":"medium","lookahead_risk":"filing period end used as availability","missing_data_semantics":"unmapped records remain pending","stale_data_semantics":"unknown acceptance blocks feature"},
+    {"field_id":"factor_inputs","status":"PASS_WITH_WARNINGS","pit_safety":"visible inputs enforced; inherits source gaps","survivorship_risk":"inherits source gaps","lookahead_risk":"future feature row or label overlap","missing_data_semantics":"disabled features explicit","stale_data_semantics":"stale input disables or blocks"},
+    {"field_id":"news_events","status":"PASS_WITH_WARNINGS","pit_safety":"available_at <= cutoff for decision-safe rows","survivorship_risk":"medium for historical event study","lookahead_risk":"retrieval time substituted for unknown release","missing_data_semantics":"unknown timestamp display-only","stale_data_semantics":"stale news context-only"},
+    {"field_id":"market_calendar","status":"PASS","pit_safety":"locally verifiable","survivorship_risk":"low","lookahead_risk":"weekend/holiday session","missing_data_semantics":"missing session blocks execution","stale_data_semantics":"calendar version required"},
+    {"field_id":"trading_session_alignment","status":"PASS_WITH_WARNINGS","pit_safety":"next verified session required","survivorship_risk":"inherits lifecycle gaps","lookahead_risk":"same-bar fill or holiday skip","missing_data_semantics":"missing next session blocks","stale_data_semantics":"stale calendar blocks"},
+    {"field_id":"execution_price_availability","status":"BLOCKED_TRADABILITY","pit_safety":"historical open evidence incomplete","survivorship_risk":"high around halts/delistings","lookahead_risk":"same-bar close/open fill","missing_data_semantics":"missing open/zero volume/halt blocks","stale_data_semantics":"stale quote blocks"},
+    {"field_id":"etf_security_classification","status":"PASS_WITH_WARNINGS","pit_safety":"current type explicit; historical vintages limited","survivorship_risk":"medium historically","lookahead_risk":"current type used historically","missing_data_semantics":"unknown type excluded","stale_data_semantics":"stale classification quarantined"},
+    {"field_id":"missing_data_fallback","status":"PASS","pit_safety":"unknown never becomes PASS","survivorship_risk":"low","lookahead_risk":"silent default/imputation prohibited","missing_data_semantics":"diagnostic/shadow fallback; promotion blocked","stale_data_semantics":"warns or blocks by purpose"}
+  ]
+}

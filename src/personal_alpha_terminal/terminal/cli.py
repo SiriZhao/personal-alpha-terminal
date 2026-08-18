@@ -42,6 +42,42 @@ console = Console()
 logger = logging.getLogger(__name__)
 
 
+def _data_evidence_command(args: argparse.Namespace) -> int:
+    from dataclasses import asdict
+
+    from personal_alpha_terminal.research.data_evidence import (
+        default_inventory,
+        evaluate_data_evidence,
+        reassess_round_blockers,
+        render_scorecard,
+    )
+
+    inventory = default_inventory(generated_at=datetime.now(UTC))
+    gate = evaluate_data_evidence(inventory)
+    document = {
+        "scorecard": render_scorecard(inventory=inventory),
+        "gate": gate.document(),
+        "inventory": inventory.document(),
+        "blocker_reassessment": [
+            asdict(item) for item in reassess_round_blockers(inventory=inventory)
+        ],
+    }
+    output = getattr(args, "output", None)
+    if output is not None:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(
+            json.dumps(document, default=str, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+    if getattr(args, "json", False):
+        console.print(json.dumps(document, default=str, indent=2, sort_keys=True))
+    else:
+        console.print(document["scorecard"])
+        if output is not None:
+            console.print(f"Detailed evidence: {output.resolve()}")
+    return 0
+
+
 def _probability_assessment_command(args: argparse.Namespace) -> int:
     from personal_alpha_terminal.quant_engine.probability_assessment import (
         ProbabilityAssessmentRegistry,
@@ -3315,6 +3351,12 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command")
     subparsers.add_parser("daily", help="Run and render the complete daily quant chain")
     subparsers.add_parser("refresh", help="Refresh data, then run the daily quant chain")
+    data_evidence = subparsers.add_parser(
+        "data-evidence",
+        help="Show the concise ROUND67 evidence scorecard and optional JSON inventory",
+    )
+    data_evidence.add_argument("--json", action="store_true")
+    data_evidence.add_argument("--output", type=Path, default=None)
     terminal_status = subparsers.add_parser(
         "terminal-status", help="Show terminal, refresh, heartbeat and latest run status"
     )
@@ -3967,6 +4009,8 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if command == "terminal-status":
             return _terminal_status_command(args)
+        if command == "data-evidence":
+            return _data_evidence_command(args)
         if command == "strategy-approval":
             return _strategy_approval_command(args)
         if command in {"doctor", "diagnostics"}:
