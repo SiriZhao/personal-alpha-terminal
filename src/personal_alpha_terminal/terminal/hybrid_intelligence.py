@@ -23,6 +23,7 @@ def render_hybrid_intelligence(
     actions: tuple[HybridActionView, ...] = (),
     market: MarketIntelligenceSnapshot | None = None,
     portfolio_risk: PortfolioSemanticRiskReport | None = None,
+    production_closure: dict[str, object] | None = None,
 ) -> None:
     console.print(
         Panel(
@@ -39,6 +40,8 @@ def render_hybrid_intelligence(
         _actions(console, actions)
     if portfolio_risk is not None:
         _portfolio_risk(console, portfolio_risk)
+    if production_closure is not None:
+        _production_closure(console, production_closure)
 
 
 def render_hybrid_intelligence_document(
@@ -62,6 +65,7 @@ def render_hybrid_intelligence_document(
     ) if isinstance(raw_actions, (list, tuple)) else ()
     raw_market = document.get("market")
     raw_risk = document.get("portfolio_semantic_risk")
+    raw_closure = document.get("production_closure")
     render_hybrid_intelligence(
         console,
         status=HybridIntelligenceStatus.model_validate(raw_status),
@@ -77,6 +81,7 @@ def render_hybrid_intelligence_document(
             if isinstance(raw_risk, dict)
             else None
         ),
+        production_closure=raw_closure if isinstance(raw_closure, dict) else None,
     )
 
 
@@ -205,3 +210,87 @@ def _portfolio_risk(
             title="【风险解释】",
         )
     )
+
+
+def _production_closure(console: Console, closure: dict[str, object]) -> None:
+    formal = closure.get("formal_influence")
+    market = closure.get("market_participation")
+    counterfactuals = closure.get("counterfactual_ledger")
+    attribution = closure.get("decision_attribution")
+
+    if isinstance(formal, dict) or isinstance(market, dict):
+        table = Table(title="【ROUND66 市场参与与正式影响】")
+        table.add_column("字段")
+        table.add_column("值")
+        if isinstance(market, dict):
+            table.add_row("Champion", str(closure.get("champion", "--")))
+            table.add_row("Current gross", _percent(market.get("current_gross")))
+            table.add_row("Target gross", _percent(market.get("target_gross")))
+            table.add_row("Current cash", _percent(market.get("current_cash")))
+            table.add_row("Target cash", _percent(market.get("target_cash")))
+            table.add_row("Current beta", _number(market.get("current_beta")))
+            table.add_row("Target beta", _number(market.get("target_beta")))
+            table.add_row("Participation policy", str(market.get("policy", "--")))
+            table.add_row("Adaptive policy", str(market.get("adaptive_policy", "--")))
+        if isinstance(formal, dict):
+            table.add_row("Quant influence", _percent(formal.get("quant")))
+            table.add_row("Probability influence", _percent(formal.get("probability")))
+            table.add_row("LLM influence", _percent(formal.get("llm")))
+            table.add_row("Adaptive influence", _percent(formal.get("adaptive_participation")))
+        console.print(table)
+
+    if isinstance(counterfactuals, dict):
+        table = Table(title="【四路决策反事实账本】")
+        table.add_column("路径")
+        table.add_column("状态")
+        table.add_column("Target hash")
+        table.add_column("Count", justify="right")
+        for name, raw in counterfactuals.items():
+            if not isinstance(raw, dict):
+                continue
+            target_hash = str(raw.get("target_hash", "--"))
+            table.add_row(
+                str(name),
+                str(raw.get("status", "--")),
+                target_hash[:16],
+                str(raw.get("target_count", "--")),
+            )
+        console.print(table)
+
+    if isinstance(attribution, list):
+        table = Table(title="【Decision Attribution】")
+        table.add_column("股票")
+        table.add_column("Quant", justify="right")
+        table.add_column("Probability", justify="right")
+        table.add_column("LLM", justify="right")
+        table.add_column("Regime", justify="right")
+        table.add_column("Risk", justify="right")
+        table.add_column("Final alpha", justify="right")
+        table.add_column("Confidence", justify="right")
+        for raw in attribution:
+            if not isinstance(raw, dict):
+                continue
+            table.add_row(
+                str(raw.get("symbol", "--")),
+                _signed_percent(raw.get("quant_contribution")),
+                _signed_percent(raw.get("probability_contribution")),
+                _signed_percent(raw.get("llm_contribution")),
+                _signed_percent(raw.get("regime_contribution")),
+                _signed_percent(raw.get("risk_adjustment")),
+                _signed_percent(raw.get("final_expected_alpha")),
+                _number(raw.get("confidence")),
+            )
+        if table.row_count:
+            console.print(table)
+
+
+def _percent(value: object) -> str:
+    return f"{float(value):.2%}" if isinstance(value, (int, float)) else "N/A"
+
+
+def _signed_percent(value: object) -> str:
+    return f"{float(value):+.2%}" if isinstance(value, (int, float)) else "N/A"
+
+
+def _number(value: object) -> str:
+    return f"{float(value):.4f}" if isinstance(value, (int, float)) else "N/A"

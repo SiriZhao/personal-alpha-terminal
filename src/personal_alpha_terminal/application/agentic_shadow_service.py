@@ -7,6 +7,8 @@ shadow ranking -> canonical optimizer/risk counterfactual.
 
 from __future__ import annotations
 
+import json
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from hashlib import sha256
@@ -40,6 +42,7 @@ from personal_alpha_terminal.intelligence.agentic_models import (
     EventType,
     HybridActionView,
     HybridIntelligenceStatus,
+    HybridSecurityView,
     LLMCompanyThesis,
     LLMInferenceRecord,
     LLMInfluenceLevel,
@@ -469,6 +472,14 @@ def build_agentic_shadow_document(
     )
     real_theses = len(thesis_by_symbol)
     real_decisions = sum(value != 0.0 for value in applied_adjustments.values())
+    shadow_actions = _shadow_actions(workflow, target_weights, shadow_targets, shadow_output)
+    production_closure = _round66_production_closure(
+        workflow,
+        target_weights=target_weights,
+        shadow_targets=shadow_targets,
+        securities=securities,
+        actions=shadow_actions,
+    )
     status = HybridIntelligenceStatus(
         provider=provider_name,
         model=model,
@@ -484,7 +495,7 @@ def build_agentic_shadow_document(
         "schema_version": "hybrid-intelligence-artifact-v2",
         "status": status.model_dump(mode="json"),
         "securities": [item.model_dump(mode="json") for item in securities],
-        "actions": _shadow_actions(workflow, target_weights, shadow_targets, shadow_output),
+        "actions": shadow_actions,
         "market": market.model_dump(mode="json"),
         "portfolio_semantic_risk": semantic_risk.model_dump(mode="json"),
         "shadow_ranking": list(shadow_ranking),
@@ -517,7 +528,9 @@ def build_agentic_shadow_document(
             "semantic_alpha_semantics": (
                 "bounded engineering proxy; not validated expected return"
             ),
+            "component_rows": production_closure["decision_attribution"],
         },
+        "production_closure": production_closure,
         "counts": {
             "real_structured_theses": real_theses,
             "real_shadow_llm_decisions": real_decisions,
@@ -567,6 +580,150 @@ def _shadow_signal(signal: AlphaSignal, adjustment: float) -> AlphaSignal:
         expected_excess_return=signal.expected_excess_return + adjustment,
         model_version=f"{signal.model_version}|AGENTIC_SHADOW_V1",
     )
+
+
+def _round66_production_closure(
+    workflow: TodayResult,
+    *,
+    target_weights: dict[str, float],
+    shadow_targets: dict[str, float],
+    securities: list[HybridSecurityView],
+    actions: list[dict[str, object]],
+) -> dict[str, object]:
+    current_weights = getattr(workflow, "current_weights", None) or {}
+    probability_without: dict[str, float] = {}
+    probability_with: dict[str, float] = {}
+    probability_counterfactual = getattr(workflow, "probability_counterfactual", {}) or {}
+    for symbol, trace in probability_counterfactual.items():
+        without = _finite_number(trace.get("target_without_probability"))
+        with_probability = _finite_number(trace.get("target_with_probability"))
+        if without is not None:
+            probability_without[symbol] = without
+        if with_probability is not None:
+            probability_with[symbol] = with_probability
+    quant_only = probability_without or dict(target_weights)
+    quant_probability = probability_with or dict(target_weights)
+    probability_active = bool(getattr(workflow, "probability_overlay_active", False))
+    risk_state = getattr(workflow, "risk_state", None)
+    target = getattr(workflow, "target", None)
+    current_beta = (
+        _finite_number(getattr(risk_state, "portfolio_beta", None))
+        if risk_state is not None
+        else None
+    )
+    target_beta = (
+        _finite_number(getattr(target, "expected_beta", None))
+        if target is not None
+        else None
+    )
+    return {
+        "schema_version": "round66-production-decision-intelligence-v1",
+        "champion": "CURRENT_PRODUCTION_QUANT",
+        "formal_influence": {
+            "quant": 1.0,
+            "probability": 1.0 if probability_active else 0.0,
+            "llm": 0.0,
+            "adaptive_participation": 0.0,
+        },
+        "market_participation": {
+            "current_gross": _gross(current_weights),
+            "target_gross": _gross(target_weights),
+            "current_cash": max(0.0, 1.0 - _gross(current_weights)),
+            "target_cash": max(0.0, 1.0 - _gross(target_weights)),
+            "current_beta": current_beta,
+            "target_beta": target_beta,
+            "policy": "CURRENT_PRODUCTION",
+            "adaptive_policy": "CHALLENGER_ONLY",
+            "recommendation": "FOLLOW_CURRENT_PRODUCTION_QUANT_TARGET",
+        },
+        "counterfactual_ledger": {
+            "quant_only": _counterfactual_entry(quant_only, "PRODUCTION_COUNTERFACTUAL"),
+            "quant_plus_probability": _counterfactual_entry(
+                quant_probability,
+                "PRODUCTION_COUNTERFACTUAL"
+                if probability_active
+                else "SHADOW_COUNTERFACTUAL",
+            ),
+            "quant_plus_llm": _counterfactual_entry(shadow_targets, "SHADOW_COUNTERFACTUAL"),
+            "quant_plus_probability_plus_llm": _counterfactual_entry(
+                shadow_targets,
+                "SHADOW_COUNTERFACTUAL",
+            ),
+            "final_production_decision": _counterfactual_entry(
+                target_weights,
+                "PRODUCTION_DECISION",
+            ),
+        },
+        "decision_attribution": _component_attribution(securities, actions),
+        "execution_boundary": {
+            "manual_confirmation": True,
+            "auto_execution": False,
+            "broker_order_submission": False,
+            "optimizer_final_authority": True,
+            "risk_wall_final_authority": True,
+        },
+    }
+
+
+def _component_attribution(
+    securities: list[HybridSecurityView],
+    actions: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    action_by_symbol = {
+        str(item["symbol"]): item
+        for item in actions
+        if isinstance(item.get("symbol"), str)
+    }
+    rows: list[dict[str, object]] = []
+    for security in securities:
+        action = action_by_symbol.get(security.symbol, {})
+        final_target = _finite_number(action.get("final_risk_adjusted_target")) or 0.0
+        hybrid_target = _finite_number(action.get("hybrid_target")) or 0.0
+        rows.append(
+            {
+                "symbol": security.symbol,
+                "company": security.company_name,
+                "business": security.business_summary,
+                "quant_contribution": security.base_expected_alpha,
+                "probability_contribution": security.probability_contribution or 0.0,
+                "llm_contribution": security.applied_llm_adjustment,
+                "regime_contribution": 0.0,
+                "risk_adjustment": final_target - hybrid_target,
+                "final_expected_alpha": security.final_expected_alpha,
+                "confidence": security.confidence,
+                "reason": security.bull_case or security.bear_case or "NO_THESIS",
+                "invalidation": list(security.invalidation),
+            }
+        )
+    return rows
+
+
+def _counterfactual_entry(weights: Mapping[str, float], status: str) -> dict[str, object]:
+    return {
+        "status": status,
+        "target_hash": _target_hash(weights),
+        "target_count": len(weights),
+        "formal_order_authority": status != "SHADOW_COUNTERFACTUAL",
+    }
+
+
+def _target_hash(weights: Mapping[str, float]) -> str:
+    payload = json.dumps(
+        {symbol: float(value) for symbol, value in sorted(weights.items())},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _gross(weights: Mapping[str, float]) -> float:
+    return sum(abs(float(value)) for value in weights.values())
+
+
+def _finite_number(value: object) -> float | None:
+    if isinstance(value, (int, float)) and isfinite(float(value)):
+        return float(value)
+    return None
 
 
 def _shadow_actions(

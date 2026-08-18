@@ -67,6 +67,7 @@ def render_daily_quant_result(
         _operational_status(result, console)
         _execution(result, console)
         _ai_intelligence(result, console)
+        _hybrid_intelligence(result, console)
         _market_data(result, console)
         _provider_accounting(result, console)
         _decisions(result, console)
@@ -176,6 +177,29 @@ def _ai_intelligence(result: DailyQuantResult, console: Console) -> None:
             border_style="yellow",
         )
     )
+
+
+def _hybrid_intelligence(result: DailyQuantResult, console: Console) -> None:
+    document = result.hybrid_intelligence
+    if not isinstance(document, dict) or not isinstance(document.get("status"), dict):
+        return
+    try:
+        from personal_alpha_terminal.terminal.hybrid_intelligence import (
+            render_hybrid_intelligence_document,
+        )
+
+        render_hybrid_intelligence_document(console, document)
+    except (ImportError, KeyError, TypeError, ValueError):
+        console.print(
+            Panel(
+                _t(
+                    "Agentic Intelligence 已降级；Quant 生产结果保持不变。",
+                    "Agentic Intelligence degraded; Quant production result unchanged.",
+                ),
+                title=_t("【LLM 安全回退】", "LLM SAFE FALLBACK"),
+                border_style="yellow",
+            )
+        )
 
 
 def _ai_brief_section(result: DailyQuantResult, console: Console) -> None:
