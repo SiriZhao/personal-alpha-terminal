@@ -40,3 +40,22 @@ __all__ = [
     "RiskModelStatus",
     "portfolio_volatility",
 ]
+from personal_alpha_terminal.quant_engine.risk.adaptive_exposure import (
+    AdaptiveExposureController,
+    CashAllocationCause,
+    CashAttribution,
+    ExposureDecision,
+    ExposureEvidenceInputs,
+    ExposureParticipationState,
+    attribute_cash,
+)
+
+__all__ = [
+    "AdaptiveExposureController",
+    "CashAllocationCause",
+    "CashAttribution",
+    "ExposureDecision",
+    "ExposureEvidenceInputs",
+    "ExposureParticipationState",
+    "attribute_cash",
+]

@@ -113,6 +113,38 @@ def _alpha_engine3_reality_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _adaptive_exposure_command(args: argparse.Namespace) -> int:
+    from personal_alpha_terminal.research.data_evidence import evaluate_data_evidence
+
+    evidence = evaluate_data_evidence()
+    blocked = evidence.overall_status.value == "BLOCKED_DATA_QUALITY"
+    document = {
+        "participation_state": "影子模式（证据不足）" if blocked else "NORMAL",
+        "target_gross_exposure": "N/A",
+        "current_exposure": "N/A",
+        "cash_ratio": "N/A",
+        "reason": "数据质量/PIT/生存偏差/锁定 OOS 门禁未通过；不启用生产自适应暴露。",
+        "dominant_risk": "缺少可认证的 PIT 与历史成员/退市证据",
+        "recovery_phase": "UNKNOWN",
+        "upside_participation": "N/A",
+        "production_active": False,
+    }
+    if getattr(args, "json", False):
+        console.print(json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True))
+    else:
+        console.print(
+            "当前市场参与状态：{participation_state}\n"
+            "建议总仓位：{target_gross_exposure}\n"
+            "当前实际仓位：{current_exposure}\n"
+            "现金比例：{cash_ratio}\n"
+            "为什么增仓/减仓：{reason}\n"
+            "当前最主要风险：{dominant_risk}\n"
+            "是否处于恢复期：{recovery_phase}\n"
+            "当前上涨参与能力：{upside_participation}".format(**document)
+        )
+    return 0
+
+
 def _probability_assessment_command(args: argparse.Namespace) -> int:
     from personal_alpha_terminal.quant_engine.probability_assessment import (
         ProbabilityAssessmentRegistry,
@@ -3397,6 +3429,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Show compact ROUND68 Alpha Engine 3 performance-evidence status",
     )
     alpha_reality.add_argument("--json", action="store_true")
+    adaptive_exposure = subparsers.add_parser(
+        "adaptive-exposure",
+        help="Show the Chinese operator-facing ROUND69 exposure shadow status",
+    )
+    adaptive_exposure.add_argument("--json", action="store_true")
     terminal_status = subparsers.add_parser(
         "terminal-status", help="Show terminal, refresh, heartbeat and latest run status"
     )
@@ -4053,6 +4090,8 @@ def main(argv: list[str] | None = None) -> int:
             return _data_evidence_command(args)
         if command == "alpha-engine3-reality":
             return _alpha_engine3_reality_command(args)
+        if command == "adaptive-exposure":
+            return _adaptive_exposure_command(args)
         if command == "strategy-approval":
             return _strategy_approval_command(args)
         if command in {"doctor", "diagnostics"}:
