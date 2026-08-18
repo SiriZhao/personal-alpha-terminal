@@ -85,6 +85,28 @@ def forward_shadow_command(args: Namespace, config: EffectiveRuntimeConfig) -> i
         else:
             _render_dashboard(dashboard)
         return 0
+    if action == "readiness":
+        from personal_alpha_terminal.research.data_evidence import evaluate_data_evidence
+        from personal_alpha_terminal.research.forward_shadow_readiness import (
+            evaluate_forward_shadow_readiness,
+        )
+
+        dashboard = service.dashboard()
+        readiness = evaluate_forward_shadow_readiness(
+            dashboard,
+            terminal_startup=True,
+            terminal_full_cycle=False,
+            data_quality_status=evaluate_data_evidence().overall_status.value,
+        )
+        console.print(
+            json.dumps(
+                readiness.model_dump(mode="json"),
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 0
     if action == "doctor":
         doctor = service.doctor()
         console.print(json.dumps(doctor, ensure_ascii=False, indent=2, sort_keys=True))
@@ -160,7 +182,69 @@ def _render_daily_summary(run: ForwardShadowRunResult) -> None:
     console.print("Production LLM authority: 0%")
     console.print("Production lambda: 0")
     console.print("Manual action list: UNCHANGED BY LLM")
+    _render_operator_summary(daily)
     console.print("====================================================")
+
+
+def _render_operator_summary(daily: object) -> None:
+    """Chinese-first operator answers without exposing internal object dumps."""
+
+    market = getattr(daily, "market_regime", "UNKNOWN")
+    detail = getattr(daily, "market_regime_detail", "证据不足")
+    portfolio = getattr(daily, "portfolio", None)
+    risk = getattr(daily, "risk", None)
+    decisions = tuple(getattr(daily, "final_decisions", ()) or ())
+    hybrid = getattr(daily, "hybrid_intelligence", None)
+    hybrid_doc = hybrid if isinstance(hybrid, dict) else {}
+    status = getattr(daily, "llm_status", "UNKNOWN")
+    data_cutoff = getattr(daily, "data_cutoff", None)
+    print_rows = [
+        f"市场状态：{market}（{detail}）",
+        f"建议总仓位：{_operator_percent(getattr(risk, 'gross_exposure', None))}",
+        f"当前实际仓位：{_operator_percent(getattr(portfolio, 'invested_weight', None))}",
+        f"现金比例：{_operator_percent(getattr(portfolio, 'cash_weight', None))}",
+        f"今日买入：{_symbols_for_actions(decisions, {'BUY', 'ADD', 'INCREASE'})}",
+        f"今日卖出：{_symbols_for_actions(decisions, {'SELL', 'REDUCE', 'DECREASE'})}",
+        f"Quant 观点：{len(decisions)} 个正式决策，最终权重由 Optimizer + Risk Engine 决定",
+        f"Probability 观点：{_operator_text(hybrid_doc.get('probability_view'), '仅作证据/影子')}",
+        f"LLM 观点：{_operator_text(hybrid_doc.get('llm_view'), 'SHADOW / 未改变正式权重')}",
+        f"Quant 与 LLM 冲突：{_operator_text(hybrid_doc.get('disagreement'), '未发现可认证分歧')}",
+        f"组合最大风险：{_operator_text(getattr(risk, 'reasons', None), '以 Risk Engine 为准')}",
+        "是否保持现金："
+        + (
+            "是"
+            if (getattr(portfolio, "cash_weight", 0.0) or 0.0) > 0.5
+            else "由风险门禁决定"
+        ),
+        "ETF 长期配置 / Alpha 操作：以 ETF sleeve 与正式股票 action 分栏为准",
+        "数据完整性："
+        + _operator_text(getattr(daily, "data_health", None), "以 DATA/PIT 门禁为准"),
+        f"AI 状态：{status}",
+        "系统是否允许执行：否，必须人工确认且自动执行 DISABLED",
+        f"下一步人工操作：复核数据 cutoff {data_cutoff or 'UNAVAILABLE'}、价格、风险与买卖清单",
+    ]
+    console.print("\n【今日人工决策摘要】")
+    for row in print_rows:
+        console.print(row)
+
+
+def _symbols_for_actions(decisions: tuple[object, ...], actions: set[str]) -> str:
+    symbols = [
+        str(getattr(item, "symbol", ""))
+        for item in decisions
+        if getattr(item, "action", "") in actions
+    ]
+    return ", ".join(symbols) if symbols else "无 / 证据积累中"
+
+
+def _operator_percent(value: object) -> str:
+    return f"{float(value):.2%}" if isinstance(value, (int, float)) else "证据积累中"
+
+
+def _operator_text(value: object, fallback: str) -> str:
+    if value is None or value == () or value == [] or value == {}:
+        return fallback
+    return str(value)
 
 
 def _render_dashboard(dashboard: dict[str, object]) -> None:

@@ -399,12 +399,15 @@ def run_daily(
     refresh: bool = True,
     wait: bool = True,
     locale: str = "zh-CN",
+    decision_time: datetime | None = None,
 ) -> int:
     """Run the canonical orchestrator and render exactly its persisted result."""
 
     try:
         config = load_config(config_path)
         if config.settings.runtime_profile == "FORWARD_SHADOW_VALIDATION":
+            if decision_time is not None:
+                raise ValueError("use forward-shadow run --decision-time in Forward Shadow profile")
             return run_forward_shadow_daily(
                 config,
                 refresh=refresh,
@@ -420,6 +423,7 @@ def run_daily(
                     snapshot_root=config.report_dir, effective_config=config
                 ).run_daily_quant_report(
                     portfolio_id=config.portfolio_id,
+                    decision_time=decision_time,
                     refresh=True,
                     progress=progress,
                 )
@@ -429,6 +433,7 @@ def run_daily(
                 snapshot_root=config.report_dir, effective_config=config
             ).run_daily_quant_report(
                 portfolio_id=config.portfolio_id,
+                decision_time=decision_time,
                 refresh=False,
             )
     except RuntimeError as error:
@@ -466,6 +471,17 @@ def run_daily(
         except EOFError:
             logger.info("Skipping exit prompt because stdin reached EOF")
     return 0 if result.actionable else 3
+
+
+def _daily_decision_time(value: str | None) -> datetime | None:
+    if value is None:
+        return None
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("--decision-time must be timezone-aware")
+    if parsed > datetime.now(UTC):
+        raise ValueError("--decision-time cannot be in the future")
+    return parsed
 
 
 def _terminal_status_command(args: argparse.Namespace) -> int:
@@ -1811,12 +1827,15 @@ def _explain(config_path: Path, symbol: str, run_id: str | None = None) -> int:
 def _render_persisted_section(config_path: Path, section: str, run_id: str | None) -> int:
     path = _certificate_path(config_path, run_id)
     certificate = json.loads(path.read_text(encoding="utf-8"))
+    if section == "decisions":
+        _render_persisted_decisions(certificate)
+        console.print(f"Certificate: {path.resolve()}")
+        return 0
     mapping = {
         "data": ("data_certification", "data"),
         "factors": ("factor_statistics", "signals"),
         "probability": ("probability",),
         "risk": ("risk",),
-        "decisions": ("decision_counts", "decision_traces"),
     }
     payload = {key: certificate.get(key) for key in mapping[section]}
     console.print(
@@ -1827,6 +1846,54 @@ def _render_persisted_section(config_path: Path, section: str, run_id: str | Non
     )
     console.print(f"Certificate: {path.resolve()}")
     return 0
+
+
+def _render_persisted_decisions(certificate: dict[str, object]) -> None:
+    """Render an operator-sized decision view; full traces remain in the artifact."""
+
+    counts = certificate.get("decision_counts")
+    counts_dict = counts if isinstance(counts, dict) else {}
+    summary = Table(title=f"DECISIONS / IMMUTABLE RUN {certificate.get('run_id')}")
+    summary.add_column("Metric")
+    summary.add_column("Value", justify="right")
+    for name in ("BUY", "SELL", "HOLD", "REJECTED"):
+        summary.add_row(name, str(counts_dict.get(name, 0)))
+    traces = certificate.get("decision_traces")
+    trace_rows = len(traces) if isinstance(traces, dict) else 0
+    summary.add_row("Trace rows", str(trace_rows))
+    summary.add_row("LLM authority", "0%")
+    summary.add_row("Execution", "MANUAL_CONFIRMATION / AUTO_DISABLED")
+    console.print(summary)
+
+    rows = certificate.get("decision_recommendations")
+    table = Table(title="今日正式建议（摘要）")
+    for column in ("Symbol", "Action", "Current", "Target", "Alpha", "Reason"):
+        table.add_column(column, overflow="fold")
+    if isinstance(rows, list):
+        for item in rows:
+            if not isinstance(item, dict):
+                continue
+            table.add_row(
+                str(item.get("symbol", "--")),
+                str(item.get("action", "--")),
+                _compact_percent(item.get("current_weight")),
+                _compact_percent(item.get("target_weight")),
+                _compact_percent(item.get("expected_alpha")),
+                _compact_text(item.get("reason", "--"), 72),
+            )
+    if not table.row_count:
+        table.add_row("--", "--", "--", "--", "--", "证据积累中 / 无正式建议")
+    console.print(table)
+    console.print("详细 factor/trace 字段保留在 run_certificate.json，不在日常终端展开。")
+
+
+def _compact_percent(value: object) -> str:
+    return f"{float(value):.2%}" if isinstance(value, (int, float)) else "--"
+
+
+def _compact_text(value: object, limit: int) -> str:
+    text = str(value)
+    return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
 def _verify_recommendation_run(config_path: Path, run_id: str, recommendation_id: str) -> None:
@@ -3416,7 +3483,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-refresh", action="store_true")
     parser.add_argument("--locale", choices=("zh-CN", "en-US"), default="zh-CN")
     subparsers = parser.add_subparsers(dest="command")
-    subparsers.add_parser("daily", help="Run and render the complete daily quant chain")
+    daily = subparsers.add_parser("daily", help="Run and render the complete daily quant chain")
+    daily.add_argument(
+        "--decision-time",
+        default=None,
+        help="Timezone-aware historical replay timestamp; never promotes historical outcomes",
+    )
     subparsers.add_parser("refresh", help="Refresh data, then run the daily quant chain")
     data_evidence = subparsers.add_parser(
         "data-evidence",
@@ -3860,6 +3932,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Show provider, daily run, Forward evidence and promotion dashboard",
     )
     shadow_status.add_argument("--json", action="store_true")
+    forward_shadow_actions.add_parser(
+        "readiness",
+        help="Evaluate fail-closed Forward Shadow and paper readiness",
+    )
     shadow_doctor = forward_shadow_actions.add_parser(
         "doctor",
         help="Check Forward Shadow readiness without a paid provider call",
@@ -4226,6 +4302,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.config,
                 refresh=True,
                 locale=args.locale,
+                decision_time=_daily_decision_time(getattr(args, "decision_time", None)),
             )
         if command in {"data", "factors", "probability", "risk", "decisions"}:
             return _render_persisted_section(args.config, command, args.run_id)
@@ -4233,6 +4310,7 @@ def main(argv: list[str] | None = None) -> int:
             args.config,
             refresh=not args.no_refresh,
             locale=args.locale,
+            decision_time=_daily_decision_time(getattr(args, "decision_time", None)),
         )
     except (FileNotFoundError, OSError, RuntimeError, ValueError) as error:
         logger.exception("Command failed")

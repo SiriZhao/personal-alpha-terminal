@@ -174,13 +174,7 @@ def test_outcome_requires_existing_identity_bound_prediction(session_factory) ->
                 outcome.model_copy(
                     update={
                         "outcome_id": "outcome-future",
-                        "outcome_timestamp": datetime(
-                            2026,
-                            8,
-                            18,
-                            12,
-                            tzinfo=UTC,
-                        ),
+                        "outcome_timestamp": datetime.now(UTC) + timedelta(minutes=5),
                     }
                 )
             )

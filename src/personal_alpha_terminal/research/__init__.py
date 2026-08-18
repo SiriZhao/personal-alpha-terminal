@@ -35,6 +35,12 @@ from personal_alpha_terminal.research.data_gate import (
     ResearchDataRequest,
     ResearchPurpose,
 )
+from personal_alpha_terminal.research.forward_shadow_readiness import (
+    ForwardShadowReadiness,
+    ReadinessCheck,
+    ReadinessState,
+    evaluate_forward_shadow_readiness,
+)
 from personal_alpha_terminal.research.portfolio_competition import (
     AttributionLayer,
     AttributionRecord,
@@ -100,4 +106,8 @@ __all__ = [
     "TournamentDecision",
     "VariantEvaluation",
     "build_tournament",
+    "ForwardShadowReadiness",
+    "ReadinessCheck",
+    "ReadinessState",
+    "evaluate_forward_shadow_readiness",
 ]

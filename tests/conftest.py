@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from uuid import uuid4
 
@@ -8,7 +9,9 @@ from sqlalchemy.orm import Session, sessionmaker
 from personal_alpha_terminal.data.database import build_engine, build_session_factory
 from personal_alpha_terminal.models import Base
 
-_TEST_TEMP_ROOT = Path.cwd() / f".pytest-tmp-{uuid4().hex}"
+_TEST_TEMP_ROOT = Path(
+    os.environ.get("PAT_TEST_TEMP_ROOT", str(Path.cwd() / f".pytest-tmp-{uuid4().hex}"))
+)
 
 
 @pytest.fixture
