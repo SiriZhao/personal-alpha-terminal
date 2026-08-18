@@ -32,6 +32,12 @@ from personal_alpha_terminal.intelligence.agentic_models import (
     SecurityIdentity,
     Stance,
 )
+from personal_alpha_terminal.intelligence.llm_decision_fusion import (
+    DecisionAudit,
+    DecisionInfluenceLevel,
+    audit_from_agentic_output,
+    fail_soft_audit,
+)
 
 
 class AgenticDecisionMode(StrEnum):
@@ -314,6 +320,7 @@ class AgenticDecisionResult(AgenticStrictModel):
     factor_mixture: dict[str, float]
     participation_preferences: dict[str, float]
     target_preference_vector: dict[str, float]
+    decision_audit: DecisionAudit | None = None
     calibrated_influence: float = Field(ge=0, le=1)
     formal_influence_active: bool
     fallback_reason: str | None = None
@@ -452,6 +459,16 @@ class AgenticDecisionEngine:
             if active and mode is AgenticDecisionMode.FULL_AGENTIC_CHALLENGER
             else {}
         )
+        decision_audit = audit_from_agentic_output(
+            packet,
+            structured,
+            requested_level=_decision_influence_level(influence_policy.level),
+            mode_allows_influence=_mode_allowed(mode, influence_policy, promotion),
+            promotion_passed=promotion.status is PromotionStatus.PROMOTION_PASS,
+            production_enabled=active,
+            formal_influence=calibrated if active else 0.0,
+            model_version=self.model_version,
+        )
         return AgenticDecisionResult(
             mode=mode,
             status=AgenticDecisionStatus.STRUCTURED,
@@ -471,6 +488,7 @@ class AgenticDecisionEngine:
             factor_mixture=factor_mixture,
             participation_preferences=participation,
             target_preference_vector=preference_vector,
+            decision_audit=decision_audit,
             calibrated_influence=calibrated if active else 0.0,
             formal_influence_active=active,
             fallback_reason=response.fallback_reason,
@@ -557,6 +575,14 @@ class AgenticDecisionEngine:
             factor_mixture=_normalized_nonnegative(packet.quant_factor_mixture),
             participation_preferences={},
             target_preference_vector={},
+            decision_audit=fail_soft_audit(
+                requested_level=DecisionInfluenceLevel.L0_COMMENTARY,
+                reason=reason,
+                model_version=self.model_version,
+                hard_constraints_passed=bool(
+                    packet.risk_state.get("hard_constraints_valid", False)
+                ),
+            ),
             calibrated_influence=0.0,
             formal_influence_active=False,
             fallback_reason=reason,
@@ -635,6 +661,20 @@ def _mode_allowed(
         },
     }
     return policy.level in levels.get(mode, set())
+
+
+def _decision_influence_level(level: LLMInfluenceLevel) -> DecisionInfluenceLevel:
+    mapping = {
+        LLMInfluenceLevel.LEVEL_0_EXPLANATION: DecisionInfluenceLevel.L0_COMMENTARY,
+        LLMInfluenceLevel.LEVEL_1_SHADOW_ALPHA: DecisionInfluenceLevel.L1_SHADOW_SCORING,
+        LLMInfluenceLevel.LEVEL_2_DECISION_RANKING: DecisionInfluenceLevel.L2_RANKING,
+        LLMInfluenceLevel.LEVEL_3_BOUNDED_ALPHA_OVERLAY: DecisionInfluenceLevel.L3_BOUNDED_FORMAL,
+        LLMInfluenceLevel.LEVEL_4_PORTFOLIO_CONTRIBUTION: DecisionInfluenceLevel.L3_BOUNDED_FORMAL,
+        LLMInfluenceLevel.LEVEL_5_DYNAMIC_CONTEXTUAL_INFLUENCE: (
+            DecisionInfluenceLevel.L4_ADAPTIVE_EVIDENCE
+        ),
+    }
+    return mapping[level]
 
 
 def _normalized_nonnegative(values: dict[str, float]) -> dict[str, float]:

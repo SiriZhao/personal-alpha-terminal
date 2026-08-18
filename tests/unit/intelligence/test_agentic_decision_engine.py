@@ -268,6 +268,11 @@ def test_shadow_mode_is_structured_auditable_and_has_zero_formal_influence() -> 
     assert result.status is AgenticDecisionStatus.STRUCTURED
     assert result.formal_influence_active is False
     assert result.calibrated_influence == 0.0
+    assert result.decision_audit is not None
+    assert result.decision_audit.formal_influence == 0.0
+    assert result.decision_audit.influence_level.value == "L1_SHADOW_SCORING"
+    assert result.decision_audit.optimizer_final_authority is True
+    assert result.decision_audit.auto_execution == "DISABLED"
     assert all(item.mu_final == item.mu_quant for item in result.alpha_attribution)
     assert result.prompt_hash and result.input_hash and result.output_hash
     assert result.auto_execution == "DISABLED"
@@ -380,6 +385,9 @@ def test_malformed_provider_outage_and_hallucinated_evidence_fail_soft() -> None
     )
     assert outage.fallback_reason == "PROVIDER:PROVIDER_UNAVAILABLE"
     assert not outage.formal_influence_active
+    assert outage.decision_audit is not None
+    assert outage.decision_audit.degraded_ai is True
+    assert outage.decision_audit.deterministic_fallback is True
 
     hallucinated = _output(packet, unsupported_event=True)
     rejected = _engine(_Provider(json.dumps(hallucinated.model_dump(mode="json")))).decide(

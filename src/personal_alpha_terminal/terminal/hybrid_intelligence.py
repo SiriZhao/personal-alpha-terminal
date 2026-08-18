@@ -217,6 +217,10 @@ def _production_closure(console: Console, closure: dict[str, object]) -> None:
     market = closure.get("market_participation")
     counterfactuals = closure.get("counterfactual_ledger")
     attribution = closure.get("decision_attribution")
+    decision_audit = closure.get("llm_decision_audit")
+
+    if isinstance(decision_audit, dict):
+        _llm_decision_audit(console, decision_audit)
 
     if isinstance(formal, dict) or isinstance(market, dict):
         table = Table(title="【ROUND66 市场参与与正式影响】")
@@ -282,6 +286,41 @@ def _production_closure(console: Console, closure: dict[str, object]) -> None:
             )
         if table.row_count:
             console.print(table)
+
+
+def _llm_decision_audit(console: Console, audit: dict[str, object]) -> None:
+    """Compact Chinese operator view for structured LLM decision provenance."""
+
+    table = Table(title="【LLM 决策审计】")
+    table.add_column("字段")
+    table.add_column("值")
+    table.add_row("影响级别", str(audit.get("influence_level", "L0_COMMENTARY")))
+    table.add_row("正式影响", _percent(audit.get("formal_influence")))
+    table.add_row(
+        "当前状态",
+        "降级：量化路径继续"
+        if audit.get("degraded_ai")
+        else "结构化：等待硬门禁与人工确认",
+    )
+    table.add_row(
+        "组合判断",
+        str(audit.get("portfolio_view") or audit.get("market_view") or "证据不足"),
+    )
+    table.add_row("主要风险", str(audit.get("dominant_risk") or "以 Risk Engine 为准"))
+    table.add_row("是否存在分歧", "是" if audit.get("disagreements") else "否/未识别")
+    table.add_row("操作理由", str(audit.get("reason") or "LLM 不改变正式仓位"))
+    console.print(table)
+    disagreements = audit.get("disagreements")
+    if isinstance(disagreements, list):
+        for item in disagreements:
+            if not isinstance(item, dict):
+                continue
+            console.print(
+                f"{item.get('symbol', '--')}: Quant={item.get('quant_view', '--')} | "
+                f"LLM={item.get('llm_view', '--')} | "
+                f"{item.get('category', 'DATA_UNCERTAIN')} | "
+                f"融合={item.get('fusion_result', 'QUANT_ONLY')}"
+            )
 
 
 def _percent(value: object) -> str:
