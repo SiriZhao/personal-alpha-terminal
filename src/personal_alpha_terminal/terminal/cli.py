@@ -78,6 +78,41 @@ def _data_evidence_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _alpha_engine3_reality_command(args: argparse.Namespace) -> int:
+    from personal_alpha_terminal.research.data_evidence import (
+        assess_locked_oos,
+        default_inventory,
+        evaluate_data_evidence,
+    )
+
+    inventory = default_inventory(generated_at=datetime.now(UTC))
+    evidence = evaluate_data_evidence(inventory)
+    document = {
+        "status": (
+            "BLOCKED_DATA_QUALITY"
+            if evidence.overall_status.value == "BLOCKED_DATA_QUALITY"
+            else "BLOCKED_INSUFFICIENT_OOS"
+        ),
+        "data_evidence_status": evidence.overall_status.value,
+        "locked_oos_status": assess_locked_oos(None).value,
+        "current_participation": "UNAVAILABLE_NO_CERTIFIED_ALIGNED_PANEL",
+        "cash_drag": "UNAVAILABLE_NO_CERTIFIED_ALIGNED_PANEL",
+        "upside_capture": "UNAVAILABLE_NO_CERTIFIED_ALIGNED_PANEL",
+        "downside_capture": "UNAVAILABLE_NO_CERTIFIED_ALIGNED_PANEL",
+        "alpha_engine_status": "CHALLENGER_ONLY_NO_PROMOTION",
+        "blockers": evidence.blockers,
+    }
+    if getattr(args, "json", False):
+        console.print(json.dumps(document, indent=2, sort_keys=True))
+    else:
+        console.print(
+            "ALPHA ENGINE 3 REALITY | status={status} | participation=N/A | "
+            "cash_drag=N/A | upside_capture=N/A | downside_capture=N/A | "
+            "engine=CHALLENGER_ONLY".format(**document)
+        )
+    return 0
+
+
 def _probability_assessment_command(args: argparse.Namespace) -> int:
     from personal_alpha_terminal.quant_engine.probability_assessment import (
         ProbabilityAssessmentRegistry,
@@ -3357,6 +3392,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     data_evidence.add_argument("--json", action="store_true")
     data_evidence.add_argument("--output", type=Path, default=None)
+    alpha_reality = subparsers.add_parser(
+        "alpha-engine3-reality",
+        help="Show compact ROUND68 Alpha Engine 3 performance-evidence status",
+    )
+    alpha_reality.add_argument("--json", action="store_true")
     terminal_status = subparsers.add_parser(
         "terminal-status", help="Show terminal, refresh, heartbeat and latest run status"
     )
@@ -4011,6 +4051,8 @@ def main(argv: list[str] | None = None) -> int:
             return _terminal_status_command(args)
         if command == "data-evidence":
             return _data_evidence_command(args)
+        if command == "alpha-engine3-reality":
+            return _alpha_engine3_reality_command(args)
         if command == "strategy-approval":
             return _strategy_approval_command(args)
         if command in {"doctor", "diagnostics"}:

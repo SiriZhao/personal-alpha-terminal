@@ -18,6 +18,18 @@ from personal_alpha_terminal.quant_engine.alpha_engine3.cross_sectional import (
     evaluate_alpha_engine3,
     evaluate_feature_ablation,
 )
+from personal_alpha_terminal.quant_engine.alpha_engine3.reality_test import (
+    AlignedPerformanceObservation,
+    AlphaEngine3RealityTest,
+    EconomicMetrics,
+    ExposureCounterfactual,
+    MarketRegime,
+    RealityTestVerdict,
+    RegimeMetrics,
+    classify_market_regime_as_of,
+    compact_reality_status,
+    run_alpha_engine3_reality_test,
+)
 
 __all__ = [
     "DEFAULT_PRICE_FEATURES",
@@ -36,4 +48,14 @@ __all__ = [
     "build_walk_forward_folds",
     "evaluate_alpha_engine3",
     "evaluate_feature_ablation",
+    "AlignedPerformanceObservation",
+    "AlphaEngine3RealityTest",
+    "EconomicMetrics",
+    "ExposureCounterfactual",
+    "MarketRegime",
+    "RealityTestVerdict",
+    "RegimeMetrics",
+    "classify_market_regime_as_of",
+    "compact_reality_status",
+    "run_alpha_engine3_reality_test",
 ]
