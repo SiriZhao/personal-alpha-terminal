@@ -218,9 +218,12 @@ def _production_closure(console: Console, closure: dict[str, object]) -> None:
     counterfactuals = closure.get("counterfactual_ledger")
     attribution = closure.get("decision_attribution")
     decision_audit = closure.get("llm_decision_audit")
+    competition = closure.get("portfolio_competition")
 
     if isinstance(decision_audit, dict):
         _llm_decision_audit(console, decision_audit)
+    if isinstance(competition, dict):
+        _portfolio_competition(console, competition)
 
     if isinstance(formal, dict) or isinstance(market, dict):
         table = Table(title="【ROUND66 市场参与与正式影响】")
@@ -323,6 +326,67 @@ def _llm_decision_audit(console: Console, audit: dict[str, object]) -> None:
             )
 
 
+def _portfolio_competition(console: Console, competition: dict[str, object]) -> None:
+    """Compact Chinese view; missing evidence is never rendered as a percentage."""
+
+    table = Table(title="【智能决策竞争】")
+    table.add_column("字段")
+    table.add_column("值")
+    table.add_row("当前生产方案", str(competition.get("current_production", "PURE_QUANT")))
+    table.add_row("最强挑战方案", str(competition.get("strongest_challenger") or "证据积累中"))
+    evaluations = competition.get("variant_evaluations")
+    if isinstance(evaluations, list) and evaluations:
+        rows = [item for item in evaluations if isinstance(item, dict)]
+        leader = max(
+            rows,
+            key=lambda item: float(
+                (item.get("metrics") or {}).get("risk_adjusted_return_delta") or float("-inf")
+            ),
+        )
+        raw_metrics = leader.get("metrics")
+        metrics = raw_metrics if isinstance(raw_metrics, dict) else {}
+        table.add_row("Quant 增益", _signed_or_accumulating(metrics.get("return_delta")))
+        table.add_row(
+            "Probability 增益",
+            _signed_or_accumulating(_attribution_value(competition, "PROBABILITY_VALUE_ADD")),
+        )
+        table.add_row(
+            "LLM 增益",
+            _signed_or_accumulating(_attribution_value(competition, "LLM_VALUE_ADD")),
+        )
+        table.add_row(
+            "自适应仓位增益",
+            _signed_or_accumulating(
+                _attribution_value(competition, "EXPOSURE_CONTROLLER_VALUE_ADD")
+            ),
+        )
+        table.add_row("证据样本量", str(leader.get("complete_samples", "证据积累中")))
+        table.add_row("是否满足晋升条件", str(leader.get("verdict", "证据积累中")))
+    else:
+        for label in ("Quant 增益", "Probability 增益", "LLM 增益", "自适应仓位增益"):
+            table.add_row(label, "证据积累中")
+        table.add_row("证据样本量", "证据积累中")
+    table.add_row("是否满足晋升条件", "证据积累中")
+    table.add_row(
+        "正式 LLM 影响", _percent(competition.get("formal_llm_influence"))
+    )
+    table.add_row(
+        "正式 Probability 影响",
+        _percent(competition.get("formal_probability_influence")),
+    )
+    console.print(table)
+
+
+def _attribution_value(competition: dict[str, object], layer: str) -> object:
+    rows = competition.get("attribution")
+    if not isinstance(rows, list):
+        return None
+    for item in rows:
+        if isinstance(item, dict) and item.get("layer") == layer:
+            return item.get("return_delta")
+    return None
+
+
 def _percent(value: object) -> str:
     return f"{float(value):.2%}" if isinstance(value, (int, float)) else "N/A"
 
@@ -333,3 +397,7 @@ def _signed_percent(value: object) -> str:
 
 def _number(value: object) -> str:
     return f"{float(value):.4f}" if isinstance(value, (int, float)) else "N/A"
+
+
+def _signed_or_accumulating(value: object) -> str:
+    return _signed_percent(value) if isinstance(value, (int, float)) else "证据积累中"

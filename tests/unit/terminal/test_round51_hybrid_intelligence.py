@@ -122,3 +122,60 @@ def test_round51_renderer_shows_counterfactual_and_risk_wall() -> None:
     assert "Pre-optimizer Top-N" in output
     assert "null" in output
     assert "组合语义风险" in output
+
+
+def test_round71_renderer_reports_evidence_accumulating_without_fake_percentages() -> None:
+    quant = QuantThesis(
+        symbol="AAA",
+        quant_rank=0.9,
+        expected_alpha=0.028,
+        uncertainty=0.2,
+    )
+    security = build_hybrid_security_view(
+        quant=quant,
+        thesis=None,
+        debate=None,
+        attribution=AlphaAttribution(
+            symbol="AAA",
+            mu_quant=0.028,
+            delta_mu_semantic_raw=0.0,
+            lambda_applied=0.0,
+            delta_mu_semantic_applied=0.0,
+            mu_final=0.028,
+            production_influence=0.0,
+        ),
+        company_name="AAA Corporation",
+        business_summary="Enterprise fixture business.",
+        latest_event="No production-grounded event overlay.",
+        influence_level=LLMInfluenceLevel.LEVEL_1_SHADOW_ALPHA,
+    )
+    stream = StringIO()
+    console = Console(file=stream, width=160, color_system=None)
+    render_hybrid_intelligence(
+        console,
+        status=HybridIntelligenceStatus(
+            provider="fixture",
+            model="fixture-v1",
+            data_freshness="CURRENT",
+            event_intelligence="AVAILABLE",
+            company_intelligence="AVAILABLE",
+            market_intelligence="AVAILABLE",
+            semantic_alpha="SHADOW",
+            promotion_gate="PROMOTION_BLOCKED_SAMPLE",
+            formal_economic_influence=0.0,
+        ),
+        securities=(security,),
+        production_closure={
+            "portfolio_competition": {
+                "current_production": "PURE_QUANT",
+                "strongest_challenger": None,
+                "variant_evaluations": [],
+                "formal_llm_influence": 0.0,
+                "formal_probability_influence": 0.0,
+            }
+        },
+    )
+    output = stream.getvalue()
+    assert "智能决策竞争" in output
+    assert "证据积累中" in output
+    assert "0.00%" in output

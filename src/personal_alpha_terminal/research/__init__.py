@@ -35,6 +35,22 @@ from personal_alpha_terminal.research.data_gate import (
     ResearchDataRequest,
     ResearchPurpose,
 )
+from personal_alpha_terminal.research.portfolio_competition import (
+    AttributionLayer,
+    AttributionRecord,
+    CompetitionEvaluation,
+    DecisionFreeze,
+    EvidenceClass,
+    OutcomeRecord,
+    OutcomeStatus,
+    PortfolioCompetitionLedger,
+    PortfolioVariant,
+    PromotionPolicy,
+    PromotionVerdict,
+    TournamentDecision,
+    VariantEvaluation,
+    build_tournament,
+)
 from personal_alpha_terminal.research.service import ResearchDataGateService
 
 __all__ = [
@@ -70,4 +86,18 @@ __all__ = [
     "resolve_symbol_vintage",
     "seal_locked_oos_manifest",
     "verify_locked_oos_manifest",
+    "AttributionLayer",
+    "AttributionRecord",
+    "CompetitionEvaluation",
+    "DecisionFreeze",
+    "EvidenceClass",
+    "OutcomeRecord",
+    "OutcomeStatus",
+    "PortfolioCompetitionLedger",
+    "PortfolioVariant",
+    "PromotionPolicy",
+    "PromotionVerdict",
+    "TournamentDecision",
+    "VariantEvaluation",
+    "build_tournament",
 ]
