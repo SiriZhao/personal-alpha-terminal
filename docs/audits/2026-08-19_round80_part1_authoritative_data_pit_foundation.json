@@ -1,0 +1,42 @@
+{
+  "round": "ROUND80_PART1",
+  "date": "2026-08-19",
+  "starting_sha": "0f760bdb7b751a430f09e939f7d5b83db5c58a2a",
+  "production_policy": "PURE_QUANT",
+  "probability_formal_influence": 0.0,
+  "llm_level": "L1_SHADOW_SCORING",
+  "llm_formal_influence": 0.0,
+  "auto_execution": "DISABLED",
+  "manual_confirmation": "REQUIRED",
+  "data_certification": "BLOCKED_DATA_QUALITY",
+  "authority_registry": "ROUND80-DATA-AUTHORITY-v1",
+  "migration_revision": "b7e0a2d4c5f6",
+  "startup_seconds": {
+    "first": 5.127,
+    "immediate_second": 4.933,
+    "no_refresh_frame": 4.969,
+    "doctor_acl_failure": 6.121
+  },
+  "tests": {
+    "round80_latest_focused_passed": 13,
+    "broader_focused_bundle_passed": 52,
+    "ruff": "PASS",
+    "mypy_strict": "PASS",
+    "secret_scan": "SECRET_SCAN_PASS",
+    "migration_temp_sqlite": "PASS"
+  },
+  "providers": {
+    "SEC_EDGAR_USER_AGENT": "PRESENT",
+    "OPENFIGI_API_KEY": "MISSING",
+    "ALPACA_CREDENTIAL": "MISSING"
+  },
+  "remaining_blockers": [
+    "immutable permanent-ID/ticker/lifecycle/constituent/delisting package",
+    "PIT raw OHLCV and corporate-action/total-return vintages",
+    "aligned PIT benchmark package",
+    "timestamped fundamentals/filings/events import",
+    "historical executable-open/tradability evidence",
+    "sealed locked-OOS package and manifest"
+  ],
+  "verdict": "ENGINEERING_PASS_WITH_DATA_CERTIFICATION_BLOCKED"
+}

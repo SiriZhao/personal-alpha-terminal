@@ -149,6 +149,45 @@ def _data_certification_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _data_authority_command(args: argparse.Namespace) -> int:
+    """Show the declared source authority posture without a provider call."""
+
+    from personal_alpha_terminal.data.authority import authority_status_document
+
+    document = authority_status_document()
+    output = getattr(args, "output", None)
+    if output is not None:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(
+            json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+    if getattr(args, "json", False):
+        # Rich may wrap long JSON string values at the terminal width.  This
+        # endpoint is explicitly machine-readable, so bypass styled rendering.
+        print(json.dumps(document, ensure_ascii=False, sort_keys=True), flush=True)
+    else:
+        console.print("ROUND80 数据权威来源状态（不代表历史数据已认证）")
+        resolutions = document["domain_resolutions"]
+        if not isinstance(resolutions, list):
+            raise ValueError("authority status has an invalid domain resolution payload")
+        for resolution in resolutions:
+            if not isinstance(resolution, dict):
+                continue
+            domain = resolution.get("domain", "UNKNOWN")
+            status = resolution.get("status", "UNKNOWN")
+            providers = resolution.get("providers", [])
+            blockers = resolution.get("blockers", [])
+            provider_text = ",".join(str(item) for item in providers) or "NONE"
+            console.print(f"- {domain}: {status}; providers={provider_text}")
+            if blockers:
+                console.print("  blockers=" + ",".join(str(item) for item in blockers))
+        console.print(str(document["certification_boundary"]))
+        if output is not None:
+            console.print(f"Machine-readable authority status: {output.resolve()}")
+    return 0
+
+
 def _locked_oos_command(args: argparse.Namespace) -> int:
     """Show the frozen-protocol status without opening an unverified OOS."""
 
@@ -2038,7 +2077,7 @@ def _doctor(config_path: Path) -> int:
             )
         )
     except (FileNotFoundError, OSError, RuntimeError, ValueError) as error:
-        logger.exception("Doctor startup check failed")
+        logger.warning("Doctor startup check failed: %s", type(error).__name__)
         checks.append(("FAIL", "Startup contract", f"{type(error).__name__}: {error}"))
     table = Table(title="PERSONAL ALPHA TERMINAL - DOCTOR")
     table.add_column("Status")
@@ -4213,6 +4252,12 @@ def build_parser() -> argparse.ArgumentParser:
     data_certification.add_argument("--input", type=Path, default=None)
     data_certification.add_argument("--output", type=Path, default=None)
     data_certification.add_argument("--procurement-manifest", type=Path, default=None)
+    data_authority = subparsers.add_parser(
+        "data-authority",
+        help="Show provider authority/PIT posture without provider network calls",
+    )
+    data_authority.add_argument("--json", action="store_true")
+    data_authority.add_argument("--output", type=Path, default=None)
     locked_oos = subparsers.add_parser(
         "locked-oos",
         help="Show the sealed locked-OOS protocol status without opening evaluation",
@@ -4911,6 +4956,8 @@ def main(argv: list[str] | None = None) -> int:
             return _data_evidence_command(args)
         if command == "data-certification":
             return _data_certification_command(args)
+        if command == "data-authority":
+            return _data_authority_command(args)
         if command == "locked-oos":
             return _locked_oos_command(args)
         if command == "production-replay":

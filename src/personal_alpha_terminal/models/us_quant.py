@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from decimal import Decimal
 
 from sqlalchemy import (
     JSON,
@@ -112,6 +113,158 @@ class IssuerSecurityIdentity(TimestampMixin, Base):
     evidence_identifier: Mapped[str | None] = mapped_column(String(512), nullable=True)
     evidence_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class SecurityLifecycleEvent(Base):
+    """Append-only cross-source lifecycle evidence for an internal security ID.
+
+    Existing listing, delisting, alias, and corporate-action tables remain the
+    operational records.  This unified ledger preserves source-native event
+    provenance, including unresolved predecessor/successor links, for an
+    eventual certified historical import.
+    """
+
+    __tablename__ = "security_lifecycle_events"
+    __table_args__ = (
+        CheckConstraint(
+            "event_type IN ('LISTING', 'DELISTING', 'SUSPENSION', 'TICKER_CHANGE', "
+            "'NAME_CHANGE', 'MERGER', 'ACQUISITION', 'SPINOFF', 'SPLIT', "
+            "'REVERSE_SPLIT', 'EXCHANGE_CHANGE', 'OTHER')",
+            name="valid_security_lifecycle_event_type",
+        ),
+        CheckConstraint(
+            "confidence >= 0 AND confidence <= 1",
+            name="valid_security_lifecycle_confidence",
+        ),
+        CheckConstraint(
+            "announcement_timestamp IS NULL OR announcement_timestamp <= known_at",
+            name="valid_security_lifecycle_announcement",
+        ),
+        UniqueConstraint(
+            "event_id",
+            "source",
+            "source_record_id",
+            name="uq_security_lifecycle_source_record",
+        ),
+        Index(
+            "ix_security_lifecycle_security_pit",
+            "security_id",
+            "effective_date",
+            "known_at",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True)
+    event_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    stock_id: Mapped[int | None] = mapped_column(
+        ForeignKey("security_master.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    issuer_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    security_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    old_ticker: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    new_ticker: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    old_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    new_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    effective_date: Mapped[date] = mapped_column(Date, nullable=False)
+    announcement_timestamp: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    known_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    exchange: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    reason: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    predecessor_security_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    successor_security_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_record_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    confidence: Mapped[Decimal] = mapped_column(Numeric(5, 4), nullable=False)
+
+
+class SecFilingEvidence(Base):
+    """Immutable SEC filing metadata, keyed by CIK and accession number."""
+
+    __tablename__ = "sec_filing_evidence"
+    __table_args__ = (
+        CheckConstraint("cik > 0", name="positive_sec_filing_cik"),
+        CheckConstraint(
+            "acceptance_datetime <= known_at AND known_at <= fetched_at",
+            name="valid_sec_filing_timestamps",
+        ),
+        UniqueConstraint("cik", "accession_number", name="uq_sec_filing_accession"),
+        Index("ix_sec_filing_known_at", "cik", "known_at"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True)
+    cik: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"), nullable=False, index=True
+    )
+    issuer_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    issuer_name: Mapped[str] = mapped_column(String(256), nullable=False)
+    accession_number: Mapped[str] = mapped_column(String(32), nullable=False)
+    form: Mapped[str] = mapped_column(String(32), nullable=False)
+    filing_date: Mapped[date] = mapped_column(Date, nullable=False)
+    report_period_end: Mapped[date | None] = mapped_column(Date, nullable=True)
+    acceptance_datetime: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    known_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    primary_document: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    source: Mapped[str] = mapped_column(String(64), nullable=False, default="sec_edgar")
+    source_url: Mapped[str] = mapped_column(String(1024), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    revision_identity: Mapped[str] = mapped_column(String(256), nullable=False)
+
+
+class SecCompanyFactEvidence(Base):
+    """One accepted SEC XBRL fact, retaining every filing revision immutably."""
+
+    __tablename__ = "sec_company_fact_evidence"
+    __table_args__ = (
+        CheckConstraint("cik > 0", name="positive_sec_fact_cik"),
+        CheckConstraint(
+            "acceptance_datetime <= known_at AND known_at <= fetched_at",
+            name="valid_sec_fact_timestamps",
+        ),
+        UniqueConstraint("revision_identity", name="uq_sec_fact_revision_identity"),
+        Index(
+            "ix_sec_fact_pit",
+            "cik",
+            "taxonomy",
+            "concept",
+            "known_at",
+            "period_end",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True)
+    filing_id: Mapped[int] = mapped_column(
+        ForeignKey("sec_filing_evidence.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    stock_id: Mapped[int | None] = mapped_column(
+        ForeignKey("security_master.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    issuer_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    cik: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"), nullable=False, index=True
+    )
+    taxonomy: Mapped[str] = mapped_column(String(64), nullable=False)
+    concept: Mapped[str] = mapped_column(String(128), nullable=False)
+    value: Mapped[Decimal] = mapped_column(Numeric(36, 10), nullable=False)
+    unit: Mapped[str] = mapped_column(String(32), nullable=False)
+    period_start: Mapped[date | None] = mapped_column(Date, nullable=True)
+    period_end: Mapped[date] = mapped_column(Date, nullable=False)
+    fiscal_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    fiscal_period: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    form: Mapped[str] = mapped_column(String(32), nullable=False)
+    filing_date: Mapped[date] = mapped_column(Date, nullable=False)
+    acceptance_datetime: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    accession_number: Mapped[str] = mapped_column(String(32), nullable=False)
+    source: Mapped[str] = mapped_column(String(64), nullable=False)
+    known_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revision_identity: Mapped[str] = mapped_column(String(512), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
 
 
 class FundamentalVintage(Base):

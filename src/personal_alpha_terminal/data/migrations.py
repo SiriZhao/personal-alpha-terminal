@@ -5,6 +5,8 @@ import sqlalchemy as sa
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import text
+from sqlalchemy.engine import make_url
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.sql.type_api import TypeEngine
 
 from personal_alpha_terminal.core.config import Settings, get_settings
@@ -20,6 +22,19 @@ def migration_root() -> Path:
     if bundled_root is not None:
         return Path(str(bundled_root))
     return Path(__file__).resolve().parents[3]
+
+
+def _migration_target(database_url: str) -> str:
+    """Return a useful target without exposing database credentials."""
+
+    parsed = make_url(database_url)
+    if parsed.get_backend_name() == "sqlite":
+        if parsed.database is None:
+            return "sqlite://"
+        return str(Path(parsed.database).resolve())
+    host = parsed.host or "local"
+    database = parsed.database or "unknown"
+    return f"{parsed.get_backend_name()}://{host}/{database}"
 
 
 def upgrade_database(settings: Settings | None = None) -> None:
@@ -40,6 +55,7 @@ def upgrade_database(settings: Settings | None = None) -> None:
         "sqlalchemy.url",
         resolved.database_url.replace("%", "%%"),
     )
+    target = _migration_target(resolved.database_url)
     engine = build_engine(
         resolved.database_url,
         echo=resolved.sql_echo,
@@ -71,5 +87,12 @@ def upgrade_database(settings: Settings | None = None) -> None:
                         {"lock_id": MIGRATION_ADVISORY_LOCK_ID},
                     )
                     connection.commit()
+    except SQLAlchemyError as error:
+        reason = str(error).splitlines()[0]
+        raise RuntimeError(
+            "database migration failed "
+            f"operation=alembic-upgrade target={target} "
+            f"error={type(error).__name__}: {reason}"
+        ) from error
     finally:
         engine.dispose()

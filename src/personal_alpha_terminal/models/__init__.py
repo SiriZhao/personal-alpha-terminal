@@ -136,7 +136,10 @@ from personal_alpha_terminal.models.us_quant import (
     ModelRegistryRecord,
     PITTotalReturnVersion,
     ResearchDataCertification,
+    SecCompanyFactEvidence,
+    SecFilingEvidence,
     SecurityIdentifierHistory,
+    SecurityLifecycleEvent,
 )
 
 __all__ = [
@@ -233,8 +236,11 @@ __all__ = [
     "ScenarioDefinitionModel",
     "ScenarioRiskFactor",
     "ScenarioSimulationRun",
+    "SecCompanyFactEvidence",
+    "SecFilingEvidence",
     "SecurityMaster",
     "SecurityIdentifierHistory",
+    "SecurityLifecycleEvent",
     "Stock",
     "SymbolAlias",
     "TradingStatus",
