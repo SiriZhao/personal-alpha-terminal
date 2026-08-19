@@ -1,0 +1,148 @@
+{
+  "data_certification_status": "BLOCKED_DATA_QUALITY",
+  "evaluation": {
+    "adaptive_exposure": "RETAIN_SHADOW",
+    "alpha_engine3": "RETAIN_SHADOW",
+    "alpha_engine3_attribution": {
+      "confidence_interval": null,
+      "cost_delta": null,
+      "evidence_class": "UNAVAILABLE",
+      "reason_codes": [
+        "ALPHA_ENGINE3_PAIRED_MEASUREMENT_REQUIRED"
+      ],
+      "sample_count": 0,
+      "selection_excess_return_delta": null,
+      "selection_return_delta": null,
+      "sharpe_delta": null,
+      "turnover_delta": null,
+      "verdict": "BLOCKED_DATA_QUALITY"
+    },
+    "blockers": [
+      "CERTIFIED_DATA_FOUNDATION_REQUIRED",
+      "LOCKED_OOS_PROTOCOL_REQUIRED",
+      "LOCKED_OOS_MANIFEST_MISSING",
+      "CERTIFIED_REPLAY_REQUIRED",
+      "PURE_QUANT_BASELINE_REQUIRED"
+    ],
+    "economic_claims_allowed": false,
+    "evaluated_at": "2026-08-19T14:56:41.817736Z",
+    "llm_formal_influence": 0.0,
+    "llm_level": "L1_SHADOW_SCORING",
+    "probability": "RETAIN_SHADOW",
+    "probability_formal_influence": 0.0,
+    "production_policy": "PURE_QUANT",
+    "protocol": "ROUND78-CONTROLLED-INTELLIGENCE-TOURNAMENT-v1",
+    "strongest_challenger": null,
+    "synchronized": true,
+    "tournament_hash": null,
+    "variant_results": [
+      {
+        "confidence_interval": null,
+        "cost_delta": null,
+        "downside_capture_delta": null,
+        "excess_return_delta": null,
+        "exposure_delta": null,
+        "max_drawdown_delta": null,
+        "policy": "PURE_QUANT",
+        "reason_codes": [
+          "PURE_QUANT_BASELINE_REQUIRED"
+        ],
+        "recovery_participation_delta": null,
+        "return_delta": null,
+        "sample_count": 0,
+        "sharpe_delta": null,
+        "turnover_delta": null,
+        "upside_capture_delta": null,
+        "verdict": "BLOCKED_DATA_QUALITY"
+      },
+      {
+        "confidence_interval": null,
+        "cost_delta": null,
+        "downside_capture_delta": null,
+        "excess_return_delta": null,
+        "exposure_delta": null,
+        "max_drawdown_delta": null,
+        "policy": "QUANT_PLUS_PROBABILITY",
+        "reason_codes": [
+          "MISSING_PAIRED_MEASUREMENT"
+        ],
+        "recovery_participation_delta": null,
+        "return_delta": null,
+        "sample_count": 0,
+        "sharpe_delta": null,
+        "turnover_delta": null,
+        "upside_capture_delta": null,
+        "verdict": "BLOCKED_DATA_QUALITY"
+      },
+      {
+        "confidence_interval": null,
+        "cost_delta": null,
+        "downside_capture_delta": null,
+        "excess_return_delta": null,
+        "exposure_delta": null,
+        "max_drawdown_delta": null,
+        "policy": "QUANT_PLUS_LLM",
+        "reason_codes": [
+          "MISSING_PAIRED_MEASUREMENT"
+        ],
+        "recovery_participation_delta": null,
+        "return_delta": null,
+        "sample_count": 0,
+        "sharpe_delta": null,
+        "turnover_delta": null,
+        "upside_capture_delta": null,
+        "verdict": "BLOCKED_DATA_QUALITY"
+      },
+      {
+        "confidence_interval": null,
+        "cost_delta": null,
+        "downside_capture_delta": null,
+        "excess_return_delta": null,
+        "exposure_delta": null,
+        "max_drawdown_delta": null,
+        "policy": "QUANT_PLUS_PROBABILITY_PLUS_LLM",
+        "reason_codes": [
+          "MISSING_PAIRED_MEASUREMENT"
+        ],
+        "recovery_participation_delta": null,
+        "return_delta": null,
+        "sample_count": 0,
+        "sharpe_delta": null,
+        "turnover_delta": null,
+        "upside_capture_delta": null,
+        "verdict": "BLOCKED_DATA_QUALITY"
+      },
+      {
+        "confidence_interval": null,
+        "cost_delta": null,
+        "downside_capture_delta": null,
+        "excess_return_delta": null,
+        "exposure_delta": null,
+        "max_drawdown_delta": null,
+        "policy": "FULL_INTELLIGENCE_ADAPTIVE_EXPOSURE",
+        "reason_codes": [
+          "MISSING_PAIRED_MEASUREMENT"
+        ],
+        "recovery_participation_delta": null,
+        "return_delta": null,
+        "sample_count": 0,
+        "sharpe_delta": null,
+        "turnover_delta": null,
+        "upside_capture_delta": null,
+        "verdict": "BLOCKED_DATA_QUALITY"
+      }
+    ]
+  },
+  "locked_oos_status": {
+    "blockers": [
+      "CERTIFIED_DATA_FOUNDATION_REQUIRED",
+      "LOCKED_OOS_MANIFEST_MISSING"
+    ],
+    "manifest_hash": null,
+    "promotion_allowed": false,
+    "seal_state": null,
+    "status": "BLOCKED_DATA_QUALITY"
+  },
+  "operator_message_zh": "智能提升竞赛未获得经济结论：当前仍保持 Production Quant，Probability/LLM 正式影响均为 0，Adaptive Exposure 保持影子挑战者。",
+  "protocol": "ROUND78-CONTROLLED-INTELLIGENCE-TOURNAMENT-v1"
+}

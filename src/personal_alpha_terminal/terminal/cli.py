@@ -297,6 +297,58 @@ def _alpha_diagnosis_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _intelligence_tournament_command(args: argparse.Namespace) -> int:
+    """Show ROUND78's evidence-gated tournament status without opening OOS."""
+
+    from personal_alpha_terminal.research.certified_data import current_data_certification
+    from personal_alpha_terminal.research.intelligence_tournament import (
+        current_tournament_status,
+        render_tournament_report,
+    )
+    from personal_alpha_terminal.research.locked_oos_protocol import (
+        load_locked_oos_protocol,
+        protocol_status,
+    )
+
+    manifest_path = getattr(args, "manifest", None)
+    manifest = load_locked_oos_protocol(manifest_path) if manifest_path is not None else None
+    certification = current_data_certification()
+    oos = protocol_status(
+        manifest,
+        data_certification_status=certification.overall_status,
+    )
+    evaluation = current_tournament_status(
+        data_certification_status=certification.overall_status.value,
+        locked_oos_status=oos.status.value,
+        locked_oos_manifest_hash=oos.manifest_hash,
+    )
+    document = {
+        "protocol": "ROUND78-CONTROLLED-INTELLIGENCE-TOURNAMENT-v1",
+        "evaluation": evaluation.document(),
+        "data_certification_status": certification.overall_status.value,
+        "locked_oos_status": oos.document(),
+        "operator_message_zh": (
+            "智能提升竞赛未获得经济结论：当前仍保持 Production Quant，"
+            "Probability/LLM 正式影响均为 0，Adaptive Exposure 保持影子挑战者。"
+        ),
+    }
+    output = getattr(args, "output", None)
+    if output is not None:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(
+            json.dumps(document, default=str, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+    if getattr(args, "json", False):
+        console.print(
+            json.dumps(document, default=str, ensure_ascii=False, indent=2, sort_keys=True)
+        )
+    else:
+        console.print(render_tournament_report(evaluation))
+        console.print(document["operator_message_zh"])
+    return 0
+
+
 def _alpha_engine3_reality_command(args: argparse.Namespace) -> int:
     from personal_alpha_terminal.research.data_evidence import (
         assess_locked_oos,
@@ -4142,6 +4194,13 @@ def build_parser() -> argparse.ArgumentParser:
     alpha_diagnosis.add_argument("--json", action="store_true")
     alpha_diagnosis.add_argument("--manifest", type=Path, default=None)
     alpha_diagnosis.add_argument("--output", type=Path, default=None)
+    intelligence_tournament = subparsers.add_parser(
+        "intelligence-tournament",
+        help="Show evidence-gated ROUND78 intelligence promotion tournament status",
+    )
+    intelligence_tournament.add_argument("--json", action="store_true")
+    intelligence_tournament.add_argument("--manifest", type=Path, default=None)
+    intelligence_tournament.add_argument("--output", type=Path, default=None)
     alpha_reality = subparsers.add_parser(
         "alpha-engine3-reality",
         help="Show compact ROUND68 Alpha Engine 3 performance-evidence status",
@@ -4818,6 +4877,8 @@ def main(argv: list[str] | None = None) -> int:
             return _production_replay_command(args)
         if command == "alpha-diagnosis":
             return _alpha_diagnosis_command(args)
+        if command == "intelligence-tournament":
+            return _intelligence_tournament_command(args)
         if command == "alpha-engine3-reality":
             return _alpha_engine3_reality_command(args)
         if command == "adaptive-exposure":
