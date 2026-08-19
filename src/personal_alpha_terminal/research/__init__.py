@@ -92,6 +92,22 @@ from personal_alpha_terminal.research.portfolio_competition import (
     VariantEvaluation,
     build_tournament,
 )
+from personal_alpha_terminal.research.production_parity_replay import (
+    HistoricalLLMEvidence,
+    ProductionParityReplayEngine,
+    ReplayAccounting,
+    ReplayArtifact,
+    ReplayDecision,
+    ReplayEvidenceClass,
+    ReplayExecutionAssumption,
+    ReplayOutcomeState,
+    ReplayPortfolioState,
+    ReplayRunResult,
+    ReplayVariant,
+    persist_replay_artifact,
+    production_parity_replay_status,
+    validate_synchronized_variants,
+)
 from personal_alpha_terminal.research.service import ResearchDataGateService
 
 __all__ = [
@@ -155,6 +171,20 @@ __all__ = [
     "TournamentDecision",
     "VariantEvaluation",
     "build_tournament",
+    "HistoricalLLMEvidence",
+    "ProductionParityReplayEngine",
+    "ReplayAccounting",
+    "ReplayArtifact",
+    "ReplayDecision",
+    "ReplayEvidenceClass",
+    "ReplayExecutionAssumption",
+    "ReplayOutcomeState",
+    "ReplayPortfolioState",
+    "ReplayRunResult",
+    "ReplayVariant",
+    "persist_replay_artifact",
+    "production_parity_replay_status",
+    "validate_synchronized_variants",
     "ForwardShadowReadiness",
     "ReadinessCheck",
     "ReadinessState",

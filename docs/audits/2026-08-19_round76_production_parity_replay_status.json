@@ -1,0 +1,23 @@
+{
+  "data_certification_status": "BLOCKED_DATA_QUALITY",
+  "execution": "SIMULATION_ONLY_NO_BROKER",
+  "manual_execution_boundary": "MANUAL_CONFIRMATION_REQUIRED",
+  "operator_message_zh": "历史回放未启动：必须先具备认证 PIT/生存偏差/基准/可交易性数据以及已密封 OOS 协议。",
+  "protocol": "ROUND76-PRODUCTION-PARITY-REPLAY-v1",
+  "status": {
+    "artifacts": [],
+    "blockers": [
+      "CERTIFIED_PIT_SURVIVORSHIP_BENCHMARK_TRADABILITY_DATA_REQUIRED",
+      "LOCKED_OOS_PROTOCOL_REQUIRED"
+    ],
+    "status": "BLOCKED_DATA_QUALITY"
+  },
+  "variants": [
+    "PURE_QUANT",
+    "ALPHA_ENGINE3_CHALLENGER",
+    "QUANT_PLUS_PROBABILITY",
+    "QUANT_PLUS_LLM",
+    "QUANT_PLUS_PROBABILITY_PLUS_LLM",
+    "FULL_INTELLIGENCE_ADAPTIVE_EXPOSURE"
+  ]
+}

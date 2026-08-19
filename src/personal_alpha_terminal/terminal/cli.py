@@ -205,6 +205,57 @@ def _locked_oos_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _production_replay_command(args: argparse.Namespace) -> int:
+    """Show ROUND76 readiness without opening OOS or executing a replay."""
+
+    from personal_alpha_terminal.research.certified_data import current_data_certification
+    from personal_alpha_terminal.research.data_evidence import EvidenceStatus
+    from personal_alpha_terminal.research.locked_oos_protocol import load_locked_oos_protocol
+    from personal_alpha_terminal.research.production_parity_replay import (
+        ReplayVariant,
+        production_parity_replay_status,
+    )
+
+    manifest_path = getattr(args, "manifest", None)
+    manifest = load_locked_oos_protocol(manifest_path) if manifest_path is not None else None
+    certification = current_data_certification()
+    status = production_parity_replay_status(
+        data_certification=certification,
+        locked_oos_manifest=manifest,
+    )
+    document = {
+        "protocol": "ROUND76-PRODUCTION-PARITY-REPLAY-v1",
+        "status": status.document(),
+        "data_certification_status": certification.overall_status.value,
+        "execution": "SIMULATION_ONLY_NO_BROKER",
+        "manual_execution_boundary": "MANUAL_CONFIRMATION_REQUIRED",
+        "variants": [item.value for item in ReplayVariant],
+        "operator_message_zh": (
+            "历史回放未启动：必须先具备认证 PIT/生存偏差/基准/可交易性数据以及已密封 OOS 协议。"
+            if status.status is not EvidenceStatus.PASS
+            else "历史回放已具备启动前置条件；仍仅允许模拟执行。"
+        ),
+    }
+    output = getattr(args, "output", None)
+    if output is not None:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(
+            json.dumps(document, default=str, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+    if getattr(args, "json", False):
+        console.print(
+            json.dumps(document, default=str, ensure_ascii=False, indent=2, sort_keys=True)
+        )
+    else:
+        console.print(
+            f"ROUND76 生产同构历史回放 | status={status.status.value} | "
+            "execution=SIMULATION_ONLY_NO_BROKER"
+        )
+        console.print("阻塞原因: " + "; ".join(status.blockers))
+    return 0
+
+
 def _alpha_engine3_reality_command(args: argparse.Namespace) -> int:
     from personal_alpha_terminal.research.data_evidence import (
         assess_locked_oos,
@@ -4036,6 +4087,13 @@ def build_parser() -> argparse.ArgumentParser:
     locked_oos.add_argument("--json", action="store_true")
     locked_oos.add_argument("--manifest", type=Path, default=None)
     locked_oos.add_argument("--output", type=Path, default=None)
+    production_replay = subparsers.add_parser(
+        "production-replay",
+        help="Show production-parity replay readiness without opening historical evaluation",
+    )
+    production_replay.add_argument("--json", action="store_true")
+    production_replay.add_argument("--manifest", type=Path, default=None)
+    production_replay.add_argument("--output", type=Path, default=None)
     alpha_reality = subparsers.add_parser(
         "alpha-engine3-reality",
         help="Show compact ROUND68 Alpha Engine 3 performance-evidence status",
@@ -4708,6 +4766,8 @@ def main(argv: list[str] | None = None) -> int:
             return _data_certification_command(args)
         if command == "locked-oos":
             return _locked_oos_command(args)
+        if command == "production-replay":
+            return _production_replay_command(args)
         if command == "alpha-engine3-reality":
             return _alpha_engine3_reality_command(args)
         if command == "adaptive-exposure":
@@ -4864,3 +4924,4 @@ def main(argv: list[str] | None = None) -> int:
         logger.exception("Command failed")
         console.print(f"ERROR: {type(error).__name__}: {error}")
         return 2
+
