@@ -3,8 +3,11 @@ from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 
+from personal_alpha_terminal.core.effective_config import default_config_text
 from personal_alpha_terminal.terminal import cli as terminal_cli
+from personal_alpha_terminal.terminal import daily_renderer
 from personal_alpha_terminal.terminal.config import TerminalConfig, load_config
+from personal_alpha_terminal.terminal.instance import ConsoleInstanceLock
 
 
 def _config(tmp_path: Path) -> TerminalConfig:
@@ -34,9 +37,16 @@ def test_daily_cli_consumes_only_application_daily_result(
     service = SimpleNamespace(run_daily_quant_report=lambda **_kwargs: result)
     monkeypatch.setattr(terminal_cli, "load_config", lambda _path: _config(tmp_path))
     monkeypatch.setattr(terminal_cli, "_application_service", lambda **_kwargs: service)
+    from personal_alpha_terminal.terminal import instance as terminal_instance
+
+    monkeypatch.setattr(
+        terminal_instance,
+        "ConsoleInstanceLock",
+        lambda: ConsoleInstanceLock(tmp_path / "console-instance.json"),
+    )
     rendered: list[object] = []
     monkeypatch.setattr(
-        terminal_cli,
+        daily_renderer,
         "render_daily_quant_result",
         lambda value, _console: rendered.append(value),
     )
@@ -50,7 +60,14 @@ def test_daily_redirected_tty_eof_does_not_crash(tmp_path: Path, monkeypatch) ->
     service = SimpleNamespace(run_daily_quant_report=lambda **_kwargs: result)
     monkeypatch.setattr(terminal_cli, "load_config", lambda _path: _config(tmp_path))
     monkeypatch.setattr(terminal_cli, "_application_service", lambda **_kwargs: service)
-    monkeypatch.setattr(terminal_cli, "render_daily_quant_result", lambda *_args: None)
+    from personal_alpha_terminal.terminal import instance as terminal_instance
+
+    monkeypatch.setattr(
+        terminal_instance,
+        "ConsoleInstanceLock",
+        lambda: ConsoleInstanceLock(tmp_path / "console-instance.json"),
+    )
+    monkeypatch.setattr(daily_renderer, "render_daily_quant_result", lambda *_args: None)
     monkeypatch.setattr(terminal_cli.sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(
         terminal_cli.console,
@@ -115,7 +132,7 @@ def test_provider_status_is_preflight_only_and_redacts_credentials(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:
     config_path = tmp_path / "config.yaml"
-    config_path.write_text(terminal_cli.default_config_text(), encoding="utf-8")
+    config_path.write_text(default_config_text(), encoding="utf-8")
     monkeypatch.delenv("TWELVE_DATA_API_KEY", raising=False)
     monkeypatch.delenv("ALPHA_VANTAGE_API_KEY", raising=False)
     result = terminal_cli.main(

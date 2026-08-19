@@ -142,5 +142,6 @@ def _expected_max_sharpe(experiments: int, skew: float, kurtosis: float) -> floa
     # E[max] ~ (1-gamma) * Phi^{-1}(1 - 1/N) + gamma * Phi^{-1}(1 - 1/(N*e))
     euler = 0.5772156649
     q = 1.0 - 1.0 / experiments
-    expected_max = (1 - euler) * norm.ppf(q) + euler * norm.ppf(q ** math.e)
+    upper_q = 1.0 - 1.0 / (experiments * math.e)
+    expected_max = (1 - euler) * norm.ppf(q) + euler * norm.ppf(upper_q)
     return float(expected_max)

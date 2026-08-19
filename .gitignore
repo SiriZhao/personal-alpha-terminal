@@ -14,6 +14,7 @@ __pycache__/
 .pat-test-*/
 .var/
 .mypy_cache/
+.mypy-cache-*/
 .ruff_cache/
 .tox/
 .nox/
@@ -46,6 +47,8 @@ source_audit_export/
 logs/
 temp/
 /reports/
+/reports/pytest-basetemp-*/
+/audit-tmp/
 /docs/reports/
 diagnostics/
 updates/

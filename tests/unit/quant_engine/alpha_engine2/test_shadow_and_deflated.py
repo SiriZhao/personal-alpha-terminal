@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from scipy.stats import norm
 
 from personal_alpha_terminal.quant_engine.alpha_engine2 import (
     ShadowLedger,
@@ -127,6 +128,16 @@ def test_deflated_evidence_punishes_many_trials() -> None:
     many = deflate_sharpe(1.5, 100)
     assert single == 1.5
     assert many < 1.5
+
+
+def test_deflated_sharpe_uses_the_documented_expected_maximum_formula() -> None:
+    experiments = 100
+    euler = 0.5772156649
+    expected_max = (
+        (1 - euler) * norm.ppf(1 - 1 / experiments)
+        + euler * norm.ppf(1 - 1 / (experiments * 2.718281828459045))
+    )
+    assert deflate_sharpe(2.0, experiments) == pytest.approx(2.0 - expected_max)
 
 
 def test_deflated_evidence_detects_inflation() -> None:
