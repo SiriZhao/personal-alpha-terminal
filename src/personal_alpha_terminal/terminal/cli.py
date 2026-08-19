@@ -22,28 +22,26 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from personal_alpha_terminal.terminal.broad_universe_cli import broad_universe_command
-from personal_alpha_terminal.terminal.config import default_config_text, load_config
-from personal_alpha_terminal.terminal.daily_renderer import render_daily_quant_result
 from personal_alpha_terminal.terminal.fast_start import (
+    FastStartRuntimeConfig,
     build_fast_start_snapshot,
     claim_refresh_schedule,
+    fast_start_config_hash,
+    load_fast_start_config,
     read_refresh_state,
     refresh_is_active,
     refresh_state_path,
     release_refresh_schedule,
     write_refresh_state,
 )
-from personal_alpha_terminal.terminal.forward_shadow_cli import (
-    forward_shadow_command,
-    run_forward_shadow_daily,
-)
-from personal_alpha_terminal.terminal.forward_track_cli import forward_track_command
-from personal_alpha_terminal.terminal.intelligence_cli import intelligence_command
-from personal_alpha_terminal.terminal.market_sessions import MarketSessionCalendar
-from personal_alpha_terminal.terminal.round7_cli import round7_research_command
-from personal_alpha_terminal.terminal.round8_cli import round8_research_command
-from personal_alpha_terminal.terminal.round9_cli import round9_research_command
+
+
+def load_config(path: Path) -> EffectiveRuntimeConfig:
+    """Lazy configuration import; tests may still monkeypatch this seam."""
+
+    from personal_alpha_terminal.terminal.config import load_config as resolved_load_config
+
+    return resolved_load_config(path)
 
 if TYPE_CHECKING:
     from personal_alpha_terminal.application import ApplicationService
@@ -152,9 +150,27 @@ def _data_certification_command(args: argparse.Namespace) -> int:
 def _data_authority_command(args: argparse.Namespace) -> int:
     """Show the declared source authority posture without a provider call."""
 
-    from personal_alpha_terminal.data.authority import authority_status_document
+    from personal_alpha_terminal.data.authority import (
+        authority_status_document,
+        declared_domain_audits,
+        declared_provider_health,
+        default_provider_registry,
+    )
 
     document = authority_status_document()
+    provider_metadata = default_provider_registry().metadata()
+    document["domain_data_quality_audit"] = [
+        item.document() for item in declared_domain_audits(provider_metadata)
+    ]
+    document["provider_operational_health"] = [
+        {
+            "provider_id": item.provider_id,
+            "status": item.status.value,
+            "reason": item.reason,
+            "checked_at": item.checked_at.isoformat() if item.checked_at else None,
+        }
+        for item in declared_provider_health(provider_metadata)
+    ]
     output = getattr(args, "output", None)
     if output is not None:
         output.parent.mkdir(parents=True, exist_ok=True)
@@ -182,6 +198,7 @@ def _data_authority_command(args: argparse.Namespace) -> int:
             console.print(f"- {domain}: {status}; providers={provider_text}")
             if blockers:
                 console.print("  blockers=" + ",".join(str(item) for item in blockers))
+        console.print("数据质量审计：尚未导入外部历史证据的域保持 BLOCKED/PARTIAL，不做虚假认证。")
         console.print(str(document["certification_boundary"]))
         if output is not None:
             console.print(f"Machine-readable authority status: {output.resolve()}")
@@ -599,7 +616,7 @@ def _startup_panel(snapshot: dict[str, object]) -> None:
 
 
 def _write_fast_start_trace(
-    config: EffectiveRuntimeConfig,
+    config: FastStartRuntimeConfig,
     snapshot: dict[str, object],
     *,
     scheduling_seconds: float,
@@ -642,7 +659,7 @@ def _write_fast_start_trace(
 def _launch_background_refresh(
     config_path: Path,
     *,
-    config: EffectiveRuntimeConfig,
+    config: FastStartRuntimeConfig,
     locale: str,
 ) -> dict[str, object]:
     """Schedule exactly one detached refresh worker; never run it in the UI process."""
@@ -727,19 +744,45 @@ def _launch_background_refresh(
         release_refresh_schedule(state_path)
 
 
-def _fast_start_daily(config_path: Path, *, locale: str) -> int:
+def _fast_start_daily(
+    config_path: Path,
+    *,
+    locale: str,
+    schedule_refresh: bool = True,
+) -> int:
     """Phase A: render local state then defer all remote/quant work to a worker."""
 
-    config = load_config(config_path)
+    try:
+        config = load_fast_start_config(config_path)
+    except FileNotFoundError:
+        # A missing config is a bounded local configuration error, not a
+        # reason to import providers.  Retain the historic test seam and let
+        # the canonical resolver supply its diagnostic-safe defaults.
+        resolved = load_config(config_path)
+        config = FastStartRuntimeConfig(
+            report_dir=resolved.report_dir,
+            database_url=str(resolved.settings.database_url),
+            source_config_hash=f"MISSING_CONFIG:{config_path.resolve()}",
+        )
     state_path = refresh_state_path(config.report_dir)
     started = perf_counter()
     existing_refresh = read_refresh_state(state_path)
     snapshot = build_fast_start_snapshot(
-        database_url=str(config.settings.database_url),
+        database_url=config.database_url,
         report_dir=config.report_dir,
         refresh_state=existing_refresh,
     )
-    if _completed_analysis_is_current(existing_refresh, config):
+    if not schedule_refresh:
+        scheduled = {
+            "state": "NO_REFRESH",
+            "current_stage": "local cached state",
+            "actionable": False,
+            "reason": "No-refresh mode is diagnostic only; cached output is not actionable.",
+        }
+        snapshot["refresh"] = scheduled
+        snapshot["recommendation_actionable"] = False
+        snapshot["actionability_reason"] = str(scheduled["reason"])
+    elif _completed_analysis_is_current(existing_refresh, config):
         scheduled = existing_refresh or {"state": "BLOCKED"}
         snapshot["refresh"] = scheduled
         snapshot["state"] = str(scheduled.get("state", "BLOCKED"))
@@ -764,6 +807,8 @@ def _fast_start_daily(config_path: Path, *, locale: str) -> int:
     _write_fast_start_trace(config, snapshot, scheduling_seconds=perf_counter() - started)
     if str(scheduled.get("state")) == "DEGRADED":
         console.print("后台刷新未启动；请根据上方的精确路径/错误修复本地权限后重试。")
+    elif not schedule_refresh:
+        console.print("无刷新诊断模式：仅显示本地缓存，建议不可执行。")
     elif _completed_analysis_is_current(existing_refresh, config):
         console.print("当前数据会话和已完成分析未变化；复用已验证结果，未启动重复刷新。")
     else:
@@ -773,13 +818,13 @@ def _fast_start_daily(config_path: Path, *, locale: str) -> int:
 
 def _completed_analysis_is_current(
     state: dict[str, object] | None,
-    config: EffectiveRuntimeConfig,
+    config: FastStartRuntimeConfig,
 ) -> bool:
     """Reuse only an exactly current completed analysis, never a stale display."""
 
     if state is None or not bool(state.get("analysis_completed")):
         return False
-    if str(state.get("runtime_config_hash")) != config.runtime_config_hash:
+    if str(state.get("fast_start_config_hash")) != config.source_config_hash:
         return False
     if str(state.get("state")) not in {"READY_CURRENT", "BLOCKED"}:
         return False
@@ -974,6 +1019,10 @@ def run_daily(
     try:
         config = load_config(config_path)
         if config.settings.runtime_profile == "FORWARD_SHADOW_VALIDATION":
+            from personal_alpha_terminal.terminal.forward_shadow_cli import (
+                run_forward_shadow_daily,
+            )
+
             if decision_time is not None:
                 raise ValueError("use forward-shadow run --decision-time in Forward Shadow profile")
             return run_forward_shadow_daily(
@@ -1063,6 +1112,8 @@ def run_daily(
             )
         )
         return 2
+    from personal_alpha_terminal.terminal.daily_renderer import render_daily_quant_result
+
     if locale == "zh-CN":
         render_daily_quant_result(result, console)
     else:
@@ -1102,6 +1153,10 @@ def run_daily(
                 "data_as_of": data_metadata.get("latest_completed_session"),
                 "data_snapshot": data_metadata.get("snapshot_id"),
                 "runtime_config_hash": config.runtime_config_hash,
+                "fast_start_config_hash": fast_start_config_hash(
+                    config_path,
+                    database_url=str(config.settings.database_url),
+                ),
                 "total_timeout_seconds": _BACKGROUND_REFRESH_TIMEOUT_SECONDS,
             },
         )
@@ -1853,7 +1908,59 @@ def _portfolio_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _fast_database_write_probe(database_url: str) -> str | None:
+    """Detect SQLite ACL/lock failure before migrations or provider imports.
+
+    SQLite can grant ``BEGIN IMMEDIATE`` even when a subsequent schema write
+    will fail under a Windows ACL.  A uniquely named probe table is created
+    and rolled back in the same transaction, so it cannot persist while still
+    exercising the actual migration-write capability.
+    """
+
+    if not database_url.startswith("sqlite:///"):
+        return None
+    database = Path(database_url.removeprefix("sqlite:///"))
+    try:
+        connection = sqlite3.connect(str(database), timeout=1)
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            probe_name = f"__pat_doctor_write_probe_{os.getpid()}"
+            connection.execute(f"CREATE TABLE {probe_name} (id INTEGER)")
+            connection.rollback()
+        finally:
+            connection.close()
+    except sqlite3.Error as error:
+        return (
+            "operation=BEGIN IMMEDIATE;CREATE TABLE;ROLLBACK "
+            f"path={database.resolve()} error={type(error).__name__}: {error}"
+        )
+    return None
+
+
 def _doctor(config_path: Path) -> int:
+    """Run diagnostics, failing fast before heavyweight imports on local DB ACL errors."""
+
+    try:
+        fast_config = load_fast_start_config(config_path)
+        database_error = _fast_database_write_probe(fast_config.database_url)
+    except (OSError, ValueError) as error:
+        database_error = f"configuration preflight failed: {type(error).__name__}: {error}"
+        fast_config = None
+    if database_error is not None:
+        table = Table(show_header=True, header_style="bold cyan")
+        table.add_column("Status")
+        table.add_column("Check")
+        table.add_column("Detail")
+        table.add_row("PASS", "Config", str(config_path.resolve()))
+        table.add_row("FAIL", "Database write preflight", database_error)
+        console.print(
+            Panel(
+                table,
+                title="PERSONAL ALPHA TERMINAL - DOCTOR (FAIL FAST)",
+                border_style="red",
+            )
+        )
+        return 2
     checks: list[tuple[str, str, str]] = []
     try:
         config = load_config(config_path)
@@ -2049,6 +2156,8 @@ def _doctor(config_path: Path) -> int:
         diagnostics = application.get_diagnostic_summary()
         checks.append(("PASS", "Migration", str(diagnostics.get("migration", "unknown"))))
         checks.append(("PASS", "Data directory", str(diagnostics.get("data_directory", "unknown"))))
+        from personal_alpha_terminal.terminal.market_sessions import MarketSessionCalendar
+
         market = MarketSessionCalendar(
             nasdaq_23h_enabled=config.nasdaq_23h_enabled,
             nasdaq_23h_effective_date=config.nasdaq_23h_effective_date,
@@ -4944,6 +5053,8 @@ def main(argv: list[str] | None = None) -> int:
     command = args.command or "daily"
     try:
         if command == "init-config":
+            from personal_alpha_terminal.terminal.config import default_config_text
+
             if args.config.exists():
                 console.print(f"Configuration already exists: {args.config}")
                 return 0
@@ -5060,20 +5171,34 @@ def main(argv: list[str] | None = None) -> int:
         if command == "intelligence":
             if getattr(args, "intelligence_action", None) == "brief":
                 return _ai_brief_command(args)
+            from personal_alpha_terminal.terminal.intelligence_cli import intelligence_command
+
             return intelligence_command(args, load_config(args.config))
         if command in {"broad-universe", "universe"}:
+            from personal_alpha_terminal.terminal.broad_universe_cli import broad_universe_command
+
             return broad_universe_command(args)
         if command == "forward-track":
+            from personal_alpha_terminal.terminal.forward_track_cli import forward_track_command
+
             return forward_track_command(args)
         if command == "forward-shadow":
+            from personal_alpha_terminal.terminal.forward_shadow_cli import forward_shadow_command
+
             return forward_shadow_command(args, load_config(args.config))
         if command == "round4-research":
             return _round4_research_command(args)
         if command == "round7-research":
+            from personal_alpha_terminal.terminal.round7_cli import round7_research_command
+
             return round7_research_command(args)
         if command == "round8-research":
+            from personal_alpha_terminal.terminal.round8_cli import round8_research_command
+
             return round8_research_command(args)
         if command == "round9-research":
+            from personal_alpha_terminal.terminal.round9_cli import round9_research_command
+
             return round9_research_command(args)
         if command == "backtest":
             return _backtest_status(args.config)
@@ -5110,8 +5235,12 @@ def main(argv: list[str] | None = None) -> int:
             )
         if command in {"data", "factors", "probability", "risk", "decisions"}:
             return _render_persisted_section(args.config, command, args.run_id)
-        if not args.no_refresh and getattr(args, "decision_time", None) is None:
-            return _fast_start_daily(args.config, locale=args.locale)
+        if getattr(args, "decision_time", None) is None:
+            return _fast_start_daily(
+                args.config,
+                locale=args.locale,
+                schedule_refresh=not args.no_refresh,
+            )
         return run_daily(
             args.config,
             refresh=not args.no_refresh,

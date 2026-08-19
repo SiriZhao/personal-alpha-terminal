@@ -5,6 +5,12 @@ from personal_alpha_terminal.models.alpha_discovery import (
     AlphaDiscoveryRun,
     AlphaFactorEvaluation,
 )
+from personal_alpha_terminal.models.authority_evidence import (
+    AuthorityDatasetSnapshotRecord,
+    AuthorityProviderConflictRecord,
+    AuthorityRawFetchEvidence,
+    HistoricalIndexConstituentEvidence,
+)
 from personal_alpha_terminal.models.backtest import (
     BacktestDailyResult,
     BacktestRebalance,
@@ -147,6 +153,9 @@ __all__ = [
     "AlphaDiscoveryRun",
     "AlphaFactorEvaluation",
     "AssetRiskFactorExposure",
+    "AuthorityDatasetSnapshotRecord",
+    "AuthorityProviderConflictRecord",
+    "AuthorityRawFetchEvidence",
     "Base",
     "BacktestDailyResult",
     "BacktestRebalance",
@@ -172,6 +181,7 @@ __all__ = [
     "Financial",
     "FundamentalVintage",
     "FinancialPerShareMetric",
+    "HistoricalIndexConstituentEvidence",
     "IssuerSecurityIdentity",
     "FxRate",
     "FactorBacktestPeriod",

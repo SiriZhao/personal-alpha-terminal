@@ -65,6 +65,14 @@ class LockedOOSProtocolManifest:
     opening_audit_hash: str | None = None
     evaluation_result_hash: str | None = None
     manifest_hash: str = ""
+    oos_protocol_id: str = "LEGACY_UNBOUND"
+    dataset_snapshot_id: str = "LEGACY_UNBOUND"
+    factor_config_hash: str = "LEGACY_UNBOUND"
+    portfolio_policy_hash: str = "LEGACY_UNBOUND"
+    risk_policy_hash: str = "LEGACY_UNBOUND"
+    cost_model_hash: str = "LEGACY_UNBOUND"
+    benchmark_policy_hash: str = "LEGACY_UNBOUND"
+    git_commit_sha: str = "LEGACY_UNBOUND"
 
     def __post_init__(self) -> None:
         _require_aware(self.created_at, "created_at")
@@ -86,6 +94,14 @@ class LockedOOSProtocolManifest:
             "execution_price_policy",
             "calendar_semantics",
             "corporate_action_semantics",
+            "oos_protocol_id",
+            "dataset_snapshot_id",
+            "factor_config_hash",
+            "portfolio_policy_hash",
+            "risk_policy_hash",
+            "cost_model_hash",
+            "benchmark_policy_hash",
+            "git_commit_sha",
         ):
             if not str(getattr(self, field_name)).strip():
                 raise ValueError(f"{field_name} is required")
@@ -198,8 +214,29 @@ def create_locked_oos_protocol(
     execution_price_policy: str,
     calendar_semantics: str,
     corporate_action_semantics: str,
+    dataset_snapshot_id: str = "LEGACY_UNBOUND",
+    factor_config_hash: str = "LEGACY_UNBOUND",
+    portfolio_policy_hash: str = "LEGACY_UNBOUND",
+    risk_policy_hash: str = "LEGACY_UNBOUND",
+    cost_model_hash: str = "LEGACY_UNBOUND",
+    benchmark_policy_hash: str = "LEGACY_UNBOUND",
+    git_commit_sha: str = "LEGACY_UNBOUND",
     created_at: datetime | None = None,
 ) -> LockedOOSProtocolManifest:
+    oos_protocol_id = fingerprint(
+        {
+            "dataset_snapshot_id": dataset_snapshot_id,
+            "dataset_hash": dataset_hash,
+            "model_hash": model_hash,
+            "factor_config_hash": factor_config_hash,
+            "portfolio_policy_hash": portfolio_policy_hash,
+            "risk_policy_hash": risk_policy_hash,
+            "cost_model_hash": cost_model_hash,
+            "benchmark_policy_hash": benchmark_policy_hash,
+            "git_commit_sha": git_commit_sha,
+            "locked_oos": [locked_oos_start, locked_oos_end],
+        }
+    )
     base = LockedOOSProtocolManifest(
         protocol_version="ROUND75-LOCKED-OOS-PROTOCOL-v1",
         dataset_id=dataset_id,
@@ -228,6 +265,14 @@ def create_locked_oos_protocol(
         calendar_semantics=calendar_semantics,
         corporate_action_semantics=corporate_action_semantics,
         created_at=(created_at or datetime.now(UTC)).astimezone(UTC),
+        oos_protocol_id=oos_protocol_id,
+        dataset_snapshot_id=dataset_snapshot_id,
+        factor_config_hash=factor_config_hash,
+        portfolio_policy_hash=portfolio_policy_hash,
+        risk_policy_hash=risk_policy_hash,
+        cost_model_hash=cost_model_hash,
+        benchmark_policy_hash=benchmark_policy_hash,
+        git_commit_sha=git_commit_sha,
     )
     return replace(base, manifest_hash=_manifest_hash(base))
 
@@ -246,6 +291,17 @@ def validate_protocol_manifest(manifest: LockedOOSProtocolManifest) -> tuple[str
         blockers.append("LOCKED_OOS_SEAL_STATE_EVALUATION_MISMATCH")
     if manifest.seal_state is LockedOOSSealState.EVALUATED and manifest.evaluation_count != 1:
         blockers.append("LOCKED_OOS_EVALUATION_COUNT_NOT_ONE")
+    for field_name in (
+        "dataset_snapshot_id",
+        "factor_config_hash",
+        "portfolio_policy_hash",
+        "risk_policy_hash",
+        "cost_model_hash",
+        "benchmark_policy_hash",
+        "git_commit_sha",
+    ):
+        if getattr(manifest, field_name) == "LEGACY_UNBOUND":
+            blockers.append("LOCKED_OOS_" + field_name.upper() + "_UNBOUND")
     return tuple(dict.fromkeys(blockers))
 
 
@@ -298,6 +354,13 @@ def replay_identity(manifest: LockedOOSProtocolManifest) -> str:
             "execution_price_policy": manifest.execution_price_policy,
             "calendar_semantics": manifest.calendar_semantics,
             "corporate_action_semantics": manifest.corporate_action_semantics,
+            "dataset_snapshot_id": manifest.dataset_snapshot_id,
+            "factor_config_hash": manifest.factor_config_hash,
+            "portfolio_policy_hash": manifest.portfolio_policy_hash,
+            "risk_policy_hash": manifest.risk_policy_hash,
+            "cost_model_hash": manifest.cost_model_hash,
+            "benchmark_policy_hash": manifest.benchmark_policy_hash,
+            "git_commit_sha": manifest.git_commit_sha,
         }
     )
 
@@ -322,6 +385,13 @@ def validate_replay_identity(
         "execution_price_policy": manifest.execution_price_policy,
         "calendar_semantics": manifest.calendar_semantics,
         "corporate_action_semantics": manifest.corporate_action_semantics,
+        "dataset_snapshot_id": manifest.dataset_snapshot_id,
+        "factor_config_hash": manifest.factor_config_hash,
+        "portfolio_policy_hash": manifest.portfolio_policy_hash,
+        "risk_policy_hash": manifest.risk_policy_hash,
+        "cost_model_hash": manifest.cost_model_hash,
+        "benchmark_policy_hash": manifest.benchmark_policy_hash,
+        "git_commit_sha": manifest.git_commit_sha,
     }
     blockers: list[str] = []
     for field_name, expected_value in expected.items():
@@ -481,6 +551,14 @@ def parse_locked_oos_protocol(document: Mapping[str, object]) -> LockedOOSProtoc
         execution_price_policy=text("execution_price_policy"),
         calendar_semantics=text("calendar_semantics"),
         corporate_action_semantics=text("corporate_action_semantics"),
+        oos_protocol_id=str(document.get("oos_protocol_id", "LEGACY_UNBOUND")),
+        dataset_snapshot_id=str(document.get("dataset_snapshot_id", "LEGACY_UNBOUND")),
+        factor_config_hash=str(document.get("factor_config_hash", "LEGACY_UNBOUND")),
+        portfolio_policy_hash=str(document.get("portfolio_policy_hash", "LEGACY_UNBOUND")),
+        risk_policy_hash=str(document.get("risk_policy_hash", "LEGACY_UNBOUND")),
+        cost_model_hash=str(document.get("cost_model_hash", "LEGACY_UNBOUND")),
+        benchmark_policy_hash=str(document.get("benchmark_policy_hash", "LEGACY_UNBOUND")),
+        git_commit_sha=str(document.get("git_commit_sha", "LEGACY_UNBOUND")),
         created_at=_parse_datetime(text("created_at"), "created_at"),
         seal_state=LockedOOSSealState(text("seal_state")),
         sealed_at=(

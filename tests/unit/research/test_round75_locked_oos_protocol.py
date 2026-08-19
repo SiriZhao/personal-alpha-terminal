@@ -55,6 +55,13 @@ def _draft():
         execution_price_policy="next legal session executable open",
         calendar_semantics="XNYS exchange calendar vintage v1",
         corporate_action_semantics="raw prices plus PIT action ledger, no double adjustment",
+        dataset_snapshot_id="ROUND80-snapshot-1",
+        factor_config_hash="factor-config-hash-1",
+        portfolio_policy_hash="portfolio-policy-hash-1",
+        risk_policy_hash="risk-policy-hash-1",
+        cost_model_hash="cost-policy-hash-1",
+        benchmark_policy_hash="benchmark-policy-hash-1",
+        git_commit_sha="f87c9b550e9ff6bd8955f7b049552c27ec57066c",
         created_at=NOW,
     )
 
@@ -76,6 +83,13 @@ def _inputs(manifest):
         "execution_price_policy": manifest.execution_price_policy,
         "calendar_semantics": manifest.calendar_semantics,
         "corporate_action_semantics": manifest.corporate_action_semantics,
+        "dataset_snapshot_id": manifest.dataset_snapshot_id,
+        "factor_config_hash": manifest.factor_config_hash,
+        "portfolio_policy_hash": manifest.portfolio_policy_hash,
+        "risk_policy_hash": manifest.risk_policy_hash,
+        "cost_model_hash": manifest.cost_model_hash,
+        "benchmark_policy_hash": manifest.benchmark_policy_hash,
+        "git_commit_sha": manifest.git_commit_sha,
     }
 
 
@@ -192,6 +206,7 @@ def test_replay_identity_rejects_dataset_model_feature_config_and_cost_changes()
             "feature_schema_hash": "changed",
             "config_hash": "changed",
             "transaction_costs_bps": 11.0,
+            "dataset_snapshot_id": "changed",
         }
     )
     blockers = validate_replay_identity(manifest, mismatched)
@@ -200,6 +215,15 @@ def test_replay_identity_rejects_dataset_model_feature_config_and_cost_changes()
     assert "LOCKED_OOS_FEATURE_SCHEMA_HASH_MISMATCH" in blockers
     assert "LOCKED_OOS_CONFIG_HASH_MISMATCH" in blockers
     assert "LOCKED_OOS_TRANSACTION_COSTS_BPS_MISMATCH" in blockers
+    assert "LOCKED_OOS_DATASET_SNAPSHOT_ID_MISMATCH" in blockers
+
+
+def test_legacy_unbound_protocol_cannot_be_sealed_or_relabelled_as_locked_oos() -> None:
+    manifest = _draft_with(dataset_snapshot_id="LEGACY_UNBOUND")
+    blockers = validate_protocol_manifest(manifest)
+    assert "LOCKED_OOS_DATASET_SNAPSHOT_ID_UNBOUND" in blockers
+    with pytest.raises(ValueError, match="cannot seal invalid"):
+        seal_locked_oos_protocol(manifest, data_certification_status=EvidenceStatus.PASS)
 
 
 def test_persisted_sealed_manifest_is_write_once(tmp_path: Path) -> None:

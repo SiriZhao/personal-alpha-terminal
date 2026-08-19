@@ -1,0 +1,29 @@
+{
+  "round": "ROUND80",
+  "measured_at": "2026-08-19",
+  "baseline_sha": "0f760bd",
+  "starting_sha": "f87c9b550e9ff6bd8955f7b049552c27ec57066c",
+  "measurements_seconds": {
+    "before_normal_terminal": 15.529,
+    "before_cli_import_cumulative": 14.348,
+    "after_normal_terminal_acl_degraded": 1.198,
+    "after_no_refresh_local_diagnostic": 1.192,
+    "after_isolated_cache_first_start": 6.878,
+    "after_immediate_second_start": 1.559,
+    "after_no_new_session_start": 1.529,
+    "after_fast_start_local_snapshot": 0.071,
+    "after_fast_start_foreground": 1.078,
+    "after_cli_import_cumulative": 0.789,
+    "doctor_before_acl_diagnostic": 28.158,
+    "doctor_after_acl_diagnostic": 1.169
+  },
+  "runtime_findings": {
+    "remote_refresh_on_foreground_startup": false,
+    "no_refresh_constructs_quant_pipeline": false,
+    "stale_recommendation_actionable": false,
+    "default_production_database_write_acl": "BLOCKED_WITH_EXACT_PATH",
+    "provider_requests_on_warm_start": 0,
+    "full_historical_rebuild_on_terminal_start": false
+  },
+  "test_process_note": "Focused assertions completed but pytest did not exit under managed Windows/Python 3.14; this is not a full pytest pass."
+}

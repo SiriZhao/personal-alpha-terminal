@@ -21,6 +21,7 @@ from personal_alpha_terminal.core.config import Settings
 from personal_alpha_terminal.core.effective_config import EffectiveRuntimeConfig
 from personal_alpha_terminal.terminal import cli, fast_start
 from personal_alpha_terminal.terminal.fast_start import (
+    FastStartRuntimeConfig,
     build_fast_start_snapshot,
     claim_refresh_schedule,
     read_refresh_state,
@@ -107,6 +108,28 @@ def test_normal_daily_uses_fast_start_without_constructing_application_service(
     assert "不可执行" in rendered
 
 
+def test_no_refresh_daily_is_local_diagnostic_and_never_constructs_quant_pipeline(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("report_dir: reports\n", encoding="utf-8")
+    output = StringIO()
+    monkeypatch.setattr(cli, "console", Console(file=output, color_system=None))
+    monkeypatch.setattr(
+        cli,
+        "load_config",
+        lambda _path: (_ for _ in ()).throw(AssertionError("must not load full config")),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_application_service",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("must not run diagnostic")),
+    )
+
+    assert cli.main(["--config", str(config_path), "--no-refresh", "daily"]) == 0
+    assert "无刷新诊断模式" in output.getvalue()
+
+
 def test_optional_external_llm_requires_positive_connectivity_status() -> None:
     assert not _external_llm_allowed(configured=False, connectivity="AVAILABLE")
     assert not _external_llm_allowed(configured=True, connectivity="NOT_TESTED")
@@ -157,6 +180,35 @@ def test_local_database_permission_failure_is_fast_and_fail_closed(
     assert snapshot["state"] == "DEGRADED"
     assert snapshot["recommendation_actionable"] is False
     assert "permission denied" in str(snapshot["database_error"])
+
+
+def test_doctor_fails_fast_on_database_write_acl_before_full_service_import(
+    tmp_path: Path, monkeypatch
+) -> None:
+    output = StringIO()
+    monkeypatch.setattr(cli, "console", Console(file=output, color_system=None))
+    monkeypatch.setattr(
+        cli,
+        "load_fast_start_config",
+        lambda _path: FastStartRuntimeConfig(
+            report_dir=tmp_path / "reports",
+            database_url="sqlite:///readonly.db",
+            source_config_hash="test",
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_fast_database_write_probe",
+        lambda _database_url: "operation=BEGIN IMMEDIATE path=readonly.db error=permission denied",
+    )
+    monkeypatch.setattr(
+        cli,
+        "load_config",
+        lambda _path: (_ for _ in ()).throw(AssertionError("must fail before full config")),
+    )
+
+    assert cli._doctor(tmp_path / "config.yaml") == 2
+    assert "DOCTOR (FAIL FAST)" in output.getvalue()
 
 
 def test_schedule_lock_prevents_duplicate_concurrent_refresh_claims(tmp_path: Path) -> None:

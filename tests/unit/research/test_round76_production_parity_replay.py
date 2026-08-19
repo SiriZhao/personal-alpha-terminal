@@ -61,7 +61,11 @@ def _sealed_manifest():
         locked_oos_start=date(2022, 2, 1), locked_oos_end=date(2023, 12, 31), purge_sessions=5, embargo_sessions=1, label_horizon_sessions=5,
         universe_semantics="historical permanent-id membership", benchmark_id="BENCHMARK:SPY", benchmark_semantics="POINT_IN_TIME_TOTAL_RETURN",
         transaction_costs_bps=10.0, slippage_bps=5.0, execution_price_policy="next legal executable open",
-        calendar_semantics="XNYS", corporate_action_semantics="PIT actions", created_at=NOW,
+        calendar_semantics="XNYS", corporate_action_semantics="PIT actions",
+        dataset_snapshot_id="ROUND80-snapshot-1", factor_config_hash="factor-config-hash-1",
+        portfolio_policy_hash="portfolio-policy-hash-1", risk_policy_hash="risk-policy-hash-1",
+        cost_model_hash="cost-policy-hash-1", benchmark_policy_hash="benchmark-policy-hash-1",
+        git_commit_sha="f87c9b550e9ff6bd8955f7b049552c27ec57066c", created_at=NOW,
     )
     return seal_locked_oos_protocol(draft, data_certification_status=EvidenceStatus.PASS, sealed_at=NOW)
 

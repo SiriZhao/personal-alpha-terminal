@@ -218,7 +218,9 @@ def parse_sec_former_names(
         former_name = _required_text(row, "name")
         effective = date.fromisoformat(_required_text(row, "to"))
         start = _optional_date(row.get("from"))
-        source_record_id = f"CIK{cik:010d}:former-name:{index}:{former_name}:{effective.isoformat()}"
+        source_record_id = (
+            f"CIK{cik:010d}:former-name:{index}:{former_name}:{effective.isoformat()}"
+        )
         events.append(
             SecurityLifecycleEvent(
                 security_id=security_id,

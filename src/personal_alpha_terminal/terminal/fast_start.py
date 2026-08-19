@@ -10,17 +10,99 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
+from hashlib import sha256
 from pathlib import Path
 from time import perf_counter
 
-from personal_alpha_terminal.core.runtime_bootstrap import (
-    application_data_dir,
-    process_is_running,
-)
-
 ACTIVE_REFRESH_STATES = frozenset({"SCHEDULED", "REFRESHING"})
 TERMINAL_REFRESH_STATE_FILE = "terminal-refresh.json"
+
+
+@dataclass(frozen=True, slots=True)
+class FastStartRuntimeConfig:
+    """Only the local fields required before the terminal shell is visible.
+
+    The canonical effective configuration imports the quant engine to validate
+    all policy fields.  That remains mandatory for any refresh/decision work,
+    but would make a read-only terminal shell wait for pandas/scipy/sklearn.
+    """
+
+    report_dir: Path
+    database_url: str
+    source_config_hash: str
+
+
+def load_fast_start_config(path: Path) -> FastStartRuntimeConfig:
+    """Read report location and database identity without importing quant code."""
+
+    raw = path.read_bytes()
+    report_dir = Path("reports")
+    try:
+        for line in raw.decode("utf-8").splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#") or ":" not in stripped:
+                continue
+            key, value = stripped.split(":", 1)
+            if key.strip() == "report_dir":
+                candidate = value.strip().strip("'\"")
+                if candidate:
+                    report_dir = Path(candidate)
+                break
+    except UnicodeDecodeError as error:
+        raise ValueError(f"fast-start configuration is not UTF-8: {path}") from error
+    database_url = os.environ.get("PAT_DATABASE_URL", "sqlite:///./var/personal_alpha.db")
+    source_config_hash = sha256(raw + b"\0" + database_url.encode("utf-8")).hexdigest()
+    return FastStartRuntimeConfig(
+        report_dir=report_dir,
+        database_url=database_url,
+        source_config_hash=source_config_hash,
+    )
+
+
+def fast_start_config_hash(path: Path, *, database_url: str) -> str:
+    """Return the source hash bound to a finished local analysis state."""
+
+    return sha256(path.read_bytes() + b"\0" + database_url.encode("utf-8")).hexdigest()
+
+
+def _application_data_dir() -> Path:
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        return Path(local_app_data) / "PersonalAlphaTerminal"
+    return Path.home() / ".PersonalAlphaTerminal"
+
+
+def process_is_running(pid: int) -> bool:
+    """Check only the candidate PID; no process discovery or termination."""
+
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            process = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
+            if not process:
+                return False
+            try:
+                exit_code = ctypes.c_ulong()
+                return bool(
+                    ctypes.windll.kernel32.GetExitCodeProcess(
+                        process, ctypes.byref(exit_code)
+                    )
+                    and exit_code.value == 259
+                )
+            finally:
+                ctypes.windll.kernel32.CloseHandle(process)
+        except (AttributeError, OSError):
+            return False
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
 
 
 def _state_json_default(value: object) -> str:
@@ -43,7 +125,7 @@ def refresh_state_path(report_dir: Path) -> Path:
     if override:
         return Path(override) / TERMINAL_REFRESH_STATE_FILE
     del report_dir
-    return application_data_dir() / "run" / TERMINAL_REFRESH_STATE_FILE
+    return _application_data_dir() / "run" / TERMINAL_REFRESH_STATE_FILE
 
 
 def read_refresh_state(path: Path) -> dict[str, object] | None:
