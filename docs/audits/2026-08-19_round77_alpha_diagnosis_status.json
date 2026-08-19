@@ -1,0 +1,28 @@
+{
+  "data_certification_status": "BLOCKED_DATA_QUALITY",
+  "diagnosis": {
+    "answers": {
+      "adaptive_exposure_participation_improvement": "NOT ESTABLISHED / N/A — certified PIT, survivorship, benchmark, tradability and locked-OOS evidence is required.",
+      "alpha_engine3_selection_improvement": "NOT ESTABLISHED / N/A — certified PIT, survivorship, benchmark, tradability and locked-OOS evidence is required.",
+      "bull_market_underperformance": "NOT ESTABLISHED / N/A — certified PIT, survivorship, benchmark, tradability and locked-OOS evidence is required.",
+      "downside_protection_compensation": "NOT ESTABLISHED / N/A — certified PIT, survivorship, benchmark, tradability and locked-OOS evidence is required.",
+      "low_exposure_or_cash_contribution": "NOT ESTABLISHED / N/A — certified PIT, survivorship, benchmark, tradability and locked-OOS evidence is required.",
+      "next_failure_mode_to_optimize": "NOT ESTABLISHED / N/A — certified PIT, survivorship, benchmark, tradability and locked-OOS evidence is required.",
+      "normal_market_underperformance": "NOT ESTABLISHED / N/A — certified PIT, survivorship, benchmark, tradability and locked-OOS evidence is required.",
+      "stock_selection_contribution": "NOT ESTABLISHED / N/A — certified PIT, survivorship, benchmark, tradability and locked-OOS evidence is required.",
+      "synthetic_conclusion_contradiction": "NOT ESTABLISHED / N/A — certified PIT, survivorship, benchmark, tradability and locked-OOS evidence is required.",
+      "transaction_cost_slippage_contribution": "NOT ESTABLISHED / N/A — certified PIT, survivorship, benchmark, tradability and locked-OOS evidence is required."
+    },
+    "attributions": {},
+    "blockers": [
+      "CERTIFIED_DATA_FOUNDATION_REQUIRED",
+      "LOCKED_OOS_MANIFEST_MISSING"
+    ],
+    "cash": {},
+    "metrics": {},
+    "status": "BLOCKED_DATA_QUALITY",
+    "uncertainty": {}
+  },
+  "operator_message_zh": "经济归因未建立；禁止将合成压力测试或当前幸存者样本解释为真实牛市/常态市场结论。",
+  "protocol": "ROUND77-ALPHA-ATTRIBUTION-DIAGNOSIS-v1"
+}

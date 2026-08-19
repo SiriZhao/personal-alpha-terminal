@@ -256,6 +256,47 @@ def _production_replay_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _alpha_diagnosis_command(args: argparse.Namespace) -> int:
+    """Show ROUND77 evidence-gated diagnosis without calculating synthetic economics."""
+
+    from personal_alpha_terminal.research.alpha_diagnosis import build_economic_diagnosis
+    from personal_alpha_terminal.research.certified_data import current_data_certification
+    from personal_alpha_terminal.research.locked_oos_protocol import load_locked_oos_protocol
+
+    manifest_path = getattr(args, "manifest", None)
+    manifest = load_locked_oos_protocol(manifest_path) if manifest_path is not None else None
+    certification = current_data_certification()
+    diagnosis = build_economic_diagnosis(
+        {},
+        data_certification=certification,
+        locked_oos_manifest=manifest,
+    )
+    document = {
+        "protocol": "ROUND77-ALPHA-ATTRIBUTION-DIAGNOSIS-v1",
+        "diagnosis": diagnosis.document(),
+        "data_certification_status": certification.overall_status.value,
+        "operator_message_zh": (
+            "经济归因未建立；禁止将合成压力测试或当前幸存者样本解释为真实牛市/"
+            "常态市场结论。"
+        ),
+    }
+    output = getattr(args, "output", None)
+    if output is not None:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(
+            json.dumps(document, default=str, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+    if getattr(args, "json", False):
+        console.print(
+            json.dumps(document, default=str, ensure_ascii=False, indent=2, sort_keys=True)
+        )
+    else:
+        console.print(f"ROUND77 Alpha 归因诊断 | status={diagnosis.status.value}")
+        console.print("结论: " + diagnosis.answers["normal_market_underperformance"])
+    return 0
+
+
 def _alpha_engine3_reality_command(args: argparse.Namespace) -> int:
     from personal_alpha_terminal.research.data_evidence import (
         assess_locked_oos,
@@ -4094,6 +4135,13 @@ def build_parser() -> argparse.ArgumentParser:
     production_replay.add_argument("--json", action="store_true")
     production_replay.add_argument("--manifest", type=Path, default=None)
     production_replay.add_argument("--output", type=Path, default=None)
+    alpha_diagnosis = subparsers.add_parser(
+        "alpha-diagnosis",
+        help="Show evidence-gated alpha attribution and participation diagnosis",
+    )
+    alpha_diagnosis.add_argument("--json", action="store_true")
+    alpha_diagnosis.add_argument("--manifest", type=Path, default=None)
+    alpha_diagnosis.add_argument("--output", type=Path, default=None)
     alpha_reality = subparsers.add_parser(
         "alpha-engine3-reality",
         help="Show compact ROUND68 Alpha Engine 3 performance-evidence status",
@@ -4768,6 +4816,8 @@ def main(argv: list[str] | None = None) -> int:
             return _locked_oos_command(args)
         if command == "production-replay":
             return _production_replay_command(args)
+        if command == "alpha-diagnosis":
+            return _alpha_diagnosis_command(args)
         if command == "alpha-engine3-reality":
             return _alpha_engine3_reality_command(args)
         if command == "adaptive-exposure":
@@ -4924,4 +4974,3 @@ def main(argv: list[str] | None = None) -> int:
         logger.exception("Command failed")
         console.print(f"ERROR: {type(error).__name__}: {error}")
         return 2
-
