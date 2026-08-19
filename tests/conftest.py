@@ -27,7 +27,11 @@ def tmp_path() -> Path:
     _TEST_TEMP_ROOT.mkdir(exist_ok=True)
     path = _TEST_TEMP_ROOT / uuid4().hex
     path.mkdir()
-    return path
+    # Windows may spell a directory under %TEMP% with an 8.3 alias (for
+    # example ``YOGAPR~1``), while production code normalizes the same path
+    # to its long form.  Returning the resolved path keeps path-equality
+    # assertions about runtime isolation semantic rather than spelling-based.
+    return path.resolve()
 
 
 @pytest.fixture

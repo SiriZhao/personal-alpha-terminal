@@ -7,7 +7,10 @@ from alembic.config import Config
 from sqlalchemy import inspect, text
 
 from personal_alpha_terminal.data.database import build_engine
-from personal_alpha_terminal.data.database_health import inspect_database_health
+from personal_alpha_terminal.data.database_health import (
+    expected_migration_head,
+    inspect_database_health,
+)
 from personal_alpha_terminal.data.migrations import migration_root
 
 
@@ -62,6 +65,7 @@ def test_market_data_migration_does_not_match_reflected_check_sql() -> None:
 
 
 def test_initial_migration_builds_versioned_schema() -> None:
+    expected_head = expected_migration_head()
     root = migration_root()
     configuration = Config(str(root / "alembic.ini"))
     configuration.set_main_option("script_location", str(root / "migrations"))
@@ -176,15 +180,16 @@ def test_initial_migration_builds_versioned_schema() -> None:
     assert "ix_portfolio_positions_stock_id" in portfolio_position_indexes
     assert "ix_market_graph_edges_source_stock_id" in graph_edge_indexes
     assert "ix_market_graph_edges_target_stock_id" in graph_edge_indexes
-    assert revision == "a7d1f4c2b9e3"
+    assert revision == expected_head
     assert {"source", "schema_version"} <= portfolio_columns
     assert not any(table.startswith("paper_") for table in tables)
     assert not health.ready
     assert health.dialect == "sqlite"
-    assert health.current_revision == "a7d1f4c2b9e3"
+    assert health.current_revision == expected_head
 
 
 def test_production_index_migration_round_trip() -> None:
+    expected_head = expected_migration_head()
     root = migration_root()
     configuration = Config(str(root / "alembic.ini"))
     configuration.set_main_option("script_location", str(root / "migrations"))
@@ -218,5 +223,5 @@ def test_production_index_migration_round_trip() -> None:
 
     assert downgraded_revision == "e19f7b3c4a62"
     assert "ix_market_graph_edges_source_stock_id" not in downgraded_indexes
-    assert upgraded_revision == "a7d1f4c2b9e3"
+    assert upgraded_revision == expected_head
     assert "ix_market_graph_edges_source_stock_id" in upgraded_indexes
