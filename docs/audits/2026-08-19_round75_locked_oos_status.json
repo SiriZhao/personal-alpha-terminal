@@ -1,0 +1,27 @@
+{
+  "data_certification_status": "BLOCKED_DATA_QUALITY",
+  "manifest_required_fields": [
+    "dataset_id/hash/vintage",
+    "feature_schema_hash",
+    "model_id/version/hash",
+    "config_hash",
+    "TRAIN/VALIDATION/LOCKED_OOS intervals",
+    "purge_sessions and embargo_sessions",
+    "universe and benchmark semantics",
+    "transaction costs and slippage",
+    "execution price, calendar and corporate-action semantics",
+    "created_at, seal_state and manifest_hash"
+  ],
+  "opening_policy": "Opening is audited and fail-closed; repeated evaluation or identity mismatch is rejected.",
+  "protocol": "ROUND75-LOCKED-OOS-PROTOCOL-v1",
+  "status": {
+    "blockers": [
+      "CERTIFIED_DATA_FOUNDATION_REQUIRED",
+      "LOCKED_OOS_MANIFEST_MISSING"
+    ],
+    "manifest_hash": null,
+    "promotion_allowed": false,
+    "seal_state": null,
+    "status": "BLOCKED_DATA_QUALITY"
+  }
+}

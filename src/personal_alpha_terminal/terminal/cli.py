@@ -149,6 +149,62 @@ def _data_certification_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _locked_oos_command(args: argparse.Namespace) -> int:
+    """Show the frozen-protocol status without opening an unverified OOS."""
+
+    from personal_alpha_terminal.research.certified_data import current_data_certification
+    from personal_alpha_terminal.research.locked_oos_protocol import (
+        load_locked_oos_protocol,
+        protocol_status,
+    )
+
+    manifest_path = getattr(args, "manifest", None)
+    manifest = load_locked_oos_protocol(manifest_path) if manifest_path is not None else None
+    status = protocol_status(
+        manifest,
+        data_certification_status=current_data_certification().overall_status,
+    )
+    document = {
+        "protocol": "ROUND75-LOCKED-OOS-PROTOCOL-v1",
+        "status": status.document(),
+        "data_certification_status": current_data_certification().overall_status.value,
+        "opening_policy": (
+            "Opening is audited and fail-closed; repeated evaluation or identity mismatch "
+            "is rejected."
+        ),
+        "manifest_required_fields": [
+            "dataset_id/hash/vintage",
+            "feature_schema_hash",
+            "model_id/version/hash",
+            "config_hash",
+            "TRAIN/VALIDATION/LOCKED_OOS intervals",
+            "purge_sessions and embargo_sessions",
+            "universe and benchmark semantics",
+            "transaction costs and slippage",
+            "execution price, calendar and corporate-action semantics",
+            "created_at, seal_state and manifest_hash",
+        ],
+    }
+    output = getattr(args, "output", None)
+    if output is not None:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(
+            json.dumps(document, default=str, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+    if getattr(args, "json", False):
+        console.print(
+            json.dumps(document, default=str, ensure_ascii=False, indent=2, sort_keys=True)
+        )
+    else:
+        console.print(
+            f"ROUND75 锁定 OOS | status={status.status.value} | "
+            f"seal_state={status.seal_state.value if status.seal_state else 'MISSING'}"
+        )
+        console.print("阻塞原因: " + "; ".join(status.blockers))
+    return 0
+
+
 def _alpha_engine3_reality_command(args: argparse.Namespace) -> int:
     from personal_alpha_terminal.research.data_evidence import (
         assess_locked_oos,
@@ -3973,6 +4029,13 @@ def build_parser() -> argparse.ArgumentParser:
     data_certification.add_argument("--input", type=Path, default=None)
     data_certification.add_argument("--output", type=Path, default=None)
     data_certification.add_argument("--procurement-manifest", type=Path, default=None)
+    locked_oos = subparsers.add_parser(
+        "locked-oos",
+        help="Show the sealed locked-OOS protocol status without opening evaluation",
+    )
+    locked_oos.add_argument("--json", action="store_true")
+    locked_oos.add_argument("--manifest", type=Path, default=None)
+    locked_oos.add_argument("--output", type=Path, default=None)
     alpha_reality = subparsers.add_parser(
         "alpha-engine3-reality",
         help="Show compact ROUND68 Alpha Engine 3 performance-evidence status",
@@ -4643,6 +4706,8 @@ def main(argv: list[str] | None = None) -> int:
             return _data_evidence_command(args)
         if command == "data-certification":
             return _data_certification_command(args)
+        if command == "locked-oos":
+            return _locked_oos_command(args)
         if command == "alpha-engine3-reality":
             return _alpha_engine3_reality_command(args)
         if command == "adaptive-exposure":
