@@ -92,6 +92,63 @@ def _data_evidence_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _data_certification_command(args: argparse.Namespace) -> int:
+    """Render ROUND74's immutable external-data certification contract."""
+
+    from personal_alpha_terminal.research.certified_data import (
+        build_procurement_manifest,
+        certify_data_package,
+        current_data_certification,
+        load_certified_data_package,
+        render_certification_chinese,
+    )
+
+    import_path = getattr(args, "input", None)
+    result = (
+        certify_data_package(load_certified_data_package(str(import_path)))
+        if import_path is not None
+        else current_data_certification()
+    )
+    procurement = build_procurement_manifest(generated_at=datetime.now(UTC))
+    document = {
+        "certification": result.document(),
+        "operator_summary_zh": render_certification_chinese(result),
+        "procurement_manifest": procurement,
+    }
+    output = getattr(args, "output", None)
+    if output is not None:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(
+            json.dumps(document, default=str, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+    procurement_output = getattr(args, "procurement_manifest", None)
+    if procurement_output is not None:
+        procurement_output.parent.mkdir(parents=True, exist_ok=True)
+        procurement_output.write_text(
+            json.dumps(
+                procurement,
+                default=str,
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    if getattr(args, "json", False):
+        console.print(
+            json.dumps(document, default=str, ensure_ascii=False, indent=2, sort_keys=True)
+        )
+    else:
+        console.print(document["operator_summary_zh"])
+        if output is not None:
+            console.print(f"Machine-readable certification: {output.resolve()}")
+        if procurement_output is not None:
+            console.print(f"Procurement/import manifest: {procurement_output.resolve()}")
+    return 0
+
+
 def _alpha_engine3_reality_command(args: argparse.Namespace) -> int:
     from personal_alpha_terminal.research.data_evidence import (
         assess_locked_oos,
@@ -3908,6 +3965,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     data_evidence.add_argument("--json", action="store_true")
     data_evidence.add_argument("--output", type=Path, default=None)
+    data_certification = subparsers.add_parser(
+        "data-certification",
+        help="Certify immutable PIT/survivorship/tradability imports and show blockers",
+    )
+    data_certification.add_argument("--json", action="store_true")
+    data_certification.add_argument("--input", type=Path, default=None)
+    data_certification.add_argument("--output", type=Path, default=None)
+    data_certification.add_argument("--procurement-manifest", type=Path, default=None)
     alpha_reality = subparsers.add_parser(
         "alpha-engine3-reality",
         help="Show compact ROUND68 Alpha Engine 3 performance-evidence status",
@@ -4576,6 +4641,8 @@ def main(argv: list[str] | None = None) -> int:
             return _terminal_status_command(args)
         if command == "data-evidence":
             return _data_evidence_command(args)
+        if command == "data-certification":
+            return _data_certification_command(args)
         if command == "alpha-engine3-reality":
             return _alpha_engine3_reality_command(args)
         if command == "adaptive-exposure":

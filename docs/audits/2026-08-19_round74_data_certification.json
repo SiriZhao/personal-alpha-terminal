@@ -1,0 +1,558 @@
+{
+  "certification": {
+    "blockers": [
+      "permanent_security_identity:NO_BOUND_IMMUTABLE_IMPORT_PACKAGE",
+      "historical_symbol_history:NO_BOUND_IMMUTABLE_IMPORT_PACKAGE",
+      "historical_universe_membership:NO_BOUND_IMMUTABLE_IMPORT_PACKAGE",
+      "delistings_and_delisted_returns:NO_BOUND_IMMUTABLE_IMPORT_PACKAGE",
+      "corporate_actions:NO_BOUND_IMMUTABLE_IMPORT_PACKAGE",
+      "total_return_vintages:NO_BOUND_IMMUTABLE_IMPORT_PACKAGE",
+      "pit_benchmark_prices_returns:NO_BOUND_IMMUTABLE_IMPORT_PACKAGE",
+      "fundamentals_with_availability:NO_BOUND_IMMUTABLE_IMPORT_PACKAGE",
+      "filings_with_availability:NO_BOUND_IMMUTABLE_IMPORT_PACKAGE",
+      "historical_executable_opens:NO_BOUND_IMMUTABLE_IMPORT_PACKAGE"
+    ],
+    "classes": [
+      {
+        "blockers": [
+          "NO_BOUND_IMMUTABLE_IMPORT_PACKAGE"
+        ],
+        "coverage_scope_hash": null,
+        "evidence_class": "permanent_security_identity",
+        "record_count": 0,
+        "source_contract_hash": null,
+        "status": "BLOCKED_SURVIVORSHIP"
+      },
+      {
+        "blockers": [
+          "NO_BOUND_IMMUTABLE_IMPORT_PACKAGE"
+        ],
+        "coverage_scope_hash": null,
+        "evidence_class": "historical_symbol_history",
+        "record_count": 0,
+        "source_contract_hash": null,
+        "status": "BLOCKED_SURVIVORSHIP"
+      },
+      {
+        "blockers": [
+          "NO_BOUND_IMMUTABLE_IMPORT_PACKAGE"
+        ],
+        "coverage_scope_hash": null,
+        "evidence_class": "historical_universe_membership",
+        "record_count": 0,
+        "source_contract_hash": null,
+        "status": "BLOCKED_SURVIVORSHIP"
+      },
+      {
+        "blockers": [
+          "NO_BOUND_IMMUTABLE_IMPORT_PACKAGE"
+        ],
+        "coverage_scope_hash": null,
+        "evidence_class": "delistings_and_delisted_returns",
+        "record_count": 0,
+        "source_contract_hash": null,
+        "status": "BLOCKED_SURVIVORSHIP"
+      },
+      {
+        "blockers": [
+          "NO_BOUND_IMMUTABLE_IMPORT_PACKAGE"
+        ],
+        "coverage_scope_hash": null,
+        "evidence_class": "raw_pit_ohlcv",
+        "record_count": 0,
+        "source_contract_hash": null,
+        "status": "PASS_WITH_WARNINGS"
+      },
+      {
+        "blockers": [
+          "NO_BOUND_IMMUTABLE_IMPORT_PACKAGE"
+        ],
+        "coverage_scope_hash": null,
+        "evidence_class": "corporate_actions",
+        "record_count": 0,
+        "source_contract_hash": null,
+        "status": "BLOCKED_PIT"
+      },
+      {
+        "blockers": [
+          "NO_BOUND_IMMUTABLE_IMPORT_PACKAGE"
+        ],
+        "coverage_scope_hash": null,
+        "evidence_class": "total_return_vintages",
+        "record_count": 0,
+        "source_contract_hash": null,
+        "status": "BLOCKED_PIT"
+      },
+      {
+        "blockers": [
+          "NO_BOUND_IMMUTABLE_IMPORT_PACKAGE"
+        ],
+        "coverage_scope_hash": null,
+        "evidence_class": "pit_benchmark_prices_returns",
+        "record_count": 0,
+        "source_contract_hash": null,
+        "status": "BLOCKED_PIT"
+      },
+      {
+        "blockers": [
+          "NO_BOUND_IMMUTABLE_IMPORT_PACKAGE"
+        ],
+        "coverage_scope_hash": null,
+        "evidence_class": "fundamentals_with_availability",
+        "record_count": 0,
+        "source_contract_hash": null,
+        "status": "BLOCKED_PIT"
+      },
+      {
+        "blockers": [
+          "NO_BOUND_IMMUTABLE_IMPORT_PACKAGE"
+        ],
+        "coverage_scope_hash": null,
+        "evidence_class": "filings_with_availability",
+        "record_count": 0,
+        "source_contract_hash": null,
+        "status": "BLOCKED_PIT"
+      },
+      {
+        "blockers": [
+          "NO_BOUND_IMMUTABLE_IMPORT_PACKAGE"
+        ],
+        "coverage_scope_hash": null,
+        "evidence_class": "news_events_with_availability",
+        "record_count": 0,
+        "source_contract_hash": null,
+        "status": "PASS_WITH_WARNINGS"
+      },
+      {
+        "blockers": [
+          "NO_BOUND_IMMUTABLE_IMPORT_PACKAGE"
+        ],
+        "coverage_scope_hash": null,
+        "evidence_class": "historical_executable_opens",
+        "record_count": 0,
+        "source_contract_hash": null,
+        "status": "BLOCKED_TRADABILITY"
+      }
+    ],
+    "overall_status": "BLOCKED_DATA_QUALITY",
+    "package_hash": null,
+    "promotion_allowed": false,
+    "warnings": [
+      "raw_pit_ohlcv:NO_BOUND_IMMUTABLE_IMPORT_PACKAGE",
+      "news_events_with_availability:NO_BOUND_IMMUTABLE_IMPORT_PACKAGE"
+    ]
+  },
+  "operator_summary_zh": "ROUND74 数据认证\n总状态: BLOCKED_DATA_QUALITY\n历史研究/锁定 OOS/模型提升: 禁止\n永久证券身份: BLOCKED_SURVIVORSHIP\n历史代码变更: BLOCKED_SURVIVORSHIP\n历史成分股: BLOCKED_SURVIVORSHIP\n退市与退市收益: BLOCKED_SURVIVORSHIP\n原始 PIT OHLCV: PASS_WITH_WARNINGS\n公司行为: BLOCKED_PIT\n总收益版本: BLOCKED_PIT\nPIT 基准: BLOCKED_PIT\n带可用时间的基本面: BLOCKED_PIT\n带可用时间的文件: BLOCKED_PIT\n带可用时间的新闻事件: PASS_WITH_WARNINGS\n历史可执行开盘价: BLOCKED_TRADABILITY\n阻塞原因: permanent_security_identity:NO_BOUND_IMMUTABLE_IMPORT_PACKAGE; historical_symbol_history:NO_BOUND_IMMUTABLE_IMPORT_PACKAGE; historical_universe_membership:NO_BOUND_IMMUTABLE_IMPORT_PACKAGE; delistings_and_delisted_returns:NO_BOUND_IMMUTABLE_IMPORT_PACKAGE; corporate_actions:NO_BOUND_IMMUTABLE_IMPORT_PACKAGE; total_return_vintages:NO_BOUND_IMMUTABLE_IMPORT_PACKAGE; pit_benchmark_prices_returns:NO_BOUND_IMMUTABLE_IMPORT_PACKAGE; fundamentals_with_availability:NO_BOUND_IMMUTABLE_IMPORT_PACKAGE; filings_with_availability:NO_BOUND_IMMUTABLE_IMPORT_PACKAGE; historical_executable_opens:NO_BOUND_IMMUTABLE_IMPORT_PACKAGE",
+  "procurement_manifest": {
+    "certification_status": "BLOCKED_DATA_QUALITY",
+    "generated_at": "2026-08-19T13:32:57.183133+00:00",
+    "import_schema": {
+      "overwrite_policy": "Same evidence_class/source/source_identifier/vintage must be byte-identical; differing content is rejected as an immutable-vintage overwrite conflict.",
+      "record_critical_fields": [
+        "permanent_security_id where applicable",
+        "symbol_at_time where applicable",
+        "effective_at",
+        "observed_at",
+        "published_at where applicable",
+        "available_at",
+        "ingested_at",
+        "vintage",
+        "source",
+        "provider",
+        "source_identifier",
+        "content_hash",
+        "adjustment_semantics"
+      ],
+      "required_top_level_fields": [
+        "schema_version",
+        "dataset_id",
+        "dataset_vintage",
+        "created_at",
+        "coverage",
+        "records"
+      ],
+      "schema_version": "ROUND74-CERTIFIED-DATA-IMPORT-v1"
+    },
+    "requirements": [
+      {
+        "current_coverage": "No bound immutable external package; operational schemas and rows are not historical certification.",
+        "current_status": "BLOCKED_SURVIVORSHIP",
+        "date_range": {
+          "current_coverage": "UNBOUND_NO_CERTIFIED_IMPORT",
+          "end": null,
+          "requirement": "Must exactly cover the future sealed train, validation, and locked-OOS intervals; no current-list substitution.",
+          "start": null
+        },
+        "evidence_class": "permanent_security_identity",
+        "expected_source_contract": "Provider must supply historical, permanent-ID keyed lifecycle history; a current ticker directory is rejected as proof.",
+        "missing_coverage": [
+          "NO_BOUND_IMMUTABLE_IMPORT_PACKAGE"
+        ],
+        "required_dataset": "Permanent US security master with immutable issuer/security identifiers",
+        "required_fields": [
+          "permanent_security_id",
+          "symbol_at_time",
+          "effective_at",
+          "observed_at",
+          "available_at",
+          "ingested_at",
+          "vintage",
+          "source",
+          "provider",
+          "source_identifier",
+          "content_hash",
+          "adjustment_semantics"
+        ],
+        "securities": "Every security in historical train/validation/locked-OOS universe, including delisted and renamed securities.",
+        "timestamp_requirements": "effective_at, observed_at, available_at and ingested_at must be timezone-aware; revisions require an immutable vintage."
+      },
+      {
+        "current_coverage": "No bound immutable external package; operational schemas and rows are not historical certification.",
+        "current_status": "BLOCKED_SURVIVORSHIP",
+        "date_range": {
+          "current_coverage": "UNBOUND_NO_CERTIFIED_IMPORT",
+          "end": null,
+          "requirement": "Must exactly cover the future sealed train, validation, and locked-OOS intervals; no current-list substitution.",
+          "start": null
+        },
+        "evidence_class": "historical_symbol_history",
+        "expected_source_contract": "Provider must supply historical, permanent-ID keyed lifecycle history; a current ticker directory is rejected as proof.",
+        "missing_coverage": [
+          "NO_BOUND_IMMUTABLE_IMPORT_PACKAGE"
+        ],
+        "required_dataset": "Historical ticker/exchange alias history keyed by permanent security ID",
+        "required_fields": [
+          "permanent_security_id",
+          "symbol_at_time",
+          "effective_at",
+          "observed_at",
+          "available_at",
+          "ingested_at",
+          "vintage",
+          "source",
+          "provider",
+          "source_identifier",
+          "content_hash",
+          "adjustment_semantics"
+        ],
+        "securities": "Every security in historical train/validation/locked-OOS universe, including delisted and renamed securities.",
+        "timestamp_requirements": "effective_at, observed_at, available_at and ingested_at must be timezone-aware; revisions require an immutable vintage."
+      },
+      {
+        "current_coverage": "No bound immutable external package; operational schemas and rows are not historical certification.",
+        "current_status": "BLOCKED_SURVIVORSHIP",
+        "date_range": {
+          "current_coverage": "UNBOUND_NO_CERTIFIED_IMPORT",
+          "end": null,
+          "requirement": "Must exactly cover the future sealed train, validation, and locked-OOS intervals; no current-list substitution.",
+          "start": null
+        },
+        "evidence_class": "historical_universe_membership",
+        "expected_source_contract": "Provider must supply historical, permanent-ID keyed lifecycle history; a current ticker directory is rejected as proof.",
+        "missing_coverage": [
+          "NO_BOUND_IMMUTABLE_IMPORT_PACKAGE"
+        ],
+        "required_dataset": "Versioned historical universe constituent membership",
+        "required_fields": [
+          "permanent_security_id",
+          "effective_at",
+          "observed_at",
+          "available_at",
+          "ingested_at",
+          "vintage",
+          "source",
+          "provider",
+          "source_identifier",
+          "content_hash",
+          "adjustment_semantics"
+        ],
+        "securities": "Every security in historical train/validation/locked-OOS universe, including delisted and renamed securities.",
+        "timestamp_requirements": "effective_at, observed_at, available_at and ingested_at must be timezone-aware; revisions require an immutable vintage."
+      },
+      {
+        "current_coverage": "No bound immutable external package; operational schemas and rows are not historical certification.",
+        "current_status": "BLOCKED_SURVIVORSHIP",
+        "date_range": {
+          "current_coverage": "UNBOUND_NO_CERTIFIED_IMPORT",
+          "end": null,
+          "requirement": "Must exactly cover the future sealed train, validation, and locked-OOS intervals; no current-list substitution.",
+          "start": null
+        },
+        "evidence_class": "delistings_and_delisted_returns",
+        "expected_source_contract": "Provider must supply historical, permanent-ID keyed lifecycle history; a current ticker directory is rejected as proof.",
+        "missing_coverage": [
+          "NO_BOUND_IMMUTABLE_IMPORT_PACKAGE"
+        ],
+        "required_dataset": "Delisting lifecycle and terminal-return history",
+        "required_fields": [
+          "permanent_security_id",
+          "effective_at",
+          "observed_at",
+          "available_at",
+          "ingested_at",
+          "vintage",
+          "source",
+          "provider",
+          "source_identifier",
+          "content_hash",
+          "adjustment_semantics"
+        ],
+        "securities": "Every security in historical train/validation/locked-OOS universe, including delisted and renamed securities.",
+        "timestamp_requirements": "effective_at, observed_at, available_at and ingested_at must be timezone-aware; revisions require an immutable vintage."
+      },
+      {
+        "current_coverage": "No bound immutable external package; operational schemas and rows are not historical certification.",
+        "current_status": "PASS_WITH_WARNINGS",
+        "date_range": {
+          "current_coverage": "UNBOUND_NO_CERTIFIED_IMPORT",
+          "end": null,
+          "requirement": "Must exactly cover the future sealed train, validation, and locked-OOS intervals; no current-list substitution.",
+          "start": null
+        },
+        "evidence_class": "raw_pit_ohlcv",
+        "expected_source_contract": "Provider must deliver immutable content hashes, source identifiers, and decision-time availability timestamps for the sealed scope.",
+        "missing_coverage": [
+          "NO_BOUND_IMMUTABLE_IMPORT_PACKAGE"
+        ],
+        "required_dataset": "Raw unadjusted OHLCV with event/observed/available/ingested times",
+        "required_fields": [
+          "permanent_security_id",
+          "symbol_at_time",
+          "effective_at",
+          "observed_at",
+          "available_at",
+          "ingested_at",
+          "vintage",
+          "source",
+          "provider",
+          "source_identifier",
+          "content_hash",
+          "adjustment_semantics"
+        ],
+        "securities": "Every security in historical train/validation/locked-OOS universe, including delisted and renamed securities.",
+        "timestamp_requirements": "effective_at, observed_at, available_at and ingested_at must be timezone-aware; revisions require an immutable vintage."
+      },
+      {
+        "current_coverage": "No bound immutable external package; operational schemas and rows are not historical certification.",
+        "current_status": "BLOCKED_PIT",
+        "date_range": {
+          "current_coverage": "UNBOUND_NO_CERTIFIED_IMPORT",
+          "end": null,
+          "requirement": "Must exactly cover the future sealed train, validation, and locked-OOS intervals; no current-list substitution.",
+          "start": null
+        },
+        "evidence_class": "corporate_actions",
+        "expected_source_contract": "Provider must supply revisioned corporate-action vintages and explicit raw/split/total-return semantics; no forward adjustment.",
+        "missing_coverage": [
+          "NO_BOUND_IMMUTABLE_IMPORT_PACKAGE"
+        ],
+        "required_dataset": "Versioned splits, dividends, mergers and symbol-action ledger",
+        "required_fields": [
+          "permanent_security_id",
+          "effective_at",
+          "observed_at",
+          "available_at",
+          "ingested_at",
+          "vintage",
+          "source",
+          "provider",
+          "source_identifier",
+          "content_hash",
+          "adjustment_semantics"
+        ],
+        "securities": "Every security in historical train/validation/locked-OOS universe, including delisted and renamed securities.",
+        "timestamp_requirements": "effective_at, observed_at, available_at and ingested_at must be timezone-aware; revisions require an immutable vintage."
+      },
+      {
+        "current_coverage": "No bound immutable external package; operational schemas and rows are not historical certification.",
+        "current_status": "BLOCKED_PIT",
+        "date_range": {
+          "current_coverage": "UNBOUND_NO_CERTIFIED_IMPORT",
+          "end": null,
+          "requirement": "Must exactly cover the future sealed train, validation, and locked-OOS intervals; no current-list substitution.",
+          "start": null
+        },
+        "evidence_class": "total_return_vintages",
+        "expected_source_contract": "Provider must supply revisioned corporate-action vintages and explicit raw/split/total-return semantics; no forward adjustment.",
+        "missing_coverage": [
+          "NO_BOUND_IMMUTABLE_IMPORT_PACKAGE"
+        ],
+        "required_dataset": "Point-in-time total-return reconstruction vintages",
+        "required_fields": [
+          "permanent_security_id",
+          "effective_at",
+          "observed_at",
+          "available_at",
+          "ingested_at",
+          "vintage",
+          "source",
+          "provider",
+          "source_identifier",
+          "content_hash",
+          "adjustment_semantics"
+        ],
+        "securities": "Every security in historical train/validation/locked-OOS universe, including delisted and renamed securities.",
+        "timestamp_requirements": "effective_at, observed_at, available_at and ingested_at must be timezone-aware; revisions require an immutable vintage."
+      },
+      {
+        "current_coverage": "No bound immutable external package; operational schemas and rows are not historical certification.",
+        "current_status": "BLOCKED_PIT",
+        "date_range": {
+          "current_coverage": "UNBOUND_NO_CERTIFIED_IMPORT",
+          "end": null,
+          "requirement": "Must exactly cover the future sealed train, validation, and locked-OOS intervals; no current-list substitution.",
+          "start": null
+        },
+        "evidence_class": "pit_benchmark_prices_returns",
+        "expected_source_contract": "Benchmark package must use the same PIT availability, calendar and return semantics as the strategy panel.",
+        "missing_coverage": [
+          "NO_BOUND_IMMUTABLE_IMPORT_PACKAGE"
+        ],
+        "required_dataset": "Benchmark price and total-return vintages aligned to strategy semantics",
+        "required_fields": [
+          "permanent_security_id",
+          "effective_at",
+          "observed_at",
+          "available_at",
+          "ingested_at",
+          "vintage",
+          "source",
+          "provider",
+          "source_identifier",
+          "content_hash",
+          "adjustment_semantics"
+        ],
+        "securities": "Every benchmark used by the sealed protocol, keyed as a permanent benchmark identity.",
+        "timestamp_requirements": "effective_at, observed_at, available_at and ingested_at must be timezone-aware; revisions require an immutable vintage."
+      },
+      {
+        "current_coverage": "No bound immutable external package; operational schemas and rows are not historical certification.",
+        "current_status": "BLOCKED_PIT",
+        "date_range": {
+          "current_coverage": "UNBOUND_NO_CERTIFIED_IMPORT",
+          "end": null,
+          "requirement": "Must exactly cover the future sealed train, validation, and locked-OOS intervals; no current-list substitution.",
+          "start": null
+        },
+        "evidence_class": "fundamentals_with_availability",
+        "expected_source_contract": "Provider must deliver immutable content hashes, source identifiers, and decision-time availability timestamps for the sealed scope.",
+        "missing_coverage": [
+          "NO_BOUND_IMMUTABLE_IMPORT_PACKAGE"
+        ],
+        "required_dataset": "Versioned fundamentals with publication and availability times",
+        "required_fields": [
+          "permanent_security_id",
+          "effective_at",
+          "observed_at",
+          "published_at",
+          "available_at",
+          "ingested_at",
+          "vintage",
+          "source",
+          "provider",
+          "source_identifier",
+          "content_hash",
+          "adjustment_semantics"
+        ],
+        "securities": "Every security in historical train/validation/locked-OOS universe, including delisted and renamed securities.",
+        "timestamp_requirements": "published_at and available_at must be timezone-aware; feature is invisible when available_at is after decision_time."
+      },
+      {
+        "current_coverage": "No bound immutable external package; operational schemas and rows are not historical certification.",
+        "current_status": "BLOCKED_PIT",
+        "date_range": {
+          "current_coverage": "UNBOUND_NO_CERTIFIED_IMPORT",
+          "end": null,
+          "requirement": "Must exactly cover the future sealed train, validation, and locked-OOS intervals; no current-list substitution.",
+          "start": null
+        },
+        "evidence_class": "filings_with_availability",
+        "expected_source_contract": "Provider must deliver immutable content hashes, source identifiers, and decision-time availability timestamps for the sealed scope.",
+        "missing_coverage": [
+          "NO_BOUND_IMMUTABLE_IMPORT_PACKAGE"
+        ],
+        "required_dataset": "Filing corpus with acceptance/publication availability times",
+        "required_fields": [
+          "permanent_security_id",
+          "effective_at",
+          "observed_at",
+          "published_at",
+          "available_at",
+          "ingested_at",
+          "vintage",
+          "source",
+          "provider",
+          "source_identifier",
+          "content_hash",
+          "adjustment_semantics"
+        ],
+        "securities": "Every security in historical train/validation/locked-OOS universe, including delisted and renamed securities.",
+        "timestamp_requirements": "published_at and available_at must be timezone-aware; feature is invisible when available_at is after decision_time."
+      },
+      {
+        "current_coverage": "No bound immutable external package; operational schemas and rows are not historical certification.",
+        "current_status": "PASS_WITH_WARNINGS",
+        "date_range": {
+          "current_coverage": "UNBOUND_NO_CERTIFIED_IMPORT",
+          "end": null,
+          "requirement": "Must exactly cover the future sealed train, validation, and locked-OOS intervals; no current-list substitution.",
+          "start": null
+        },
+        "evidence_class": "news_events_with_availability",
+        "expected_source_contract": "Provider must deliver immutable content hashes, source identifiers, and decision-time availability timestamps for the sealed scope.",
+        "missing_coverage": [
+          "NO_BOUND_IMMUTABLE_IMPORT_PACKAGE"
+        ],
+        "required_dataset": "News/event corpus with source provenance and decision-time availability",
+        "required_fields": [
+          "effective_at",
+          "observed_at",
+          "available_at",
+          "published_at",
+          "ingested_at",
+          "vintage",
+          "source",
+          "provider",
+          "source_identifier",
+          "content_hash",
+          "adjustment_semantics"
+        ],
+        "securities": "All issuer and market-wide events used by the sealed protocol, including explicit unmapped market events.",
+        "timestamp_requirements": "published_at and available_at must be timezone-aware; feature is invisible when available_at is after decision_time."
+      },
+      {
+        "current_coverage": "No bound immutable external package; operational schemas and rows are not historical certification.",
+        "current_status": "BLOCKED_TRADABILITY",
+        "date_range": {
+          "current_coverage": "UNBOUND_NO_CERTIFIED_IMPORT",
+          "end": null,
+          "requirement": "Must exactly cover the future sealed train, validation, and locked-OOS intervals; no current-list substitution.",
+          "start": null
+        },
+        "evidence_class": "historical_executable_opens",
+        "expected_source_contract": "Provider must include legal next session, open, volume and halt/trading-status lineage; missing data blocks execution certification.",
+        "missing_coverage": [
+          "NO_BOUND_IMMUTABLE_IMPORT_PACKAGE"
+        ],
+        "required_dataset": "Historical next-session open, volume, halt and trading-status evidence",
+        "required_fields": [
+          "permanent_security_id",
+          "symbol_at_time",
+          "effective_at",
+          "observed_at",
+          "available_at",
+          "ingested_at",
+          "vintage",
+          "source",
+          "provider",
+          "source_identifier",
+          "content_hash",
+          "adjustment_semantics"
+        ],
+        "securities": "Every security in historical train/validation/locked-OOS universe, including delisted and renamed securities.",
+        "timestamp_requirements": "Next legal session, executable open, quote observation, volume and trading-status availability must all precede the recorded execution time."
+      }
+    ],
+    "schema_version": "ROUND74-PROCUREMENT-MANIFEST-v1"
+  }
+}
