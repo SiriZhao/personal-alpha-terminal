@@ -6,6 +6,7 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from hashlib import sha256
 from math import floor
+from time import perf_counter
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -192,6 +193,8 @@ class TodayResult:
     run_bundle: dict[str, object] | None = None
     # ROUND55: exact input snapshot for a non-authoritative counterfactual rerun.
     shadow_context: ShadowQuantContext | None = None
+    # ROUND73: measured local quant sub-stages for the terminal watchdog/audit.
+    performance_segments: dict[str, float] = field(default_factory=dict)
 
 
 def build_daily_quant_pipeline(
@@ -250,6 +253,7 @@ class ProductionDailyWorkflow:
         self.strategy_approval_store = StrategyApprovalStore(
             self.effective_config.strategy_approval_path
         )
+        self.performance_segments: dict[str, float] = {}
 
     def _pipeline(
         self,
@@ -273,10 +277,16 @@ class ProductionDailyWorkflow:
     ) -> TodayResult:
         if decision_time.tzinfo is None:
             raise ValueError("decision_time must be timezone-aware")
+        self.performance_segments = {}
+        segment_started = perf_counter()
         try:
             research = self.assembler.assemble_research(
                 decision_time=decision_time,
                 analysis_date=analysis_date,
+            )
+            self.performance_segments.update(self.assembler.profile_segments)
+            self.performance_segments["research_assembly"] = round(
+                perf_counter() - segment_started, 4
             )
         except (ArithmeticError, LookupError, RuntimeError, ValueError) as error:
             blocker = str(error) or type(error).__name__
@@ -322,11 +332,16 @@ class ProductionDailyWorkflow:
             blocker = "PORTFOLIO NOT INITIALIZED; run portfolio-init or portfolio-import"
             return self._research_only_result(research, blocker, regime_link=regime_link)
 
+        segment_started = perf_counter()
         try:
             assembled = self.assembler.complete_with_portfolio(
                 research,
                 portfolio_id=portfolio_id,
                 regime=regime_link.regime_input,
+            )
+            self.performance_segments.update(self.assembler.profile_segments)
+            self.performance_segments["portfolio_input_assembly"] = round(
+                perf_counter() - segment_started, 4
             )
             portfolio_approval = self.validation_registry.matching_portfolio_approval(
                 PortfolioValidationIdentity(
@@ -360,12 +375,24 @@ class ProductionDailyWorkflow:
                 validation_id,
                 operational_mode=operational_mode,
             )
+            segment_started = perf_counter()
             output = self.pipeline.run(assembled.inputs)
-            classical_output = self.pipeline.run(
-                replace(
-                    assembled.inputs,
-                    alpha_signals=assembled.classical_alpha_signals,
+            # Probability has permanent zero formal influence unless a future
+            # approved overlay produces a materially different input tuple.
+            # Re-running the deterministic optimizer/risk path on byte-for-
+            # byte identical signals only doubled the hot daily computation;
+            # reuse is exact, not an approximation or a Top-N shortcut.
+            if assembled.inputs.alpha_signals == assembled.classical_alpha_signals:
+                classical_output = output
+            else:
+                classical_output = self.pipeline.run(
+                    replace(
+                        assembled.inputs,
+                        alpha_signals=assembled.classical_alpha_signals,
+                    )
                 )
+            self.performance_segments["optimizer_and_risk"] = round(
+                perf_counter() - segment_started, 4
             )
         except (ArithmeticError, LookupError, RuntimeError, ValueError) as error:
             blocker = str(error) or type(error).__name__
@@ -1316,6 +1343,7 @@ class ProductionDailyWorkflow:
                 if assembled is not None and output is not None
                 else None
             ),
+            performance_segments=dict(self.performance_segments),
         )
 
     def _lifecycle_and_blocked(

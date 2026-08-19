@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, date, datetime, time, timedelta
+from time import perf_counter
 
 import numpy as np
 import pandas as pd
@@ -221,6 +222,10 @@ class ProductionDailyQuantInputAssembler:
         self.strategy_approval_store = StrategyApprovalStore(
             self.effective_config.strategy_approval_path
         )
+        self.profile_segments: dict[str, float] = {}
+
+    def _profile(self, name: str, started: float) -> None:
+        self.profile_segments[name] = round(perf_counter() - started, 4)
 
     def assemble(
         self,
@@ -247,6 +252,9 @@ class ProductionDailyQuantInputAssembler:
     ) -> AssembledResearchInput:
         if decision_time.tzinfo is None:
             raise ValueError("decision_time must be timezone-aware")
+        self.profile_segments = {}
+        research_started = perf_counter()
+        segment_started = perf_counter()
         universe = self.repository.certified_universe(as_of=decision_time)
         request = ResearchDataRequest(
             # This first pass produces diagnostics even when no real portfolio is
@@ -272,6 +280,7 @@ class ProductionDailyQuantInputAssembler:
             decision_time=decision_time,
             reference_symbols=(benchmark_symbol, self.effective_config.nasdaq_benchmark),
         )
+        self._profile("universe_selection", segment_started)
         if not alpha_securities:
             raise ValueError("broad US equity universe contains no diagnostic equities")
         price_securities = tuple(
@@ -281,6 +290,7 @@ class ProductionDailyQuantInputAssembler:
             }.values()
         )
         start_time = decision_time - timedelta(days=history_days)
+        segment_started = perf_counter()
         if self.effective_config.broad_universe.require_pit_total_return:
             price_frame, _versions = self.repository.total_return_frame(
                 price_securities, as_of=decision_time, start_date=start_time
@@ -294,12 +304,14 @@ class ProductionDailyQuantInputAssembler:
             price_frame = self.repository.raw_price_frame(
                 price_securities, as_of=decision_time, start_date=start_time
             )
+        self._profile("pit_build", segment_started)
         alpha_symbols = tuple(item.symbol for item in alpha_securities)
         alpha_price_frame = price_frame[price_frame["ticker"].isin(alpha_symbols)].copy()
         metadata = self.repository.metadata_frame(alpha_securities, as_of=decision_time)
         risk_metadata_frame = self.repository.metadata_frame(
             price_securities, as_of=decision_time
         )
+        segment_started = perf_counter()
         registry = ModelRegistryService(self.session)
         record = registry.ensure_registered(
             model_id=self.strategy.model_id,
@@ -372,6 +384,8 @@ class ProductionDailyQuantInputAssembler:
         fundamentals = self.repository.fundamental_snapshot(
             alpha_securities, as_of=decision_time
         )
+        self._profile("authorization_and_metadata", segment_started)
+        segment_started = perf_counter()
         strategy_result = self.strategy.generate(
             prices=alpha_price_frame,
             metadata=metadata,
@@ -393,6 +407,7 @@ class ProductionDailyQuantInputAssembler:
                 operational_policy is not None or strategy_approval_effective
             ),
         )
+        self._profile("factor_and_alpha", segment_started)
         strategy_version = (
             f"{self.strategy.model_id}:{self.strategy.version}:"
             f"{strategy_result.parameter_fingerprint[:12]}"
@@ -411,6 +426,7 @@ class ProductionDailyQuantInputAssembler:
         )
         overlay_artifact = None
         overlay_evidence: tuple[ConditionalProbabilityEvidence, ...] = ()
+        segment_started = perf_counter()
         if approval is not None and broad_universe_production_eligible:
             try:
                 overlay_artifact = self.probability_overlay_registry.matching_inputs(
@@ -495,6 +511,8 @@ class ProductionDailyQuantInputAssembler:
         classical_candidate_signals = tuple(
             item for item in strategy_result.signals if item.symbol in classical_candidate_set
         )
+        self._profile("probability_and_candidates", segment_started)
+        segment_started = perf_counter()
         candidate_evidence = {
             "candidate_compression": candidate_compression.document(),
             "candidate_count": len(candidate_symbols),
@@ -560,6 +578,10 @@ class ProductionDailyQuantInputAssembler:
                 ),
             )
             for row in risk_metadata_frame.itertuples(index=False)
+        )
+        self._profile("returns_and_risk_inputs", segment_started)
+        self.profile_segments["research_total"] = round(
+            perf_counter() - research_started, 4
         )
         return AssembledResearchInput(
             authorization,
@@ -687,6 +709,7 @@ class ProductionDailyQuantInputAssembler:
         portfolio_id: int,
         regime: RegimeRiskInput | None = None,
     ) -> AssembledDailyInput:
+        segment_started = perf_counter()
         universe = self.repository.certified_universe(
             as_of=research.decision_time,
             snapshot_id=int(research.universe_snapshot_id),
@@ -756,7 +779,7 @@ class ProductionDailyQuantInputAssembler:
             current_weights,
             decision_cutoff=research.decision_time,
         )
-        return AssembledDailyInput(
+        assembled = AssembledDailyInput(
             DailyQuantInput(
                 authorization=decision_authorization,
                 decision_time=research.decision_time,
@@ -811,6 +834,8 @@ class ProductionDailyQuantInputAssembler:
             strategy_approval_decision=research.strategy_approval_decision,
             strategy_approval_effective=research.strategy_approval_effective,
         )
+        self._profile("portfolio_input_assembly", segment_started)
+        return assembled
 
     def _select_alpha_universe(
         self,

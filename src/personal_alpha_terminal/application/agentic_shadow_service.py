@@ -367,10 +367,21 @@ def build_agentic_shadow_document(
             SHADOW_LAMBDA * raw_adjustments[factor.symbol]
         )
 
-    shadow_output = _run_shadow_pipeline(
-        workflow=workflow,
-        effective_config=effective_config,
-        adjustments=applied_adjustments,
+    shadow_adjustment_active = _has_material_shadow_adjustment(applied_adjustments)
+    # With no trusted Shadow thesis, every adjustment is exactly zero. Running
+    # the canonical optimizer/risk engine again on byte-identical production
+    # inputs cannot create information or strengthen a safety gate; it only
+    # duplicates the hottest daily computation. The formal production result
+    # remains the authoritative, already-evaluated risk result. Any nonzero
+    # Shadow adjustment still takes the full canonical counterfactual path.
+    shadow_output = (
+        _run_shadow_pipeline(
+            workflow=workflow,
+            effective_config=effective_config,
+            adjustments=applied_adjustments,
+        )
+        if shadow_adjustment_active
+        else None
     )
     shadow_targets = (
         shadow_output.target.target_weights
@@ -518,7 +529,10 @@ def build_agentic_shadow_document(
             "rejected_events": list(evidence.rejected_events),
             "connectivity": connectivity,
         },
-        "shadow_pipeline": _shadow_pipeline_document(shadow_output),
+        "shadow_pipeline": _shadow_pipeline_document(
+            shadow_output,
+            no_op_reused=not shadow_adjustment_active,
+        ),
         "decision_attribution": {
             "quant_only": "persisted deterministic production target",
             "hybrid": "independent shadow rerun through canonical optimizer and risk wall",
@@ -535,6 +549,7 @@ def build_agentic_shadow_document(
             "real_structured_theses": real_theses,
             "real_shadow_llm_decisions": real_decisions,
             "hybrid_counterfactual_executed": int(shadow_output is not None),
+            "hybrid_counterfactual_noop_reused": int(not shadow_adjustment_active),
             "pit_events": len(all_events),
         },
         "invariants": {
@@ -570,6 +585,12 @@ def _run_shadow_pipeline(
         operational_mode=context.operational_mode,
     )
     return pipeline.run(replace(context.inputs, alpha_signals=signals))
+
+
+def _has_material_shadow_adjustment(adjustments: Mapping[str, float]) -> bool:
+    """Return whether the Shadow input differs from the formal input tuple."""
+
+    return any(isfinite(float(value)) and float(value) != 0.0 for value in adjustments.values())
 
 
 def _shadow_signal(signal: AlphaSignal, adjustment: float) -> AlphaSignal:
@@ -767,12 +788,21 @@ def _shadow_actions(
     return actions
 
 
-def _shadow_pipeline_document(output: DailyQuantOutput | None) -> dict[str, object]:
+def _shadow_pipeline_document(
+    output: DailyQuantOutput | None,
+    *,
+    no_op_reused: bool = False,
+) -> dict[str, object]:
     if output is None:
         return {
-            "status": "NOT_RUN",
-            "reason": "SHADOW_CONTEXT_UNAVAILABLE",
+            "status": "REUSED_FORMAL_ZERO_ADJUSTMENT" if no_op_reused else "NOT_RUN",
+            "reason": (
+                "NO_MATERIAL_SHADOW_ADJUSTMENT; formal production risk result reused"
+                if no_op_reused
+                else "SHADOW_CONTEXT_UNAVAILABLE"
+            ),
             "deterministic_risk_evaluated": False,
+            "formal_risk_result_reused": no_op_reused,
         }
     target = output.target
     return {

@@ -95,6 +95,28 @@ def _save_backfill_state(path: Path, state: dict[str, dict[str, object]]) -> Non
     )
 
 
+def _listing_date_for_backfill(stock: Stock) -> date | None:
+    """Return a real listing date, never a current-directory observation date.
+
+    Nasdaq Trader current listings do not supply an IPO/listing date.  Earlier
+    registration persisted its snapshot date in ``list_date``; treating that
+    metadata timestamp as an IPO date suppresses legitimate cache planning.
+    The correction is read-only and narrowly recognizes only that source and
+    equal-date shape, leaving real provider/security-master dates intact.
+    """
+
+    listing_date = getattr(stock, "list_date", None)
+    available_time = getattr(stock, "available_time", None)
+    if (
+        getattr(stock, "source", None) == "NASDAQ_TRADER_SYMBOL_DIRECTORY_CURRENT"
+        and listing_date is not None
+        and available_time is not None
+        and listing_date == available_time.date()
+    ):
+        return None
+    return listing_date
+
+
 def classify_backfill_decision(
     symbol: str,
     *,
@@ -137,8 +159,21 @@ def classify_backfill_decision(
         STRUCTURALLY_INSUFFICIENT_HISTORY,
         NEW_LISTING_WAITING_FOR_HISTORY,
     }:
-        if eligible_after is not None and end_date < eligible_after:
+        # A current symbol directory reports an observation date, not a real
+        # IPO/listing date.  A legacy state derived from that observation must
+        # not suppress the bounded provider request that establishes history.
+        if listing_date is None:
+            current_state = ""
+        elif eligible_after is not None and end_date < eligible_after:
             return current_state, eligible_after
+    # If the provider has already established an earliest real bar, use that
+    # evidence rather than a current-directory observation date.  This avoids
+    # re-requesting a young security's impossible pre-listing history while
+    # still allowing the first bounded request to discover its true coverage.
+    if listing_date is None and earliest is not None and earliest > required_history_start:
+        history_eligible_after = earliest + (end_date - required_history_start)
+        if end_date < history_eligible_after:
+            return STRUCTURALLY_INSUFFICIENT_HISTORY, history_eligible_after
     if earliest is None or latest is None or earliest > required_history_start:
         return FULL_BACKFILL_REQUIRED, None
     if latest >= end_date:
@@ -264,7 +299,10 @@ class MarketDataEngine:
                 self._update_stock(
                     stock,
                     effective_end,
-                    forced_start_date=start_date,
+                    # Broad stocks have their own grouped history planner.
+                    # Passing the bootstrap window here forced ETFs and indices
+                    # to redownload the same already-persisted range daily.
+                    forced_start_date=None,
                 )
                 for stock in remaining
             )
@@ -354,7 +392,7 @@ class MarketDataEngine:
             if stock is None:
                 continue
             earliest, latest = bounds_by_id.get(stock.id, (None, None))
-            listing_date = getattr(stock, "list_date", None)
+            listing_date = _listing_date_for_backfill(stock)
             refresh_class, eligible_after = classify_backfill_decision(
                 symbol,
                 earliest=earliest,
@@ -691,9 +729,11 @@ class MarketDataEngine:
                 market=market,
                 source=provider.source,
                 provider=provider.provider_id,
-                status="no_data",
+                status="cached",
                 start_date=start_date,
                 end_date=end_date,
+                error="HISTORICAL_CACHE_REUSED_UP_TO_DATE",
+                refresh_class="CACHED_UP_TO_DATE",
             )
 
         try:
@@ -917,9 +957,10 @@ class MarketDataEngine:
     def _incremental_start(self, latest: date | None) -> date:
         if latest is None:
             return self._settings.market_data_default_start
-        overlap = self._settings.market_data_overlap_days
-        candidate = latest + timedelta(days=1 - overlap)
-        return max(candidate, self._settings.market_data_default_start)
+        # Do not request overlap sessions merely because they are convenient.
+        # Corrections require explicit provenance; a normal warm refresh only
+        # asks for legally missing sessions.
+        return max(latest + timedelta(days=1), self._settings.market_data_default_start)
 
     def _provider_for(self, market: Market, asset_type: AssetType) -> MarketDataProvider:
         return self._providers_for(market, asset_type)[0]

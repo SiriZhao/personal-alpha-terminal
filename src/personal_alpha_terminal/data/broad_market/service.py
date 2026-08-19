@@ -222,7 +222,6 @@ class BroadUniverseDataService:
                     skip_reasons.get("canonical_code_conflict", 0) + 1
                 )
                 continue
-            active_from = record.listing_date or record.active_from or decision_time.date()
             security = Stock(
                 canonical_code=canonical,
                 symbol=record.symbol,
@@ -232,7 +231,10 @@ class BroadUniverseDataService:
                 asset_type="stock",
                 currency=record.currency or "USD",
                 timezone="America/New_York",
-                list_date=active_from,
+                # The current Nasdaq directory has no IPO-date field.  Its
+                # effective date means only "observed in this snapshot" and
+                # must never be recorded as a real listing date.
+                list_date=record.listing_date,
                 delist_date=None,
                 is_active=True,
                 source=record.source,

@@ -15,11 +15,20 @@ from personal_alpha_terminal.core.runtime_bootstrap import (
 )
 
 
+def default_console_lock_path() -> Path:
+    """Resolve the per-user lock, with an explicit test/portable override."""
+
+    override = os.environ.get("PAT_TERMINAL_RUNTIME_DIR", "").strip()
+    if override:
+        return Path(override) / "console-instance.json"
+    return application_data_dir() / "run" / "console-instance.json"
+
+
 class ConsoleInstanceLock(AbstractContextManager["ConsoleInstanceLock"]):
     """Simple per-user console lock; stale PIDs are replaced safely."""
 
     def __init__(self, path: Path | None = None) -> None:
-        self.path = path or application_data_dir() / "run" / "console-instance.json"
+        self.path = path or default_console_lock_path()
 
     def __enter__(self) -> ConsoleInstanceLock:
         self.path.parent.mkdir(parents=True, exist_ok=True)

@@ -1,7 +1,8 @@
 """ROUND24 backfill state machine + provider accounting tests (PHASE G, N)."""
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
+from types import SimpleNamespace
 
 from personal_alpha_terminal.data.market_data.service import (
     FULL_BACKFILL_REQUIRED,
@@ -9,6 +10,7 @@ from personal_alpha_terminal.data.market_data.service import (
     PERMANENT_PROVIDER_NO_HISTORY,
     RETRY_AFTER,
     STRUCTURALLY_INSUFFICIENT_HISTORY,
+    _listing_date_for_backfill,
     _load_backfill_state,
     _save_backfill_state,
     classify_backfill_decision,
@@ -80,6 +82,61 @@ def test_new_listing_not_repeatedly_backfilled() -> None:
     )
     assert refresh_class == NEW_LISTING_WAITING_FOR_HISTORY
     assert eligible_after is not None
+
+
+def test_unknown_listing_date_cannot_reuse_legacy_new_listing_deferral() -> None:
+    """A current-directory observation date is not evidence of a recent IPO."""
+
+    state = {
+        "UNKNOWN": {
+            "state": NEW_LISTING_WAITING_FOR_HISTORY,
+            "history_eligible_after": "2027-08-01",
+        }
+    }
+    refresh_class, eligible_after = classify_backfill_decision(
+        "UNKNOWN",
+        earliest=None,
+        latest=None,
+        required_history_start=REQUIRED_START,
+        end_date=END,
+        listing_date=None,
+        state=state,
+    )
+    assert refresh_class == FULL_BACKFILL_REQUIRED
+    assert eligible_after is None
+
+
+def test_current_directory_observation_date_is_not_a_real_listing_date() -> None:
+    observed = datetime(2026, 8, 11, 12, tzinfo=UTC)
+    inferred = SimpleNamespace(
+        source="NASDAQ_TRADER_SYMBOL_DIRECTORY_CURRENT",
+        list_date=observed.date(),
+        available_time=observed,
+    )
+    genuine = SimpleNamespace(
+        source="reviewed_security_master",
+        list_date=date(2020, 1, 1),
+        available_time=observed,
+    )
+
+    assert _listing_date_for_backfill(inferred) is None
+    assert _listing_date_for_backfill(genuine) == date(2020, 1, 1)
+
+
+def test_provider_observed_young_history_is_deferred_without_repeated_backfill() -> None:
+    refresh_class, eligible_after = classify_backfill_decision(
+        "YOUNG",
+        earliest=date(2026, 6, 1),
+        latest=END,
+        required_history_start=REQUIRED_START,
+        end_date=END,
+        listing_date=None,
+        state={},
+    )
+
+    assert refresh_class == STRUCTURALLY_INSUFFICIENT_HISTORY
+    assert eligible_after is not None
+    assert eligible_after > END
 
 
 def test_permanent_no_history_state_persists() -> None:

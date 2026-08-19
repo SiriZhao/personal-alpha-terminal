@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from personal_alpha_terminal import __version__
 from personal_alpha_terminal.agents.llm.factory import build_llm_provider
-from personal_alpha_terminal.agents.llm.providers import DeepSeekProvider, LLMProvider
+from personal_alpha_terminal.agents.llm.providers import LLMProvider
 from personal_alpha_terminal.ai_advisory import (
     PRODUCTION_INFLUENCE,
     build_quant_facts,
@@ -123,6 +123,98 @@ from personal_alpha_terminal.terminal.market_sessions import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _external_llm_allowed(*, configured: bool, connectivity: str) -> bool:
+    """Permit optional external calls only after a positive live status.
+
+    A present credential proves neither DNS nor provider availability. The LLM
+    and Agentic Shadow branches have zero formal production influence, so an
+    unverified provider must degrade those branches rather than consume the
+    daily worker's bounded refresh budget.
+    """
+
+    return configured and connectivity == "AVAILABLE"
+
+
+def _agentic_shadow_is_deferred(
+    *,
+    external_enabled: bool,
+    provider_factory_configured: bool,
+) -> bool:
+    """Keep disabled normal-daily challenger work out of the hot path."""
+
+    return not external_enabled and not provider_factory_configured
+
+
+class _AgenticShadowDeferred(RuntimeError):
+    """Internal control flow for an explicitly deferred challenger run."""
+
+
+def _deferred_agentic_shadow_document(*, reason: str) -> dict[str, object]:
+    """Return a truthful lightweight placeholder for the non-authoritative branch."""
+
+    return {
+        "schema_version": "hybrid-intelligence-artifact-v2",
+        "status": {
+            "provider": "deferred",
+            "model": "deferred",
+            "event_intelligence": "DEFERRED",
+            "company_intelligence": "DEFERRED",
+            "market_intelligence": "DEFERRED",
+            "semantic_alpha": "SHADOW_DEFERRED",
+            "promotion_gate": "DEFERRED",
+            "formal_economic_influence": 0.0,
+        },
+        "securities": [],
+        "actions": [],
+        "market": {},
+        "portfolio_semantic_risk": {},
+        "shadow_ranking": [],
+        "llm_inferences": [],
+        "structured_theses": {},
+        "debates": {},
+        "event_provenance": {},
+        "degradation": {
+            "by_symbol": {},
+            "rejected_events": [],
+            "connectivity": "DEFERRED",
+            "reason": reason,
+        },
+        "shadow_pipeline": {
+            "status": "DEFERRED",
+            "reason": reason,
+            "deterministic_risk_evaluated": False,
+            "formal_risk_result_reused": True,
+        },
+        "decision_attribution": {
+            "quant_only": "persisted deterministic production target",
+            "hybrid": "deferred challenger; no production effect",
+            "llm_formal_influence": 0.0,
+            "production_optimizer_final_authority": True,
+            "risk_wall_final_authority": True,
+        },
+        "production_closure": {
+            "champion": "CURRENT_PRODUCTION_QUANT",
+            "formal_influence": {"quant": 1.0, "llm": 0.0, "probability": 0.0},
+        },
+        "counts": {
+            "real_structured_theses": 0,
+            "real_shadow_llm_decisions": 0,
+            "hybrid_counterfactual_executed": 0,
+            "pit_events": 0,
+        },
+        "invariants": {
+            "long_only": True,
+            "auto_execution": False,
+            "manual_confirmation": True,
+            "llm_cannot_bypass_risk": True,
+            "production_lambda": 0.0,
+            "pre_optimizer_top_n": None,
+            "fixed_holdings_cap": None,
+            "production_targets_unchanged": True,
+        },
+    }
 
 _STAGE_ORDER = (
     "CALENDAR",
@@ -425,6 +517,8 @@ class DailyQuantOrchestrator:
         if progress is not None:
             progress("[FACTOR] \u8ba1\u7b97\u5b8c\u6210")
         stage_started = perf_counter()
+        if progress is not None:
+            progress("[LLM/NEWS] \u5f71\u5b50\u667a\u80fd\u4e0e\u65b0\u95fb\u8bc4\u4f30")
         self._add_llm_intelligence_stage(
             stages,
             as_of=effective_decision_time,
@@ -433,7 +527,11 @@ class DailyQuantOrchestrator:
             run_id=run_id,
             eligible_symbols=tuple(item.symbol for item in workflow_result.factors),
         )
+        if progress is not None:
+            progress("[LLM/NEWS] \u8bc4\u4f30\u5b8c\u6210")
         stage_started = perf_counter()
+        if progress is not None:
+            progress("[ETF] ETF \u8bc1\u636e\u8bc4\u4f30\u4e2d")
         etf_universe, etf_targets, etf_composition = self._add_etf_sleeve_stage(
             stages,
             as_of=effective_decision_time,
@@ -441,12 +539,20 @@ class DailyQuantOrchestrator:
             analysis_date=analysis_date,
             workflow_result=workflow_result,
         )
+        if progress is not None:
+            progress("[ETF] \u8bc4\u4f30\u5b8c\u6210")
+        if progress is not None:
+            progress("[EXPOSURE] \u5f53\u524d\u66dd\u9669\u8bc1\u636e\u6784\u5efa\u4e2d")
         current_exposure = self._build_current_exposure(
             workflow_result=workflow_result,
             decision_as_of=effective_decision_time,
         )
         current_exposure = current_exposure or {}
+        if progress is not None:
+            progress("[EXPOSURE] \u5f53\u524d\u66dd\u9669\u8bc1\u636e\u5df2\u5b8c\u6210")
         stage_started = perf_counter()
+        if progress is not None:
+            progress("[AI_BRIEF] \u53ef\u89e3\u91ca\u7b80\u62a5\u751f\u6210\u4e2d")
         ai_brief = self._add_ai_brief_stage(
             stages,
             as_of=effective_decision_time,
@@ -461,13 +567,25 @@ class DailyQuantOrchestrator:
             },
             current_exposure=current_exposure,
         )
+        if progress is not None:
+            progress("[AI_BRIEF] \u751f\u6210\u5b8c\u6210")
         from personal_alpha_terminal.application.hybrid_intelligence_service import (
             build_shadow_hybrid_document,
         )
 
         quant_authority_hash = _quant_authority_fingerprint(workflow_result)
         shadow_evidence = AgenticShadowEvidence(companies={})
+        shadow_deferred = _agentic_shadow_is_deferred(
+            external_enabled=self._settings.agentic_shadow_external_enabled,
+            provider_factory_configured=self._shadow_llm_provider_factory is not None,
+        )
+        if progress is not None:
+            progress("[SHADOW] \u5f71\u5b50\u8bc1\u636e\u4e0e\u524d\u77bb\u53f0\u8d26")
         try:
+            if shadow_deferred:
+                raise _AgenticShadowDeferred(
+                    "AGENTIC_SHADOW_DEFERRED: enable agentic shadow or use forward-shadow"
+                )
             with self._factory.begin() as session:
                 pit_events = IntelligenceRepository(session).visible_events(
                     effective_decision_time
@@ -494,7 +612,7 @@ class DailyQuantOrchestrator:
                     "rejected_event_count": len(shadow_evidence.rejected_events),
                 },
             )
-            provider_name, _, configured, _ = self._configured_llm_identity()
+            provider_name, _, configured, connectivity = self._configured_llm_identity()
             shadow_provider = (
                 self._shadow_llm_provider_factory()
                 if self._shadow_llm_provider_factory is not None
@@ -503,7 +621,12 @@ class DailyQuantOrchestrator:
                         update={"llm_provider": provider_name}
                     )
                 )
-                if configured
+                if (
+                    self._settings.agentic_shadow_external_enabled
+                    and _external_llm_allowed(
+                        configured=configured, connectivity=connectivity
+                    )
+                )
                 else None
             )
             self._notify_shadow_checkpoint(
@@ -550,6 +673,9 @@ class DailyQuantOrchestrator:
                     "production_lambda": 0.0,
                 },
             )
+        except _AgenticShadowDeferred as error:
+            warnings.append(str(error))
+            hybrid_intelligence = _deferred_agentic_shadow_document(reason=str(error))
         except Exception as error:
             warnings.append(
                 "Agentic Shadow degraded "
@@ -657,6 +783,10 @@ class DailyQuantOrchestrator:
             hybrid_status = hybrid_intelligence.get("status")
             if isinstance(hybrid_status, dict):
                 hybrid_status["promotion_gate"] = "PROMOTION_EVALUATION_FAILED"
+        if progress is not None:
+            progress("[SHADOW] \u5f71\u5b50\u8bc1\u636e\u5904\u7406\u5b8c\u6210")
+        if progress is not None:
+            progress("[PROBABILITY] \u524d\u77bb\u9884\u6d4b\u8bc1\u636e\u5199\u5165\u4e2d")
         self._record_probability_predictions(
             workflow_result=workflow_result,
             run_identity=run_identity,
@@ -667,12 +797,18 @@ class DailyQuantOrchestrator:
             decision_as_of=workflow_result.data_cutoff or effective_decision_time,
             trade_date=trade_date,
         )
+        if progress is not None:
+            progress("[PROBABILITY] \u524d\u77bb\u9884\u6d4b\u8bc1\u636e\u5199\u5165\u5b8c\u6210")
         stage_started = perf_counter()
+        if progress is not None:
+            progress("[RISK/EXECUTION] \u9884\u6267\u884c\u5b89\u5168\u95e8\u7981\u8bc4\u4f30")
         pre_execution = self._add_pre_execution_stage(
             stages,
             as_of=effective_decision_time,
             duration_started=stage_started,
         )
+        if progress is not None:
+            progress("[RISK/EXECUTION] \u5b89\u5168\u95e8\u7981\u8bc4\u4f30\u5b8c\u6210")
         blockers.extend(workflow_result.blockers)
         warnings.extend(workflow_result.warnings)
         for name in _STAGE_ORDER:
@@ -707,6 +843,8 @@ class DailyQuantOrchestrator:
             hybrid_intelligence=hybrid_intelligence,
         )
         if result.decision_manifest is not None:
+            if progress is not None:
+                progress("[PERSISTENCE] \u5bc6\u5c01\u8bc1\u636e\u5305\u4e2d")
             try:
                 from personal_alpha_terminal.application.run_bundle import (
                     RunBundleStore,
@@ -727,7 +865,12 @@ class DailyQuantOrchestrator:
                 # is surfaced through the certificate provenance below rather
                 # than aborting an already-computed decision.
                 pass
-        return self._persist_result(result)
+        if progress is not None:
+            progress("[PERSISTENCE] \u8fd0\u884c\u8bc1\u4e66\u5199\u5165\u4e2d")
+        persisted = self._persist_result(result)
+        if progress is not None:
+            progress("[PERSISTENCE] \u5b8c\u6210")
+        return persisted
 
     def _record_probability_predictions(
         self,
@@ -1178,15 +1321,17 @@ class DailyQuantOrchestrator:
             )
             facts["data_gaps"] = data_gaps
             facts["current_exposure"] = current_exposure
-            provider_factory = None
-            if configured:
-                provider_factory = lambda: DeepSeekProvider(  # noqa: E731
-                    api_key=cast(str, self._settings.deepseek_api_key),
-                    model=model,
-                    timeout_seconds=self._settings.llm_timeout_seconds,
-                    max_retries=self._settings.llm_max_retries,
-                    base_url=self._settings.deepseek_base_url,
+            # AI brief output is explanatory only. A configured credential is
+            # not proof that the provider can be reached, so keep the bounded
+            # daily worker on deterministic fallback until connectivity has
+            # been positively verified.
+            provider_factory = (
+                (lambda: build_llm_provider(self._settings))
+                if _external_llm_allowed(
+                    configured=configured, connectivity=connectivity
                 )
+                else None
+            )
             market_state_doc: dict[str, object] | None = None
             try:
                 from personal_alpha_terminal.application.market_state import (
@@ -1710,6 +1855,16 @@ class DailyQuantOrchestrator:
             "Trade Generator": "EXECUTION",
             "Daily Decision": "DECISION",
         }
+        profile = {
+            **workflow.performance_segments,
+            "quant_workflow_total": round(duration, 4),
+        }
+        stage_durations = {
+            "PIT": profile.get("pit_build", 0.0),
+            "FACTOR": profile.get("factor_and_alpha", 0.0),
+            "SIGNAL": profile.get("probability_and_candidates", 0.0),
+            "PORTFOLIO": profile.get("optimizer_and_risk", 0.0),
+        }
         for item in workflow.pipeline_stages:
             name = mapping.get(item.name)
             if name is None:
@@ -1726,7 +1881,7 @@ class DailyQuantOrchestrator:
             stages[name] = StageResult(
                 name,
                 status,
-                0.0,
+                stage_durations.get(name, 0.0),
                 item.detail,
                 {
                     "source": item.name,
@@ -1739,6 +1894,7 @@ class DailyQuantOrchestrator:
                             else 1
                         )
                     ),
+                    "runtime_profile_seconds": profile,
                     **(
                         {
                             "authorization_class": (
@@ -1761,7 +1917,7 @@ class DailyQuantOrchestrator:
                 StageResult(
                     "FEATURE",
                     StageStatus.PASS,
-                    0.0,
+                    profile.get("factor_and_alpha", 0.0),
                     "PIT price features computed",
                     {
                         "feature_names": sorted(
@@ -1770,6 +1926,7 @@ class DailyQuantOrchestrator:
                         "valid_count": len(workflow.factors),
                         "missing_count": max(0, workflow.universe_count - len(workflow.factors)),
                         "output_row_count": len(workflow.factors),
+                        "runtime_profile_seconds": profile,
                     },
                 ),
             )
@@ -1778,7 +1935,7 @@ class DailyQuantOrchestrator:
                 StageResult(
                     "FACTOR",
                     StageStatus.PASS,
-                    0.0,
+                    profile.get("factor_and_alpha", 0.0),
                     f"{len(workflow.factors)} cross-sectional observations",
                     {
                         "factor_names": sorted(
@@ -1786,6 +1943,7 @@ class DailyQuantOrchestrator:
                         ),
                         "cross_sectional_sample_size": len(workflow.factors),
                         "output_row_count": len(workflow.factors),
+                        "runtime_profile_seconds": profile,
                     },
                 ),
             )
@@ -1798,7 +1956,7 @@ class DailyQuantOrchestrator:
                     if workflow.probability_overlay_active
                     else StageStatus.PASS_DEGRADED
                 ),
-                0.0,
+                profile.get("probability_and_candidates", 0.0),
                 (
                     "approved calibrated residual overlay active"
                     if workflow.probability_overlay_active
@@ -1812,16 +1970,10 @@ class DailyQuantOrchestrator:
                     "fallback_reason": workflow.probability_overlay_reason,
                     "position_influence": (1.0 if workflow.probability_overlay_active else 0.0),
                     "output_row_count": len(workflow.probability_overlay_effects),
+                    "runtime_profile_seconds": profile,
                 },
             ),
         )
-        first_quant = next(
-            (name for name in _STAGE_ORDER if name in stages and name != "CALENDAR"),
-            None,
-        )
-        if first_quant is not None:
-            stage_result = stages[first_quant]
-            stages[first_quant] = replace(stage_result, duration_seconds=duration)
 
     def _build_result(
         self,

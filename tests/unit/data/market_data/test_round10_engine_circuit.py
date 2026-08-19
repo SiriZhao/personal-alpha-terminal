@@ -24,7 +24,7 @@ from personal_alpha_terminal.data.market_data.exceptions import ProviderRequestE
 from personal_alpha_terminal.data.market_data.repository import PriceRepository
 from personal_alpha_terminal.data.market_data.schemas import InstrumentUpdateResult, PriceBar
 from personal_alpha_terminal.data.market_data.service import MarketDataEngine
-from personal_alpha_terminal.models import Base, Stock
+from personal_alpha_terminal.models import Base, Price, Stock
 
 START = date(2026, 7, 1)
 END = date(2026, 7, 3)
@@ -287,6 +287,94 @@ def test_batch_refresh_routes_non_stock_assets_outside_stock_batch(
 
     assert batch.symbols == ("A", "B", "C")
     assert routed == ["etf"]
+    engine.dispose()
+
+
+def test_warm_non_stock_refresh_does_not_re_request_a_persisted_session(tmp_path: Path) -> None:
+    """ETFs/indices used to receive the forced bootstrap range on every run."""
+
+    engine = build_engine("sqlite://")
+    Base.metadata.create_all(engine)
+
+    @dataclass(frozen=True, slots=True)
+    class _EtfProvider:
+        source: str = "fixture"
+        provider_id: str = "fixture.etf"
+        calls: int = 0
+
+        @property
+        def capabilities(self) -> tuple[ProviderCapability, ...]:
+            return (
+                ProviderCapability(
+                    provider=self.source,
+                    market="US",
+                    asset_type="etf",
+                    endpoint="fixture",
+                    raw_volume_unit="share",
+                    volume_unit="share",
+                    price_type="unadjusted_ohlcv",
+                    supported=True,
+                    volume_multiplier=Decimal("1"),
+                    raw_share_unit=Decimal("1"),
+                ),
+            )
+
+        def fetch_raw(self, request: AssetPriceRequest) -> ProviderRawBatch:
+            del request
+            object.__setattr__(self, "calls", self.calls + 1)
+            raise AssertionError("a current ETF must not call the provider")
+
+    available = datetime(2026, 7, 3, 20, 30, tzinfo=__import__("datetime").timezone.utc)
+    provider = _EtfProvider()
+    with Session(engine) as session:
+        stock = Stock(
+            canonical_code="US:ARCX:WARM",
+            symbol="WARM",
+            name="Warm ETF",
+            market="US",
+            exchange="ARCX",
+            asset_type="etf",
+            currency="USD",
+            timezone="America/New_York",
+            list_date=None,
+            is_active=True,
+            source="fixture",
+            provider="fixture",
+            available_time=available,
+            ingested_time=available,
+        )
+        session.add(stock)
+        session.flush()
+        session.add(
+            Price(
+                stock_id=stock.id,
+                trade_date=END,
+                open=Decimal("100"),
+                high=Decimal("101"),
+                low=Decimal("99"),
+                close=Decimal("100"),
+                volume=1000,
+                asset_type="etf",
+                volume_unit="share",
+                price_type="unadjusted_ohlcv",
+                source="fixture",
+                provider="fixture.etf",
+                event_time=available,
+                available_time=available,
+                ingested_at=available,
+            )
+        )
+        session.flush()
+        service = MarketDataEngine(
+            providers=[provider],
+            repository=PriceRepository(session),
+            settings=_settings(tmp_path),
+        )
+        outcome = service._update_stock(stock, END, forced_start_date=None)
+
+    assert outcome.status == "cached"
+    assert outcome.refresh_class == "CACHED_UP_TO_DATE"
+    assert provider.calls == 0
     engine.dispose()
 
 

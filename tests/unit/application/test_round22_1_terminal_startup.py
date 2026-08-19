@@ -33,7 +33,20 @@ def _config(tmp_path: Path) -> EffectiveRuntimeConfig:
 def test_startup_panel_prints_immediately_without_network(monkeypatch, tmp_path: Path) -> None:
     output = io.StringIO()
     monkeypatch.setattr(cli_module, "console", Console(file=output))
-    _startup_panel(_config(tmp_path), refresh=True)
+    _startup_panel(
+        {
+            "state": "REFRESHING",
+            "database": "READY",
+            "portfolio": "READY",
+            "data_as_of": "2026-08-18",
+            "data_snapshot": "snapshot-1",
+            "last_decision_at": "2026-08-18T20:30:00+00:00",
+            "last_run_id": "daily-1",
+            "previous_recommendation_count": 1,
+            "actionability_reason": "refresh in progress",
+            "refresh": {"current_stage": "provider", "elapsed_seconds": 1.0},
+        }
+    )
     rendered = output.getvalue()
     assert "PERSONAL ALPHA TERMINAL" in rendered
     assert "REFRESHING" in rendered
@@ -42,8 +55,23 @@ def test_startup_panel_prints_immediately_without_network(monkeypatch, tmp_path:
 def test_startup_panel_no_refresh_marks_cache_replay(monkeypatch, tmp_path: Path) -> None:
     output = io.StringIO()
     monkeypatch.setattr(cli_module, "console", Console(file=output))
-    _startup_panel(_config(tmp_path), refresh=False)
-    assert "CACHE_REPLAY" in output.getvalue()
+    _startup_panel(
+        {
+            "state": "READY_STALE",
+            "database": "READY",
+            "portfolio": "READY",
+            "data_as_of": "2026-08-18",
+            "data_snapshot": "snapshot-1",
+            "last_decision_at": None,
+            "last_run_id": "daily-1",
+            "previous_recommendation_count": 1,
+            "actionability_reason": "cached recommendation is informational",
+            "refresh": {"current_stage": "not scheduled"},
+        }
+    )
+    rendered = output.getvalue()
+    assert "READY_STALE" in rendered
+    assert "不可执行" in rendered
 
 
 def test_progress_printer_flushes_and_writes_heartbeat(monkeypatch, tmp_path: Path) -> None:

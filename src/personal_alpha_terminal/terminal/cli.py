@@ -8,11 +8,14 @@ import logging
 import os
 import re
 import sqlite3
+import subprocess
 import sys
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from threading import Timer
+from time import perf_counter
 from typing import TYPE_CHECKING, cast
 
 from rich.console import Console
@@ -22,6 +25,15 @@ from rich.table import Table
 from personal_alpha_terminal.terminal.broad_universe_cli import broad_universe_command
 from personal_alpha_terminal.terminal.config import default_config_text, load_config
 from personal_alpha_terminal.terminal.daily_renderer import render_daily_quant_result
+from personal_alpha_terminal.terminal.fast_start import (
+    build_fast_start_snapshot,
+    claim_refresh_schedule,
+    read_refresh_state,
+    refresh_is_active,
+    refresh_state_path,
+    release_refresh_schedule,
+    write_refresh_state,
+)
 from personal_alpha_terminal.terminal.forward_shadow_cli import (
     forward_shadow_command,
     run_forward_shadow_daily,
@@ -40,6 +52,8 @@ if TYPE_CHECKING:
 
 console = Console()
 logger = logging.getLogger(__name__)
+_BACKGROUND_REFRESH_TIMEOUT_SECONDS = 600
+_BACKGROUND_HEARTBEAT_SECONDS = 5
 
 
 def _data_evidence_command(args: argparse.Namespace) -> int:
@@ -198,64 +212,43 @@ def _llm_command(args: argparse.Namespace) -> int:
     return 0
 
 
-def _startup_panel(config: EffectiveRuntimeConfig, *, refresh: bool) -> None:
-    """Print an immediate first frame; never wait for network refresh."""
-    db_connected = False
-    portfolio_loaded = False
-    manifest_id = "--"
-    try:
-        url = str(getattr(config.settings, "database_url", ""))
-        if url.startswith("sqlite:///"):
-            database = Path(url.removeprefix("sqlite:///"))
-            connection = sqlite3.connect(str(database), timeout=1)
-            try:
-                manifest_row = connection.execute(
-                    "select snapshot_id from data_snapshot_manifests "
-                    "order by completed_at desc limit 1"
-                ).fetchone()
-                if manifest_row is not None:
-                    manifest_id = str(manifest_row[0])
-                portfolio_count = connection.execute(
-                    "select count(*) from portfolios"
-                ).fetchone()[0]
-                portfolio_loaded = bool(portfolio_count)
-                db_connected = True
-            finally:
-                connection.close()
-    except (OSError, sqlite3.Error, ValueError):
-        db_connected = False
-    latest_run = "--"
-    try:
-        runs = sorted(
-            (config.report_dir / "daily-runs").glob("*.json"),
-            key=lambda item: item.stat().st_mtime,
-            reverse=True,
-        )
-        if runs:
-            latest_run = runs[0].stem
-    except (OSError, AttributeError):
-        pass
-    state = "REFRESHING" if refresh else "CACHE_REPLAY"
+def _startup_panel(snapshot: dict[str, object]) -> None:
+    """Render the bounded, non-actionable fast-start terminal frame."""
+
+    refresh = snapshot.get("refresh")
+    refresh_document = refresh if isinstance(refresh, dict) else {}
+    refresh_stage = str(refresh_document.get("current_stage") or "not scheduled")
+    refresh_elapsed = refresh_document.get("elapsed_seconds")
+    elapsed_text = (
+        f"{float(refresh_elapsed):.1f}s"
+        if isinstance(refresh_elapsed, (int, float))
+        else "--"
+    )
     table = Table(show_header=False, box=None, pad_edge=False)
     table.add_column(style="bold cyan")
     table.add_column()
+    recommendation_actionable = bool(snapshot.get("recommendation_actionable"))
+    recommendation_text = (
+        f"{snapshot.get('previous_recommendation_count', 0)} 条，当前认证决策 / 须人工确认"
+        if recommendation_actionable
+        else f"{snapshot.get('previous_recommendation_count', 0)} 条，仅供查看 / 不可执行"
+    )
     rows = (
-        ("\u72b6\u6001", state),
+        ("状态", str(snapshot.get("state", "BLOCKED"))),
+        ("数据库", str(snapshot.get("database", "UNAVAILABLE"))),
+        ("投资组合", str(snapshot.get("portfolio", "UNAVAILABLE"))),
+        ("数据 as-of", str(snapshot.get("data_as_of") or "--")),
+        ("最近行情快照", str(snapshot.get("data_snapshot") or "--")),
+        ("最近决策时间", str(snapshot.get("last_decision_at") or "--")),
+        ("最近完成运行", str(snapshot.get("last_run_id") or "--")),
+        ("建议", recommendation_text),
         (
-            "\u6570\u636e\u5e93",
-            "\u5df2\u8fde\u63a5" if db_connected else "\u8fde\u63a5\u5931\u8d25",
+            "当前可执行",
+            ("是" if recommendation_actionable else "否")
+            + " — "
+            + str(snapshot.get("actionability_reason", "未通过当前门禁")),
         ),
-        (
-            "\u6295\u8d44\u7ec4\u5408",
-            "\u5df2\u52a0\u8f7d" if portfolio_loaded else "\u672a\u521d\u59cb\u5316",
-        ),
-        ("\u6700\u8fd1\u5b8c\u6210\u8fd0\u884c", latest_run),
-        ("\u6700\u8fd1\u884c\u60c5\u5feb\u7167", manifest_id),
-        ("\u5e02\u573a\u6570\u636e", "\u6b63\u5728\u68c0\u67e5"),
-        (
-            "\u5b9e\u65f6\u5237\u65b0",
-            "\u8fd0\u884c\u4e2d" if refresh else "\u8df3\u8fc7\uff08\u7f13\u5b58\u8bca\u65ad\uff09",
-        ),
+        ("后台刷新", f"{refresh_stage} | elapsed={elapsed_text}"),
     )
     for label, value in rows:
         table.add_row(label, value)
@@ -269,10 +262,229 @@ def _startup_panel(config: EffectiveRuntimeConfig, *, refresh: bool) -> None:
     console.file.flush()
 
 
-def _progress_printer(config: EffectiveRuntimeConfig) -> Callable[[str], None]:
+def _write_fast_start_trace(
+    config: EffectiveRuntimeConfig,
+    snapshot: dict[str, object],
+    *,
+    scheduling_seconds: float,
+) -> None:
+    """Persist low-overhead local boot evidence separately from run evidence."""
+
+    timings = snapshot.get("timings_seconds")
+    timing_document = timings if isinstance(timings, dict) else {}
+    fast_start_total = timing_document.get("fast_start_total", 0.0)
+    trace = {
+        "recorded_at": datetime.now(UTC).isoformat(),
+        "fast_start": snapshot,
+        "scheduling_seconds": round(scheduling_seconds, 4),
+        "foreground_blocking_seconds": round(
+            (
+                float(fast_start_total)
+                if isinstance(fast_start_total, (int, float, str))
+                else 0.0
+            )
+            + scheduling_seconds,
+            4,
+        ),
+    }
+    targets = (
+        config.report_dir / "validation-artifacts" / "terminal_fast_start_trace.json",
+        refresh_state_path(config.report_dir).with_name("terminal_fast_start_trace.json"),
+    )
+    for target in targets:
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(
+                json.dumps(trace, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            return
+        except (OSError, TypeError, ValueError):
+            continue
+
+
+def _launch_background_refresh(
+    config_path: Path,
+    *,
+    config: EffectiveRuntimeConfig,
+    locale: str,
+) -> dict[str, object]:
+    """Schedule exactly one detached refresh worker; never run it in the UI process."""
+
+    state_path = refresh_state_path(config.report_dir)
+    existing = read_refresh_state(state_path)
+    if refresh_is_active(existing):
+        return existing or {"state": "REFRESHING"}
+    try:
+        claimed = claim_refresh_schedule(state_path)
+    except OSError as error:
+        return {
+            "state": "DEGRADED",
+            "pid": os.getpid(),
+            "current_stage": "worker schedule failed",
+            "actionable": False,
+            "reason": f"REFRESH_STATE_PERMISSION_ERROR: {state_path}: {error}",
+        }
+    if not claimed:
+        return read_refresh_state(state_path) or {"state": "SCHEDULED"}
+    try:
+        write_refresh_state(
+            state_path,
+            {
+                "state": "SCHEDULED",
+                "pid": os.getpid(),
+                "current_stage": "worker launch pending",
+                "started_at": datetime.now(UTC).isoformat(),
+                "actionable": False,
+                "reason": "Current decision gates have not completed.",
+            },
+        )
+        log_path = state_path.parent / "terminal-refresh-worker.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        environment = dict(os.environ)
+        environment["PAT_NONINTERACTIVE"] = "1"
+        command = [
+            sys.executable,
+            "-u",
+            str(Path("main.py").resolve()),
+            "--config",
+            str(config_path.resolve()),
+            "--locale",
+            locale,
+            "refresh",
+            "--background-worker",
+        ]
+        creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        with log_path.open("a", encoding="utf-8") as output:
+            process = subprocess.Popen(
+                command,
+                cwd=str(Path.cwd()),
+                env=environment,
+                stdin=subprocess.DEVNULL,
+                stdout=output,
+                stderr=subprocess.STDOUT,
+                creationflags=creationflags,
+            )
+        state = {
+            "state": "SCHEDULED",
+            "pid": process.pid,
+            "current_stage": "worker scheduled",
+            "started_at": datetime.now(UTC).isoformat(),
+            "actionable": False,
+            "reason": "Refresh and current decision gates are pending.",
+            "log_path": str(log_path.resolve()),
+            "total_timeout_seconds": _BACKGROUND_REFRESH_TIMEOUT_SECONDS,
+        }
+        write_refresh_state(state_path, state)
+        return state
+    except OSError as error:
+        state = {
+            "state": "DEGRADED",
+            "pid": os.getpid(),
+            "current_stage": "worker launch failed",
+            "actionable": False,
+            "reason": f"BACKGROUND_WORKER_LAUNCH_FAILED: {type(error).__name__}: {error}",
+        }
+        write_refresh_state(state_path, state)
+        return state
+    finally:
+        release_refresh_schedule(state_path)
+
+
+def _fast_start_daily(config_path: Path, *, locale: str) -> int:
+    """Phase A: render local state then defer all remote/quant work to a worker."""
+
+    config = load_config(config_path)
+    state_path = refresh_state_path(config.report_dir)
+    started = perf_counter()
+    existing_refresh = read_refresh_state(state_path)
+    snapshot = build_fast_start_snapshot(
+        database_url=str(config.settings.database_url),
+        report_dir=config.report_dir,
+        refresh_state=existing_refresh,
+    )
+    if _completed_analysis_is_current(existing_refresh, config):
+        scheduled = existing_refresh or {"state": "BLOCKED"}
+        snapshot["refresh"] = scheduled
+        snapshot["state"] = str(scheduled.get("state", "BLOCKED"))
+        snapshot["recommendation_actionable"] = bool(scheduled.get("actionable", False))
+        snapshot["actionability_reason"] = str(
+            scheduled.get("reason", "Current analysis status is unavailable.")
+        )
+    else:
+        scheduled = _launch_background_refresh(config_path, config=config, locale=locale)
+        snapshot["refresh"] = scheduled
+    if str(scheduled.get("state")) == "DEGRADED":
+        snapshot["state"] = "DEGRADED"
+        snapshot["actionability_reason"] = str(
+            scheduled.get("reason", "Background refresh could not be scheduled.")
+        )
+    elif refresh_is_active(scheduled):
+        snapshot["state"] = "REFRESHING"
+        snapshot["actionability_reason"] = (
+            "Refresh is running; cached recommendations remain informational only."
+        )
+    _startup_panel(snapshot)
+    _write_fast_start_trace(config, snapshot, scheduling_seconds=perf_counter() - started)
+    if str(scheduled.get("state")) == "DEGRADED":
+        console.print("后台刷新未启动；请根据上方的精确路径/错误修复本地权限后重试。")
+    elif _completed_analysis_is_current(existing_refresh, config):
+        console.print("当前数据会话和已完成分析未变化；复用已验证结果，未启动重复刷新。")
+    else:
+        console.print("后台刷新已启动；可运行 `python main.py terminal-status --json` 查看进度。")
+    return 0
+
+
+def _completed_analysis_is_current(
+    state: dict[str, object] | None,
+    config: EffectiveRuntimeConfig,
+) -> bool:
+    """Reuse only an exactly current completed analysis, never a stale display."""
+
+    if state is None or not bool(state.get("analysis_completed")):
+        return False
+    if str(state.get("runtime_config_hash")) != config.runtime_config_hash:
+        return False
+    if str(state.get("state")) not in {"READY_CURRENT", "BLOCKED"}:
+        return False
+    try:
+        expected = _latest_completed_us_session(datetime.now(UTC)).isoformat()
+    except (ImportError, RuntimeError, ValueError):
+        return False
+    return str(state.get("data_as_of")) == expected
+
+
+def _synchronous_startup_panel(config: EffectiveRuntimeConfig, *, refresh: bool) -> None:
+    """Keep explicit refresh/no-refresh CLI calls readable without hiding work."""
+
+    snapshot = build_fast_start_snapshot(
+        database_url=str(config.settings.database_url),
+        report_dir=config.report_dir,
+        refresh_state=read_refresh_state(refresh_state_path(config.report_dir)),
+    )
+    if refresh:
+        snapshot["state"] = "REFRESHING"
+        snapshot["actionability_reason"] = (
+            "Explicit refresh is running; no cached result is actionable."
+        )
+        snapshot["refresh"] = {"current_stage": "foreground explicit refresh"}
+    else:
+        snapshot["state"] = "READY_STALE"
+        snapshot["actionability_reason"] = (
+            "No-refresh mode is diagnostic only; cached output is not actionable."
+        )
+    _startup_panel(snapshot)
+
+
+def _progress_printer(
+    config: EffectiveRuntimeConfig,
+    *,
+    state_path: Path | None = None,
+) -> Callable[[str], None]:
     """Return a progress callback that prints immediately and writes a heartbeat."""
     heartbeat_dir = Path(str(config.report_dir)).parent / "var" / "logs"
     heartbeat_path = heartbeat_dir / "terminal-heartbeat.json"
+    refresh_started = perf_counter()
 
     def notify(message: str) -> None:
         console.print("  " + message, soft_wrap=True)
@@ -300,6 +512,25 @@ def _progress_printer(config: EffectiveRuntimeConfig) -> Callable[[str], None]:
             temporary.replace(heartbeat_path)
         except OSError:
             pass
+        if state_path is not None:
+            try:
+                write_refresh_state(
+                    state_path,
+                    {
+                        "state": "REFRESHING",
+                        "pid": os.getpid(),
+                        "current_stage": message,
+                        "last_progress_at": datetime.now(UTC).isoformat(),
+                        "elapsed_seconds": round(perf_counter() - refresh_started, 4),
+                        "processed": processed,
+                        "total": total,
+                        "actionable": False,
+                        "reason": "Current refresh and decision gates are still running.",
+                        "total_timeout_seconds": _BACKGROUND_REFRESH_TIMEOUT_SECONDS,
+                    },
+                )
+            except OSError:
+                pass
 
     return notify
 
@@ -400,6 +631,7 @@ def run_daily(
     wait: bool = True,
     locale: str = "zh-CN",
     decision_time: datetime | None = None,
+    refresh_state: Path | None = None,
 ) -> int:
     """Run the canonical orchestrator and render exactly its persisted result."""
 
@@ -413,12 +645,26 @@ def run_daily(
                 refresh=refresh,
                 locale=locale,
             )
-        progress = _progress_printer(config) if refresh else None
+        if refresh_state is not None:
+            write_refresh_state(
+                refresh_state,
+                {
+                    "state": "REFRESHING",
+                    "pid": os.getpid(),
+                    "current_stage": "local bootstrap",
+                    "started_at": datetime.now(UTC).isoformat(),
+                    "elapsed_seconds": 0.0,
+                    "actionable": False,
+                    "reason": "Current refresh and decision gates are still running.",
+                    "total_timeout_seconds": _BACKGROUND_REFRESH_TIMEOUT_SECONDS,
+                },
+            )
+        progress = _progress_printer(config, state_path=refresh_state) if refresh else None
         if refresh:
             from personal_alpha_terminal.terminal.instance import ConsoleInstanceLock
 
             with ConsoleInstanceLock():
-                _startup_panel(config, refresh=True)
+                _synchronous_startup_panel(config, refresh=True)
                 result = _application_service(
                     snapshot_root=config.report_dir, effective_config=config
                 ).run_daily_quant_report(
@@ -428,7 +674,7 @@ def run_daily(
                     progress=progress,
                 )
         else:
-            _startup_panel(config, refresh=False)
+            _synchronous_startup_panel(config, refresh=False)
             result = _application_service(
                 snapshot_root=config.report_dir, effective_config=config
             ).run_daily_quant_report(
@@ -437,6 +683,17 @@ def run_daily(
                 refresh=False,
             )
     except RuntimeError as error:
+        if refresh_state is not None:
+            write_refresh_state(
+                refresh_state,
+                {
+                    "state": "DEGRADED",
+                    "pid": os.getpid(),
+                    "current_stage": "runtime failure",
+                    "actionable": False,
+                    "reason": f"{type(error).__name__}: {error}",
+                },
+            )
         console.print(
             Panel(
                 str(error),
@@ -450,6 +707,17 @@ def run_daily(
         console.print("Press Enter to exit")
         return 1
     except (FileNotFoundError, OSError, ValueError) as error:
+        if refresh_state is not None:
+            write_refresh_state(
+                refresh_state,
+                {
+                    "state": "DEGRADED",
+                    "pid": os.getpid(),
+                    "current_stage": "local failure",
+                    "actionable": False,
+                    "reason": f"{type(error).__name__}: {error}",
+                },
+            )
         logger.exception("Daily quant orchestration failed")
         console.print(
             Panel(
@@ -464,6 +732,43 @@ def run_daily(
     else:
         render_daily_quant_result(result, console, locale=locale)
     _write_performance_trace(result, config)
+    if refresh_state is not None:
+        blockers = getattr(result, "blockers", ())
+        blocker_text = "; ".join(str(item) for item in blockers) or (
+            "Current decision gates blocked actionability."
+        )
+        data_metadata: dict[str, object] = next(
+            (
+                item.metadata
+                for item in getattr(result, "stages", ())
+                if getattr(item, "name", "") == "DATA"
+            ),
+            {},
+        )
+        write_refresh_state(
+            refresh_state,
+            {
+                "state": "READY_CURRENT" if result.actionable else "BLOCKED",
+                "pid": os.getpid(),
+                "current_stage": "completed",
+                "completed_at": datetime.now(UTC).isoformat(),
+                "actionable": bool(result.actionable),
+                "reason": (
+                    "Current data and decision gates passed."
+                    if result.actionable
+                    else blocker_text
+                ),
+                "run_id": str(getattr(result, "run_id", "UNAVAILABLE")),
+                "analysis_completed": True,
+                "analysis_classification": str(
+                    getattr(result, "run_classification", "UNAVAILABLE")
+                ),
+                "data_as_of": data_metadata.get("latest_completed_session"),
+                "data_snapshot": data_metadata.get("snapshot_id"),
+                "runtime_config_hash": config.runtime_config_hash,
+                "total_timeout_seconds": _BACKGROUND_REFRESH_TIMEOUT_SECONDS,
+            },
+        )
     console.print(f"\nRun snapshot directory: {(config.report_dir / 'daily-runs').resolve()}")
     if wait and sys.stdin.isatty() and os.environ.get("PAT_NONINTERACTIVE") != "1":
         try:
@@ -471,6 +776,105 @@ def run_daily(
         except EOFError:
             logger.info("Skipping exit prompt because stdin reached EOF")
     return 0 if result.actionable else 3
+
+
+def _background_refresh_worker(args: argparse.Namespace) -> int:
+    """Run the expensive Phase B chain outside the terminal UI process."""
+
+    config = load_config(args.config)
+    state_path = refresh_state_path(config.report_dir)
+    started_at = datetime.now(UTC).isoformat()
+    write_refresh_state(
+        state_path,
+        {
+            "state": "REFRESHING",
+            "pid": os.getpid(),
+            "current_stage": "worker bootstrap",
+            "started_at": started_at,
+            "actionable": False,
+            "reason": "Current refresh and decision gates are still running.",
+            "total_timeout_seconds": _BACKGROUND_REFRESH_TIMEOUT_SECONDS,
+        },
+    )
+
+    def abort_for_timeout() -> None:
+        try:
+            write_refresh_state(
+                state_path,
+                {
+                    "state": "DEGRADED",
+                    "pid": os.getpid(),
+                    "current_stage": "total refresh timeout",
+                    "actionable": False,
+                    "reason": (
+                        "TOTAL_REFRESH_TIMEOUT: background refresh exceeded "
+                        f"{_BACKGROUND_REFRESH_TIMEOUT_SECONDS} seconds"
+                    ),
+                    "started_at": started_at,
+                    "total_timeout_seconds": _BACKGROUND_REFRESH_TIMEOUT_SECONDS,
+                },
+            )
+        finally:
+            # Process isolation guarantees an interrupted provider cannot keep
+            # an invisible foreground terminal or an open DB transaction alive.
+            os._exit(124)
+
+    watchdog = Timer(_BACKGROUND_REFRESH_TIMEOUT_SECONDS, abort_for_timeout)
+    watchdog.daemon = True
+    watchdog.start()
+    heartbeat_active = True
+
+    def refresh_heartbeat() -> None:
+        """Keep elapsed time visible even while a CPU-heavy stage is running."""
+
+        if not heartbeat_active:
+            return
+        state = read_refresh_state(state_path)
+        state_document = state if isinstance(state, dict) else None
+        pid_value = state_document.get("pid", 0) if state_document is not None else 0
+        if (
+            state_document is not None
+            and isinstance(pid_value, (int, str))
+            and int(pid_value or 0) == os.getpid()
+        ):
+            try:
+                write_refresh_state(
+                    state_path,
+                    {
+                        **state_document,
+                        "state": "REFRESHING",
+                        "pid": os.getpid(),
+                        "elapsed_seconds": round(
+                            (
+                                datetime.now(UTC) - datetime.fromisoformat(started_at)
+                            ).total_seconds(),
+                            4,
+                        ),
+                        "heartbeat_at": datetime.now(UTC).isoformat(),
+                        "actionable": False,
+                        "total_timeout_seconds": _BACKGROUND_REFRESH_TIMEOUT_SECONDS,
+                    },
+                )
+            except (OSError, TypeError, ValueError):
+                pass
+        if heartbeat_active:
+            timer = Timer(_BACKGROUND_HEARTBEAT_SECONDS, refresh_heartbeat)
+            timer.daemon = True
+            timer.start()
+
+    refresh_heartbeat()
+    try:
+        return run_daily(
+            args.config,
+            refresh=True,
+            wait=False,
+            locale=args.locale,
+            decision_time=None,
+            refresh_state=state_path,
+        )
+    finally:
+        heartbeat_active = False
+        watchdog.cancel()
 
 
 def _daily_decision_time(value: str | None) -> datetime | None:
@@ -485,12 +889,11 @@ def _daily_decision_time(value: str | None) -> datetime | None:
 
 
 def _terminal_status_command(args: argparse.Namespace) -> int:
-    from personal_alpha_terminal.core.runtime_bootstrap import (
-        application_data_dir,
-        process_is_running,
-    )
+    from personal_alpha_terminal.core.runtime_bootstrap import process_is_running
+    from personal_alpha_terminal.terminal.instance import default_console_lock_path
 
     config = load_config(args.config)
+    refresh_state = read_refresh_state(refresh_state_path(config.report_dir))
     heartbeat_path = config.report_dir.parent / "var" / "logs" / "terminal-heartbeat.json"
     heartbeat = None
     if heartbeat_path.exists():
@@ -498,7 +901,7 @@ def _terminal_status_command(args: argparse.Namespace) -> int:
             heartbeat = json.loads(heartbeat_path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             heartbeat = None
-    lock_path = application_data_dir() / "run" / "console-instance.json"
+    lock_path = default_console_lock_path()
     lock_pid = None
     lock_running = False
     if lock_path.exists():
@@ -540,6 +943,8 @@ def _terminal_status_command(args: argparse.Namespace) -> int:
         "pid": os.getpid(),
         "lock_pid": lock_pid,
         "lock_running": lock_running,
+        "refresh": refresh_state,
+        "refresh_active": refresh_is_active(refresh_state),
         "heartbeat": heartbeat,
         "latest_completed_run": latest_run,
         "latest_market_snapshot": latest_manifest,
@@ -554,6 +959,10 @@ def _terminal_status_command(args: argparse.Namespace) -> int:
         console.print(f"Refresh process: PID {lock_pid} running={lock_running}")
     else:
         console.print("Refresh process: none")
+    console.print(
+        "Refresh state: "
+        + json.dumps(refresh_state or {"state": "NOT_SCHEDULED"}, ensure_ascii=False)
+    )
     heartbeat_text = json.dumps(heartbeat, ensure_ascii=False) if heartbeat else "none"
     console.print(f"Heartbeat: {heartbeat_text}")
     console.print(f"Latest completed run: {latest_run}")
@@ -3489,7 +3898,10 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Timezone-aware historical replay timestamp; never promotes historical outcomes",
     )
-    subparsers.add_parser("refresh", help="Refresh data, then run the daily quant chain")
+    refresh = subparsers.add_parser(
+        "refresh", help="Refresh data, then run the daily quant chain"
+    )
+    refresh.add_argument("--background-worker", action="store_true", help=argparse.SUPPRESS)
     data_evidence = subparsers.add_parser(
         "data-evidence",
         help="Show the concise ROUND67 evidence scorecard and optional JSON inventory",
@@ -4298,6 +4710,8 @@ def main(argv: list[str] | None = None) -> int:
         }:
             return _portfolio_command(args)
         if command == "refresh":
+            if getattr(args, "background_worker", False):
+                return _background_refresh_worker(args)
             return run_daily(
                 args.config,
                 refresh=True,
@@ -4306,6 +4720,8 @@ def main(argv: list[str] | None = None) -> int:
             )
         if command in {"data", "factors", "probability", "risk", "decisions"}:
             return _render_persisted_section(args.config, command, args.run_id)
+        if not args.no_refresh and getattr(args, "decision_time", None) is None:
+            return _fast_start_daily(args.config, locale=args.locale)
         return run_daily(
             args.config,
             refresh=not args.no_refresh,
