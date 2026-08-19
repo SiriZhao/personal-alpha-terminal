@@ -68,6 +68,14 @@ def forward_shadow_command(args: Namespace, config: EffectiveRuntimeConfig) -> i
                     "pending_data": result.pending_data,
                     "blocked_provenance": result.blocked_provenance,
                     "duplicate_outcomes": result.duplicate_outcomes,
+                    "forward_competition": {
+                        "decision_sets": result.competition_decision_sets,
+                        "outcomes_appended": result.competition_outcomes_appended,
+                        "pending_not_matured": result.competition_pending_not_matured,
+                        "pending_data": result.competition_pending_data,
+                        "blocked_provenance": result.competition_blocked_provenance,
+                        "duplicate_outcomes": result.competition_duplicate_outcomes,
+                    },
                     "promotion": result.promotion.model_dump(mode="json"),
                     "production_lambda": 0.0,
                     "production_llm_authority": "0%",
@@ -252,6 +260,7 @@ def _render_dashboard(dashboard: dict[str, object]) -> None:
     daily = _payload(dashboard.get("daily_shadow_status"))
     evidence = _payload(dashboard.get("forward_evidence"))
     promotion = _payload(dashboard.get("promotion_evidence"))
+    competition = _payload(dashboard.get("forward_competition"))
     authority = _payload(dashboard.get("authority"))
     table = Table(title="PERSONAL ALPHA TERMINAL - FORWARD SHADOW OPERATIONS")
     table.add_column("Section", style="bold")
@@ -300,6 +309,26 @@ def _render_dashboard(dashboard: dict[str, object]) -> None:
                 "blocked_outcomes",
                 "valid_paired_observations",
                 "independent_sessions",
+                "competition_complete_paired_sets",
+                "competition_independent_sessions",
+                "competition_promotion_eligible_sets",
+            ),
+        ),
+        (
+            "Five-policy Competition",
+            competition,
+            (
+                "decision_sets",
+                "frozen_variant_decisions",
+                "realized_variant_outcomes",
+                "pending_variant_outcomes",
+                "complete_paired_sets",
+                "independent_sessions",
+                "promotion_eligible_paired_sets",
+                "promotion_eligible_independent_sessions",
+                "shadow_variant_decisions",
+                "degraded_fallback_variant_decisions",
+                "promotion_eligible",
             ),
         ),
         (

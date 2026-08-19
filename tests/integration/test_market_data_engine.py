@@ -147,7 +147,7 @@ def add_stock(session: Session, symbol: str, market: Market, *, asset_type: str 
     return stock
 
 
-def test_incremental_update_is_idempotent_and_revises_overlap(
+def test_incremental_update_uses_missing_sessions_and_explicit_refresh_revises_history(
     session_factory: sessionmaker[Session],
 ) -> None:
     with session_factory() as session:
@@ -181,7 +181,10 @@ def test_incremental_update_is_idempotent_and_revises_overlap(
         second = engine.update_daily_data(markets={"A"}, end_date=date(2026, 7, 6))
         session.commit()
 
-        assert provider.calls[-1][1] == date(2026, 7, 2)
+        # Ordinary warm refreshes must fetch only legally missing sessions.
+        # Historical corrections are not silently requested as overlapping
+        # data: that requires an explicit operator-provenance request below.
+        assert provider.calls[-1][1] == date(2026, 7, 4)
         assert second.failure_count == 0
         assert second.cached_count == 1
         assert "data-quality errors" in (second.results[0].error or "")
@@ -200,8 +203,21 @@ def test_incremental_update_is_idempotent_and_revises_overlap(
         )
         session.commit()
         assert third.inserted_count == 1
-        assert third.updated_count == 1
+        assert third.updated_count == 0
         assert session.scalar(select(func.count()).select_from(Price)) == 4
+        revised = session.scalar(select(Price).where(Price.trade_date == date(2026, 7, 2)))
+        assert revised is not None
+        assert revised.close == Decimal("11.000000")
+
+        explicit_revision = engine.update_daily_data(
+            markets={"A"},
+            start_date=date(2026, 7, 2),
+            end_date=date(2026, 7, 6),
+        )
+        session.commit()
+        assert provider.calls[-1][1] == date(2026, 7, 2)
+        assert explicit_revision.inserted_count == 0
+        assert explicit_revision.updated_count == 1
         revised = session.scalar(select(Price).where(Price.trade_date == date(2026, 7, 2)))
         assert revised is not None
         assert revised.close == Decimal("11.500000")

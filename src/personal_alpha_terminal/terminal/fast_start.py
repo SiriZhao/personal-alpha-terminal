@@ -110,12 +110,30 @@ def build_fast_start_snapshot(
         "portfolio": "UNAVAILABLE",
         "data_as_of": None,
         "data_snapshot": None,
+        "data_certification": "UNAVAILABLE",
+        "research_data_certification": "BLOCKED_DATA_QUALITY",
+        "data_freshness": "UNKNOWN",
         "last_decision_at": None,
         "last_run_id": None,
         "last_run_finished_at": None,
         "previous_recommendation_count": 0,
         "recommendation_actionable": False,
         "actionability_reason": "Current refresh and decision gates have not completed.",
+        "portfolio_value": None,
+        "cash_balance": None,
+        "holding_count": None,
+        "production_strategy": "PURE_QUANT",
+        "strongest_challenger": "N/A — evidence accumulating",
+        "quant_status": "PRODUCTION_CHAMPION_UNCHANGED",
+        "probability_formal_influence": 0.0,
+        "llm_level": "L1_SHADOW_SCORING",
+        "llm_formal_influence": 0.0,
+        "adaptive_exposure": "SHADOW",
+        "forward_paired_observations": 0,
+        "forward_independent_sessions": 0,
+        "forward_minimum_observations": 120,
+        "forward_minimum_sessions": 40,
+        "next_blocker": "CURRENT_DECISION_GATES_PENDING",
         "refresh": refresh_state or {"state": "NOT_SCHEDULED"},
         "timings_seconds": timings,
     }
@@ -136,10 +154,13 @@ def build_fast_start_snapshot(
                     snapshot["data_snapshot"] = str(manifest[0])
                     snapshot["data_as_of"] = str(manifest[2]) if manifest[2] else None
                     snapshot["data_certification"] = str(manifest[3])
+                    snapshot["data_freshness"] = str(manifest[3])
                 portfolio = connection.execute("select count(*) from portfolios").fetchone()
                 snapshot["portfolio"] = (
                     "READY" if portfolio is not None and int(portfolio[0]) > 0 else "MISSING"
                 )
+                _attach_portfolio_summary(connection, snapshot)
+                _attach_forward_competition_summary(connection, snapshot)
                 decision = connection.execute(
                     "select as_of_time, status, gate_status from quant_decision_runs "
                     "order by as_of_time desc limit 1"
@@ -196,8 +217,110 @@ def build_fast_start_snapshot(
         snapshot["actionability_reason"] = (
             "Cached output is informational only until the current decision gates pass."
         )
+    snapshot["next_blocker"] = _next_blocker(snapshot)
     timings["fast_start_total"] = round(perf_counter() - started, 4)
     return snapshot
+
+
+def _attach_portfolio_summary(
+    connection: sqlite3.Connection, snapshot: dict[str, object]
+) -> None:
+    """Attach only bounded local portfolio fields, if this schema supports them."""
+
+    try:
+        portfolio_row = connection.execute(
+            "select cash_balance from portfolios order by id limit 1"
+        ).fetchone()
+        if portfolio_row is not None:
+            snapshot["cash_balance"] = portfolio_row[0]
+    except sqlite3.Error:
+        pass
+    try:
+        risk_row = connection.execute(
+            "select metrics.total_value from portfolio_risk_metrics as metrics "
+            "join portfolio_risk_runs as runs on runs.id = metrics.run_id "
+            "where runs.status = 'completed' order by runs.created_at desc limit 1"
+        ).fetchone()
+        if risk_row is not None:
+            snapshot["portfolio_value"] = risk_row[0]
+    except sqlite3.Error:
+        pass
+    try:
+        holding_row = connection.execute(
+            "select count(*) from portfolio_positions "
+            "where as_of_date = (select max(as_of_date) from portfolio_positions) "
+            "and quantity <> 0"
+        ).fetchone()
+        if holding_row is not None:
+            snapshot["holding_count"] = int(holding_row[0])
+    except sqlite3.Error:
+        pass
+
+
+def _attach_forward_competition_summary(
+    connection: sqlite3.Connection, snapshot: dict[str, object]
+) -> None:
+    """Read small immutable competition rows without importing research services."""
+
+    try:
+        rows = connection.execute(
+            "select result_type, payload from intelligence_research_results "
+            "where result_type in (?, ?)",
+            ("FORWARD_COMPETITION_DECISION_SET", "FORWARD_COMPETITION_OUTCOME"),
+        ).fetchall()
+    except sqlite3.Error:
+        return
+    decisions: dict[str, dict[str, object]] = {}
+    complete: dict[tuple[str, str], set[str]] = {}
+    for result_type, raw_payload in rows:
+        try:
+            payload = json.loads(str(raw_payload))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        if result_type == "FORWARD_COMPETITION_DECISION_SET":
+            identity = payload.get("competition_id")
+            if isinstance(identity, str):
+                decisions[identity] = payload
+            continue
+        competition_id = payload.get("competition_id")
+        horizon = payload.get("evaluation_horizon")
+        outcome = payload.get("outcome")
+        variant = outcome.get("variant") if isinstance(outcome, dict) else None
+        if (
+            isinstance(competition_id, str)
+            and isinstance(horizon, str)
+            and isinstance(variant, str)
+        ):
+            complete.setdefault((competition_id, horizon), set()).add(variant)
+    paired = [key for key, variants in complete.items() if len(variants) == 5]
+    sessions: set[str] = set()
+    for competition_id, _horizon in paired:
+        tournament = decisions.get(competition_id, {}).get("tournament")
+        decision_time = tournament.get("decision_time") if isinstance(tournament, dict) else None
+        if isinstance(decision_time, str):
+            sessions.add(decision_time[:10])
+    snapshot["forward_paired_observations"] = len(paired)
+    snapshot["forward_independent_sessions"] = len(sessions)
+
+
+def _next_blocker(snapshot: dict[str, object]) -> str:
+    if str(snapshot.get("database")) != "READY":
+        return "LOCAL_DATABASE_UNAVAILABLE"
+    certification = str(snapshot.get("data_certification", "UNAVAILABLE"))
+    research_certification = str(
+        snapshot.get("research_data_certification", "BLOCKED_DATA_QUALITY")
+    )
+    if research_certification not in {"PASS", "PASS_WITH_WARNINGS"}:
+        return "DATA_PIT_OR_SURVIVORSHIP_GATE"
+    if certification not in {"PASS", "PASS_WITH_WARNINGS", "CERTIFIED"}:
+        return "DATA_CERTIFICATION_BLOCKED"
+    paired = snapshot.get("forward_paired_observations")
+    minimum = snapshot.get("forward_minimum_observations")
+    if isinstance(paired, int) and isinstance(minimum, int) and paired < minimum:
+        return f"FORWARD_PAIRED_SAMPLE_{paired}/{minimum}"
+    return "CURRENT_DECISION_GATES_PENDING"
 
 
 def scheduling_lock_path(state_path: Path) -> Path:

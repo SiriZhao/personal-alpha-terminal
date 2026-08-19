@@ -1,0 +1,64 @@
+{
+  "round": "ROUND79",
+  "baseline_sha": "9fbe0ac2b0c5b2a9abb4731f6d6f90ff3c77a494",
+  "engineering_verdict": "PASS_WITH_ENVIRONMENT_LIMITATIONS",
+  "economic_verdict": "BLOCKED_DATA_QUALITY",
+  "forward_shadow_readiness": {
+    "state": "NOT_READY",
+    "paired_observations": 0,
+    "minimum_paired_observations": 120,
+    "independent_sessions": 0,
+    "minimum_independent_sessions": 40,
+    "provider": "DISABLED_OR_UNCONFIGURED",
+    "next_blockers": [
+      "DATA_PIT_OR_SURVIVORSHIP_GATE",
+      "TERMINAL_FULL_CYCLE"
+    ]
+  },
+  "authority": {
+    "production_policy": "PURE_QUANT",
+    "alpha_engine3": "CHALLENGER_ONLY_NO_PROMOTION",
+    "probability_formal_influence": 0.0,
+    "llm_level": "L1_SHADOW_SCORING",
+    "llm_formal_influence": 0.0,
+    "adaptive_exposure": "SHADOW",
+    "auto_execution": "DISABLED",
+    "manual_confirmation": "REQUIRED",
+    "broker_order_submission": false
+  },
+  "forward_competition": {
+    "decision_sets": 0,
+    "frozen_variants_per_real_forward_decision": 5,
+    "realized_variant_outcomes": 0,
+    "promotion_eligible_paired_sets": 0,
+    "degraded_fallback_excluded_from_promotion": true
+  },
+  "terminal_fast_start": {
+    "first_startup_seconds": 4.706,
+    "immediate_second_startup_seconds": 4.783,
+    "hard_ceiling_seconds": 10.0,
+    "remote_refresh_in_foreground": false,
+    "cached_recommendation_actionable": false,
+    "worker_timeout_seconds": 600,
+    "worker_acl_result": "BLOCKED_WITH_EXACT_PATH_DIAGNOSTIC"
+  },
+  "data_certification": {
+    "status": "BLOCKED_DATA_QUALITY",
+    "pit": "BLOCKED_PIT",
+    "survivorship": "BLOCKED_SURVIVORSHIP",
+    "corporate_actions": "BLOCKED_PIT",
+    "benchmark": "BLOCKED_PIT",
+    "tradability": "BLOCKED_TRADABILITY",
+    "locked_oos": "BLOCKED_DATA_QUALITY"
+  },
+  "quality": {
+    "ruff": "PASS",
+    "strict_mypy_touched_modules": "PASS",
+    "secret_scan": "PASS",
+    "focused_round74_79_execution": "PASS_OUTPUT_87",
+    "quant_critical_execution": "PASS_OUTPUT_31",
+    "component_execution": "PASS_OUTPUT_115",
+    "full_pytest": "INCOMPLETE_WINDOWS_ACL_AND_RUNNER_SHUTDOWN"
+  },
+  "next_exact_action": "Import and bind the missing immutable PIT/survivorship/benchmark/tradability package, seal locked OOS, then collect real Forward Shadow observations through legal horizons."
+}

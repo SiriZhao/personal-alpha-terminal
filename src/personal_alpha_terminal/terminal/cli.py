@@ -481,6 +481,14 @@ def _startup_panel(snapshot: dict[str, object]) -> None:
         if isinstance(refresh_elapsed, (int, float))
         else "--"
     )
+    processed = refresh_document.get("processed")
+    total = refresh_document.get("total")
+    progress_text = (
+        f"{processed}/{total}"
+        if isinstance(processed, int) and isinstance(total, int) and total > 0
+        else "--"
+    )
+    last_progress = str(refresh_document.get("last_progress_at") or "--")
     table = Table(show_header=False, box=None, pad_edge=False)
     table.add_column(style="bold cyan")
     table.add_column()
@@ -494,7 +502,15 @@ def _startup_panel(snapshot: dict[str, object]) -> None:
         ("状态", str(snapshot.get("state", "BLOCKED"))),
         ("数据库", str(snapshot.get("database", "UNAVAILABLE"))),
         ("投资组合", str(snapshot.get("portfolio", "UNAVAILABLE"))),
+        ("组合市值", str(snapshot.get("portfolio_value") or "--")),
+        ("现金", str(snapshot.get("cash_balance") or "--")),
+        ("持仓数量", str(snapshot.get("holding_count") or "--")),
         ("数据 as-of", str(snapshot.get("data_as_of") or "--")),
+        ("数据新鲜度", str(snapshot.get("data_freshness") or "UNKNOWN")),
+        (
+            "研究数据认证",
+            str(snapshot.get("research_data_certification", "BLOCKED_DATA_QUALITY")),
+        ),
         ("最近行情快照", str(snapshot.get("data_snapshot") or "--")),
         ("最近决策时间", str(snapshot.get("last_decision_at") or "--")),
         ("最近完成运行", str(snapshot.get("last_run_id") or "--")),
@@ -505,7 +521,31 @@ def _startup_panel(snapshot: dict[str, object]) -> None:
             + " — "
             + str(snapshot.get("actionability_reason", "未通过当前门禁")),
         ),
-        ("后台刷新", f"{refresh_stage} | elapsed={elapsed_text}"),
+        ("正式策略", str(snapshot.get("production_strategy", "PURE_QUANT"))),
+        ("Quant 状态", str(snapshot.get("quant_status", "UNKNOWN"))),
+        ("最强挑战者", str(snapshot.get("strongest_challenger", "N/A"))),
+        (
+            "Probability 正式影响",
+            f"{_as_trace_float(snapshot.get('probability_formal_influence')):.0%}",
+        ),
+        (
+            "LLM",
+            f"{snapshot.get('llm_level', 'UNKNOWN')} / 正式影响 "
+            f"{_as_trace_float(snapshot.get('llm_formal_influence')):.0%}",
+        ),
+        ("Adaptive Exposure", str(snapshot.get("adaptive_exposure", "SHADOW"))),
+        (
+            "Forward 配对样本",
+            f"{snapshot.get('forward_paired_observations', 0)}/"
+            f"{snapshot.get('forward_minimum_observations', 120)}；独立会话 "
+            f"{snapshot.get('forward_independent_sessions', 0)}/"
+            f"{snapshot.get('forward_minimum_sessions', 40)}",
+        ),
+        ("下一阻断项", str(snapshot.get("next_blocker", "UNKNOWN"))),
+        (
+            "后台刷新",
+            f"{refresh_stage} | {progress_text} | elapsed={elapsed_text} | last={last_progress}",
+        ),
     )
     for label, value in rows:
         table.add_row(label, value)

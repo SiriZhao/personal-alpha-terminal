@@ -27,6 +27,15 @@ from personal_alpha_terminal.agents.llm.providers import LLMProvider, LLMProvide
 from personal_alpha_terminal.agents.llm.schemas import LLMRequest, LLMResponse
 from personal_alpha_terminal.application.app_service import ApplicationService
 from personal_alpha_terminal.application.daily_result import DailyQuantResult
+from personal_alpha_terminal.application.forward_competition import (
+    SUPPORTED_EVALUATION_HORIZONS as COMPETITION_EVALUATION_HORIZONS,
+)
+from personal_alpha_terminal.application.forward_competition import (
+    ForwardCompetitionDecisionSet,
+    ForwardCompetitionLedger,
+    ForwardCompetitionOutcome,
+    competition_dashboard,
+)
 from personal_alpha_terminal.application.forward_evidence import (
     HYBRID_COUNTERFACTUAL_TYPE,
     OUTCOME_TYPE,
@@ -58,6 +67,12 @@ from personal_alpha_terminal.models.intelligence import (
     IntelligenceResearchResult,
 )
 from personal_alpha_terminal.quant_engine.costs import TransactionCostModel
+from personal_alpha_terminal.research.portfolio_competition import (
+    EvidenceClass,
+    OutcomeRecord,
+    OutcomeStatus,
+    PortfolioVariant,
+)
 from personal_alpha_terminal.terminal.market_sessions import MarketSessionCalendar
 
 SHADOW_RUN_STATE_TYPE = "AGENTIC_SHADOW_RUN_STATE"
@@ -147,6 +162,12 @@ class OutcomeCollectionResult:
     duplicate_outcomes: int
     promotion: PromotionEvaluationRecord
     exit_code: ForwardShadowExitCode
+    competition_decision_sets: int = 0
+    competition_outcomes_appended: int = 0
+    competition_pending_not_matured: int = 0
+    competition_pending_data: int = 0
+    competition_blocked_provenance: int = 0
+    competition_duplicate_outcomes: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -875,6 +896,7 @@ def build_forward_shadow_dashboard(
     evaluated_at: datetime,
 ) -> dict[str, object]:
     ledger = AgenticForwardEvidenceLedger(session)
+    competition = competition_dashboard(ForwardCompetitionLedger(session))
     predictions = ledger.records(PREDICTION_TYPE)
     outcomes = ledger.records(OUTCOME_TYPE)
     quant = ledger.records(QUANT_COUNTERFACTUAL_TYPE)
@@ -998,7 +1020,13 @@ def build_forward_shadow_dashboard(
             "independent_sessions": promotion.unique_session_n,
             "quant_counterfactuals": len(quant),
             "hybrid_counterfactuals": len(hybrid),
+            "competition_complete_paired_sets": competition["complete_paired_sets"],
+            "competition_independent_sessions": competition["independent_sessions"],
+            "competition_promotion_eligible_sets": competition[
+                "promotion_eligible_paired_sets"
+            ],
         },
+        "forward_competition": competition,
         "promotion_evidence": {
             "status": promotion.status,
             "promotion_reason": promotion.promotion_reason,
@@ -1283,6 +1311,12 @@ def _collect_matured_outcomes(
         ),
     )
     ledger.append_promotion_evaluation(promotion)
+    competition = _collect_matured_competition_outcomes(
+        session,
+        config=config,
+        calendar=calendar,
+        collected_at=collected_at,
+    )
     return OutcomeCollectionResult(
         scanned_predictions=len(predictions),
         matured_pairs=matured_pairs,
@@ -1292,10 +1326,182 @@ def _collect_matured_outcomes(
         blocked_provenance=reasons["OUTCOME_BLOCKED_PROVENANCE"],
         duplicate_outcomes=duplicates,
         promotion=promotion,
+        competition_decision_sets=competition["decision_sets"],
+        competition_outcomes_appended=competition["outcomes_appended"],
+        competition_pending_not_matured=competition["pending_not_matured"],
+        competition_pending_data=competition["pending_data"],
+        competition_blocked_provenance=competition["blocked_provenance"],
+        competition_duplicate_outcomes=competition["duplicate_outcomes"],
         exit_code=(
             ForwardShadowExitCode.SUCCESS
-            if outcomes_appended
+            if outcomes_appended or competition["outcomes_appended"]
             else ForwardShadowExitCode.NO_MATURE_OUTCOMES
+        ),
+    )
+
+
+def _collect_matured_competition_outcomes(
+    session: Session,
+    *,
+    config: EffectiveRuntimeConfig,
+    calendar: MarketSessionCalendar,
+    collected_at: datetime,
+) -> dict[str, int]:
+    """Attach outcomes only after a frozen real-forward set reaches its horizon.
+
+    This remains independent from the older semantic-LLM prediction ledger. A
+    degraded fallback is kept in the immutable record for auditability, but
+    ``competition_dashboard`` excludes any set with degraded variants from
+    promotion-eligible sample counts.
+    """
+
+    ledger = ForwardCompetitionLedger(session)
+    counts = {
+        "decision_sets": 0,
+        "outcomes_appended": 0,
+        "pending_not_matured": 0,
+        "pending_data": 0,
+        "blocked_provenance": 0,
+        "duplicate_outcomes": 0,
+    }
+    existing_outcomes = {
+        (item.competition_id, item.evaluation_horizon, item.outcome.variant)
+        for item in ledger.outcomes()
+    }
+    for decision in ledger.decision_sets():
+        counts["decision_sets"] += 1
+        base_session = calendar.completed_session_date(
+            decision.tournament.information_cutoff
+        )
+        for horizon in COMPETITION_EVALUATION_HORIZONS:
+            exit_session = calendar.advance_trading_sessions(
+                base_session, int(horizon.removesuffix("d"))
+            )
+            outcome_timestamp = calendar.market_close_utc(exit_session)
+            frozen_variants = tuple(decision.tournament.variants)
+            if collected_at < outcome_timestamp:
+                counts["pending_not_matured"] += len(frozen_variants)
+                continue
+            for frozen in frozen_variants:
+                outcome_key = (decision.competition_id, horizon, frozen.variant)
+                if outcome_key in existing_outcomes:
+                    counts["duplicate_outcomes"] += 1
+                    continue
+                try:
+                    quant, hybrid = _competition_counterfactual_pair(
+                        decision,
+                        frozen.variant,
+                        horizon,
+                    )
+                    economics = _portfolio_outcome_economics(
+                        session,
+                        config=config,
+                        calendar=calendar,
+                        quant=quant,
+                        hybrid=hybrid,
+                        base_session=base_session,
+                        exit_session=exit_session,
+                        collected_at=collected_at,
+                    )
+                except OutcomePendingData:
+                    counts["pending_data"] += 1
+                    continue
+                except OutcomeBlockedProvenance:
+                    counts["blocked_provenance"] += 1
+                    continue
+                realized_return = _economics_float(economics, "quant_net_return")
+                benchmark_return = _economics_float(economics, "benchmark_return")
+                max_drawdown = _economics_float(economics, "quant_drawdown")
+                turnover = _economics_float(economics, "quant_turnover")
+                expected_cost = _economics_float(economics, "quant_cost")
+                outcome = ForwardCompetitionOutcome(
+                    competition_id=decision.competition_id,
+                    decision_set_hash=decision.decision_set_hash,
+                    evaluation_horizon=horizon,
+                    outcome=OutcomeRecord(
+                        outcome_id=_identity(
+                            "forward-competition-outcome-record",
+                            decision.competition_id,
+                            frozen.variant.value,
+                            horizon,
+                        ),
+                        decision_id=frozen.decision_id,
+                        variant=frozen.variant,
+                        outcome_time=outcome_timestamp,
+                        evidence_class=EvidenceClass.FORWARD_SHADOW,
+                        status=OutcomeStatus.COMPLETE,
+                        realized_return=realized_return,
+                        benchmark_return=benchmark_return,
+                        excess_return=realized_return - benchmark_return,
+                        max_drawdown=max_drawdown,
+                        turnover=turnover,
+                        expected_cost=expected_cost,
+                        sample_session_count=len(
+                            calendar.trading_session_window(base_session, exit_session)
+                        ),
+                    ),
+                    data_snapshot_identity=cast(
+                        dict[str, str], economics["data_snapshot_identity"]
+                    ),
+                    source_identity=str(economics["source_identity"]),
+                    evidence_origin="REAL_FORWARD",
+                )
+                if ledger.append_outcome(outcome):
+                    counts["outcomes_appended"] += 1
+                    existing_outcomes.add(outcome_key)
+                else:
+                    counts["duplicate_outcomes"] += 1
+    return counts
+
+
+def _economics_float(economics: dict[str, object], field: str) -> float:
+    value = economics.get(field)
+    if not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+        raise OutcomeBlockedProvenance(f"OUTCOME_ECONOMICS_INVALID:{field}")
+    return float(value)
+
+
+def _competition_counterfactual_pair(
+    decision: ForwardCompetitionDecisionSet,
+    variant: PortfolioVariant,
+    horizon: str,
+) -> tuple[QuantCounterfactualRecord, HybridCounterfactualRecord]:
+    frozen = next(
+        item for item in decision.tournament.variants if item.variant is variant
+    )
+    target_weights = {
+        decision.symbol_to_security_id[symbol]: float(weight)
+        for symbol, weight in frozen.target_weights.items()
+    }
+    common = {
+        "observation_id": decision.competition_id,
+        "decision_timestamp": frozen.decision_time,
+        "information_cutoff": frozen.information_cutoff,
+        "security_ids": decision.permanent_security_ids,
+        "universe_identity": frozen.universe_identity,
+        "evaluation_horizon": horizon,
+        "execution_assumptions_hash": frozen.execution_assumptions_hash,
+        "transaction_cost_model": frozen.transaction_cost_model,
+        "slippage_model": frozen.execution_assumptions_hash,
+        "benchmark_convention": frozen.benchmark,
+        "data_version": decision.data_hash,
+        "current_weights": decision.current_weights,
+        "target_weights": target_weights,
+        "risk_result": {"freeze_hash": frozen.freeze_hash},
+        "optimizer_result": {"freeze_hash": frozen.freeze_hash},
+    }
+    return (
+        QuantCounterfactualRecord(
+            counterfactual_id=_identity(
+                "forward-competition-quant", decision.competition_id, variant.value, horizon
+            ),
+            **common,
+        ),
+        HybridCounterfactualRecord(
+            counterfactual_id=_identity(
+                "forward-competition-hybrid", decision.competition_id, variant.value, horizon
+            ),
+            **common,
         ),
     )
 

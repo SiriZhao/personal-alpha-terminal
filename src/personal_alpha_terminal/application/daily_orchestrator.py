@@ -59,6 +59,9 @@ from personal_alpha_terminal.application.decision_manifest import (
 from personal_alpha_terminal.application.etf_sleeve_service import (
     EtfSleeveApplicationService,
 )
+from personal_alpha_terminal.application.forward_competition import (
+    append_daily_forward_competition,
+)
 from personal_alpha_terminal.application.forward_evidence import (
     AgenticForwardEvidenceLedger,
     EvidenceOrigin,
@@ -735,6 +738,17 @@ class DailyQuantOrchestrator:
                         hybrid_intelligence
                     ),
                 )
+                competition_counts = append_daily_forward_competition(
+                    session,
+                    workflow=workflow_result,
+                    hybrid_document=hybrid_intelligence,
+                    evidence=shadow_evidence,
+                    run_id=run_id,
+                    decision_id=run_identity.decision_id,
+                    evidence_origin=self._agentic_evidence_origin(
+                        hybrid_intelligence
+                    ),
+                )
                 ledger = AgenticForwardEvidenceLedger(session)
                 promotion = evaluate_runtime_promotion(
                     ledger,
@@ -754,6 +768,7 @@ class DailyQuantOrchestrator:
                     {"counterfactual_count": int(forward_counts["counterfactuals"])},
                 )
             hybrid_intelligence["forward_evidence_persistence"] = forward_counts
+            hybrid_intelligence["forward_competition_persistence"] = competition_counts
             hybrid_intelligence["promotion"] = promotion.model_dump(mode="json")
             hybrid_status = hybrid_intelligence.get("status")
             if isinstance(hybrid_status, dict):
@@ -767,6 +782,12 @@ class DailyQuantOrchestrator:
                 "predictions": 0,
                 "counterfactuals": 0,
                 "promotion_evaluations": 0,
+                "error": type(error).__name__,
+            }
+            hybrid_intelligence["forward_competition_persistence"] = {
+                "decision_sets": 0,
+                "variant_decisions": 0,
+                "reason": "FORWARD_COMPETITION_PERSISTENCE_FAILED",
                 "error": type(error).__name__,
             }
             hybrid_intelligence["promotion"] = {
